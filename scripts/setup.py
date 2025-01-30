@@ -34,7 +34,7 @@ if not os.path.exists("data/chroma-db-all_sources"):
     from huggingface_hub import snapshot_download
 
     snapshot_download(
-        repo_id="towardsai-buster/ai-tutor-vector-db",
+        repo_id="towardsai-tutors/ai-tutor-vector-db",
         local_dir="data",
         repo_type="dataset",
     )
@@ -177,6 +177,7 @@ AVAILABLE_SOURCES_UI = [
     "LangChain Docs",
     "OpenAI Cookbooks",
     "Towards AI Blog",
+    "8 Hour Primer",
     # "All Sources",
 ]
 
@@ -188,6 +189,7 @@ AVAILABLE_SOURCES = [
     "langchain",
     "openai_cookbooks",
     "tai_blog",
+    "8-hour_primer",
     # "all_sources",
 ]
 

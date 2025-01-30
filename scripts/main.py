@@ -59,7 +59,7 @@ def update_query_engine_tools(selected_sources) -> list[RetrieverTool]:
         "All Sources": (
             custom_retriever_all_sources,
             "all_sources_info",
-            """Useful for questions asking about information in the field of AI.""",
+            """Useful tool that contains general information about the field of AI.""",
         ),
     }
 
@@ -128,6 +128,7 @@ def generate_completion(
             "LangChain Docs": "langchain",
             "OpenAI Cookbooks": "openai_cookbooks",
             "Towards AI Blog": "tai_blog",
+            "8 Hour Primer": "8-hour_primer",
         }
 
         for source in sources:
@@ -144,7 +145,7 @@ def generate_completion(
             filters=filter_list,
             condition=FilterCondition.OR,
         )
-        # logfire.info(f"Filters: {filters}")
+        logfire.info(f"Filters: {filters}")
         query_engine_tools[0].retriever._vector_retriever._filters = filters
 
         # pdb.set_trace()
@@ -243,6 +244,7 @@ sources = gr.CheckboxGroup(
         "LangChain Docs",
         "OpenAI Cookbooks",
         "Towards AI Blog",
+        "8 Hour Primer",
         # "All Sources",
     ],
     interactive=True,
