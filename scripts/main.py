@@ -271,7 +271,7 @@ with gr.Blocks(
     )
     chatbot = gr.Chatbot(
         type="messages",
-        scale=8,
+        scale=20,
         placeholder="<strong>Towards AI 🤖: A Question-Answering Bot for anything AI-related</strong><br>",
         show_label=False,
         show_copy_button=True,
@@ -283,8 +283,8 @@ with gr.Blocks(
         chatbot=chatbot,
         additional_inputs=[sources, model, memory],
         additional_inputs_accordion=accordion,
-        fill_height=True,
-        fill_width=True,
+        # fill_height=True,
+        # fill_width=True,
         analytics_enabled=True,
     )
 
