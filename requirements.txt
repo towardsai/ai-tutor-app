@@ -18,3 +18,4 @@ llama-index-llms-gemini
 gradio
 pymongo
 huggingface_hub
+nbconvert

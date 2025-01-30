@@ -381,7 +381,7 @@ SOURCE_CONFIGS = {
         "url_extension": ".ipynb",
     },
     "langchain": {
-        "base_url": "https://python.langchain.com/v0.2/docs/",
+        "base_url": "https://python.langchain.com/docs/",
         "input_directory": "data/langchain_md_files",
         "output_file": "data/langchain_data.jsonl",
         "source_name": "langchain",
@@ -460,11 +460,7 @@ def should_include_file(file_path: str, config: Dict) -> bool:
 
 def num_tokens_from_string(string: str, encoding_name: str) -> int:
     encoding = tiktoken.get_encoding(encoding_name)
-    num_tokens = len(
-        encoding.encode(
-            string, disallowed_special=(encoding.special_tokens_set - {"<|endoftext|>"})
-        )
-    )
+    num_tokens = len(encoding.encode(string, disallowed_special=()))
     return num_tokens
 
 

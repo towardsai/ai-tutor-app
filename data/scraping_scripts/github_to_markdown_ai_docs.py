@@ -142,16 +142,33 @@ def download_file(file_url: str, file_path: str, retries: int = 0):
         else:
             print(f"Failed to download file after {MAX_RETRIES} retries: {e}")
 
+    # def convert_ipynb_to_md(ipynb_path: str, md_path: str):
+    #     with open(ipynb_path, "r", encoding="utf-8") as f:
+    #         notebook = nbformat.read(f, as_version=4)
+
+    #     exporter = MarkdownExporter()
+    #     markdown, _ = exporter.from_notebook_node(notebook)
+
+    #     with open(md_path, "w", encoding="utf-8") as f:
+    #         f.write(markdown)
+
 
 def convert_ipynb_to_md(ipynb_path: str, md_path: str):
-    with open(ipynb_path, "r", encoding="utf-8") as f:
-        notebook = nbformat.read(f, as_version=4)
+    try:
+        with open(ipynb_path, "r", encoding="utf-8") as f:
+            notebook = nbformat.read(f, as_version=4)
 
-    exporter = MarkdownExporter()
-    markdown, _ = exporter.from_notebook_node(notebook)
+        exporter = MarkdownExporter()
+        markdown, _ = exporter.from_notebook_node(notebook)
 
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(markdown)
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(markdown)
+    except (json.JSONDecodeError, nbformat.reader.NotJSONError) as e:
+        print(f"Error converting notebook {ipynb_path}: {str(e)}")
+        print("Skipping this file and continuing with others...")
+    except Exception as e:
+        print(f"Unexpected error converting notebook {ipynb_path}: {str(e)}")
+        print("Skipping this file and continuing with others...")
 
 
 def fetch_files(api_url: str, local_dir: str):
