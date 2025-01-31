@@ -9,8 +9,6 @@ import logfire
 import tiktoken
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
-
-# from instructor import AsyncInstructor, Mode, patch
 from jinja2 import Template
 from llama_index.core import Document
 from llama_index.core.ingestion import IngestionPipeline
@@ -115,31 +113,6 @@ Answer only with the succinct context and nothing else.
     return response.context
 
 
-# async def process_chunk(node: TextNode, document_dict: dict) -> TextNode:
-
-#     doc_id: str = node.source_node.node_id  # type: ignore
-#     doc: Document = document_dict[doc_id]
-
-#     if doc.metadata["tokens"] > 120_000:
-#         # Tokenize the document text
-#         encoding = tiktoken.encoding_for_model("gpt-4o-mini")
-#         tokens = encoding.encode(doc.text)
-
-#         # Trim to 120,000 tokens
-#         trimmed_tokens = tokens[:120_000]
-
-#         # Decode back to text
-#         trimmed_text = encoding.decode(trimmed_tokens)
-
-#         # Update the document text
-#         doc.text = trimmed_text
-#         doc.metadata["tokens"] = 120_000
-
-#     context: str = await situate_context(doc.text, node.text)
-#     node.text = f"{node.text}\n\n{context}"
-#     return node
-
-
 async def process_chunk(node: TextNode, document_dict: dict) -> TextNode:
     doc_id: str = node.source_node.node_id  # type: ignore
     doc: Document = document_dict[doc_id]
@@ -228,17 +201,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-# Ok so I need to create a new chroma-db-all_sources that embedded (context+chunk)
-# I need to create an index and instead of from_documents it will be from_nodes
-
-
-# First I need to create contexts for each chunk. Create a list of tasks (doc + chunk)
-
-
-# documents = create_docs("data/all_sources_data.jsonl")
-# pipeline = IngestionPipeline(
-#     transformations=[SentenceSplitter(chunk_size=800, chunk_overlap=0)]
-# )
-# all_nodes = pipeline.run(documents=documents, show_progress=True)
