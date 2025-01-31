@@ -163,6 +163,8 @@ cython_debug/
 
 .vscode/
 data/chroma-db**/
+evaluation_data/chroma-db**/
+
 .huggingface
 
 .DS_Store
