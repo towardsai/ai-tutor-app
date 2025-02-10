@@ -162,13 +162,6 @@ async def process(
 
     results: List[TextNode] = await tqdm.gather(*tasks, desc="Processing chunks")
 
-    # results: List[TextNode] = []
-    # # Add tqdm progress bar with semaphore limit
-    # for task in tqdm(
-    #     asyncio.as_completed(tasks), total=len(tasks), desc="Processing chunks"
-    # ):
-    #     result = await task
-    #     results.append(result)
     # pdb.set_trace()
 
     return results

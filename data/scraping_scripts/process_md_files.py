@@ -416,6 +416,18 @@ SOURCE_CONFIGS = {
         "included_root_files": [],
         "url_extension": "",
     },
+    "llm_developer": {
+        "base_url": "",
+        "input_directory": "data/llm_developer",
+        "output_file": "data/llm_developer_data.jsonl",  # From Beginner to Advanced LLM Developer
+        "source_name": "llm_developer",
+        "use_include_list": False,
+        "included_dirs": [],
+        "excluded_dirs": [],
+        "excluded_root_files": [],
+        "included_root_files": [],
+        "url_extension": "",
+    },
 }
 
 

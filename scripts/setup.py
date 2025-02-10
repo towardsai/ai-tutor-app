@@ -178,6 +178,7 @@ AVAILABLE_SOURCES_UI = [
     "OpenAI Cookbooks",
     "Towards AI Blog",
     "8 Hour Primer",
+    "Advanced LLM Developer",
     # "All Sources",
 ]
 
@@ -190,6 +191,7 @@ AVAILABLE_SOURCES = [
     "openai_cookbooks",
     "tai_blog",
     "8-hour_primer",
+    "llm_developer",
     # "all_sources",
 ]
 

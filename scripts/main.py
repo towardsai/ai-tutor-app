@@ -129,6 +129,7 @@ def generate_completion(
             "OpenAI Cookbooks": "openai_cookbooks",
             "Towards AI Blog": "tai_blog",
             "8 Hour Primer": "8-hour_primer",
+            "Advanced LLM Developer": "llm_developer",
         }
 
         for source in sources:
@@ -245,6 +246,7 @@ sources = gr.CheckboxGroup(
         "OpenAI Cookbooks",
         "Towards AI Blog",
         "8 Hour Primer",
+        "Advanced LLM Developer",
         # "All Sources",
     ],
     interactive=True,
