@@ -8,16 +8,10 @@ import chromadb
 import logfire
 from custom_retriever import CustomRetriever
 from dotenv import load_dotenv
-from llama_index.core import Document, SimpleKeywordTableIndex, VectorStoreIndex
-from llama_index.core.ingestion import IngestionPipeline
+from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.retrievers import (
-    KeywordTableSimpleRetriever,
-    VectorIndexRetriever,
-)
-from llama_index.core.schema import NodeWithScore, QueryBundle
+from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.embeddings.cohere import CohereEmbedding
-from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from utils import init_mongo_db
 
@@ -99,73 +93,15 @@ def setup_database(db_collection, dict_file_name) -> CustomRetriever:
     with open(f"data/{db_collection}/{dict_file_name}", "rb") as f:
         document_dict = pickle.load(f)
 
-    # with open("data/keyword_retriever_sync.pkl", "rb") as f:
-    # keyword_retriever: KeywordTableSimpleRetriever = pickle.load(f)
-
-    # keyword_retriever.num_chunks_per_query = 15
-
-    # # Creating the keyword index and retriever
-    # logfire.info("Creating nodes from documents")
-    # documents = create_docs("data/all_sources_data.jsonl")
-    # pipeline = IngestionPipeline(
-    #     transformations=[SentenceSplitter(chunk_size=800, chunk_overlap=0)]
-    # )
-    # all_nodes = pipeline.run(documents=documents, show_progress=True)
-    # # with open("data/all_nodes.pkl", "wb") as f:
-    # #     pickle.dump(all_nodes, f)
-
-    # all_nodes = pickle.load(open("data/nodes_with_added_context.pkl", "rb"))
-    # logfire.info(f"Number of nodes: {len(all_nodes)}")
-
-    # keyword_index = SimpleKeywordTableIndex(
-    #     nodes=all_nodes, max_keywords_per_chunk=10, show_progress=True, use_async=False
-    # )
-    # # with open("data/keyword_index.pkl", "wb") as f:
-    # # pickle.dump(keyword_index, f)
-
-    # # keyword_index = pickle.load(open("data/keyword_index.pkl", "rb"))
-
-    # logfire.info("Creating keyword retriever")
-    # keyword_retriever = KeywordTableSimpleRetriever(index=keyword_index)
-
-    # with open("data/keyword_retriever_sync.pkl", "wb") as f:
-    #     pickle.dump(keyword_retriever, f)
-
-    # 'OR' Means both the vector nodes and the keyword nodes
-    # return CustomRetriever(vector_retriever, document_dict, keyword_retriever, "OR")
     return CustomRetriever(vector_retriever, document_dict)
 
-
-# Setup retrievers
-# custom_retriever_transformers: CustomRetriever = setup_database(
-#     "chroma-db-transformers",
-#     "document_dict_transformers.pkl",
-# )
-# custom_retriever_peft: CustomRetriever = setup_database(
-#     "chroma-db-peft", "document_dict_peft.pkl"
-# )
-# custom_retriever_trl: CustomRetriever = setup_database(
-#     "chroma-db-trl", "document_dict_trl.pkl"
-# )
-# custom_retriever_llama_index: CustomRetriever = setup_database(
-#     "chroma-db-llama_index",
-#     "document_dict_llama_index.pkl",
-# )
-# custom_retriever_openai_cookbooks: CustomRetriever = setup_database(
-#     "chroma-db-openai_cookbooks",
-#     "document_dict_openai_cookbooks.pkl",
-# )
-# custom_retriever_langchain: CustomRetriever = setup_database(
-#     "chroma-db-langchain",
-#     "document_dict_langchain.pkl",
-# )
 
 custom_retriever_all_sources: CustomRetriever = setup_database(
     "chroma-db-all_sources",
     "document_dict_all_sources.pkl",
 )
 
-# Constants
+
 CONCURRENCY_COUNT = int(os.getenv("CONCURRENCY_COUNT", 64))
 MONGODB_URI = os.getenv("MONGODB_URI")
 
@@ -179,7 +115,7 @@ AVAILABLE_SOURCES_UI = [
     "Towards AI Blog",
     "8 Hour Primer",
     "Advanced LLM Developer",
-    # "All Sources",
+    "Python Primer",
 ]
 
 AVAILABLE_SOURCES = [
@@ -192,7 +128,7 @@ AVAILABLE_SOURCES = [
     "tai_blog",
     "8-hour_primer",
     "llm_developer",
-    # "all_sources",
+    "python_primer",
 ]
 
 mongo_db = (
@@ -202,12 +138,6 @@ mongo_db = (
 )
 
 __all__ = [
-    # "custom_retriever_transformers",
-    # "custom_retriever_peft",
-    # "custom_retriever_trl",
-    # "custom_retriever_llama_index",
-    # "custom_retriever_openai_cookbooks",
-    # "custom_retriever_langchain",
     "custom_retriever_all_sources",
     "mongo_db",
     "CONCURRENCY_COUNT",
