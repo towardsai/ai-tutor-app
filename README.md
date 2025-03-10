@@ -4,7 +4,7 @@ emoji: 🧑🏻‍🏫
 colorFrom: gray
 colorTo: pink
 sdk: gradio
-sdk_version: 5.15.0
+sdk_version: 5.20.1
 app_file: scripts/main.py
 pinned: false
 ---
