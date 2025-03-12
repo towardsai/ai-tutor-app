@@ -14,7 +14,7 @@ python add_course_workflow.py --course [COURSE_NAME]
 
 This will guide you through the complete process:
 
-1. Process markdown files from Notion exports
+1. Process markdown files from the Notion export
 2. Prompt you to manually add URLs to the course content
 3. Merge the course data into the main dataset
 4. Add contextual information to document nodes
@@ -26,7 +26,7 @@ This will guide you through the complete process:
 
 - The course name must be properly configured in `process_md_files.py` under `SOURCE_CONFIGS`
 - Course markdown files must be placed in the directory specified in the configuration
-- You must have access to the live course platform to add URLs
+- You must have access to the live course platform to add URLs `https://academy.towardsai.net/enrollments`
 
 ### 2. Updating Documentation via GitHub API
 
@@ -48,17 +48,7 @@ The workflow includes:
 2. Processing markdown files to create JSONL data
 3. Adding contextual information to document nodes
 4. Creating vector stores
-5. Uploading databases to HuggingFace
-
-### 3. Uploading JSONL to HuggingFace
-
-To upload the main JSONL file to a private HuggingFace repository:
-
-```bash
-python upload_jsonl_to_hf.py
-```
-
-This is useful for sharing the latest data with team members.
+5. Uploading vector db and new JSONL files to HuggingFace
 
 ## Individual Components
 
@@ -66,9 +56,10 @@ If you need to run specific steps individually:
 
 - **GitHub to Markdown**: `github_to_markdown_ai_docs.py`
 - **Process Markdown**: `process_md_files.py`
-- **Add Context**: `add_context_to_nodes.py` 
+- **Add Context**: `add_context_to_nodes.py`
 - **Create Vector Stores**: `create_vector_stores.py`
-- **Upload to HuggingFace**: `upload_dbs_to_hf.py`
+- **Upload to Chroma Vector Store to HuggingFace**: `upload_dbs_to_hf.py`
+- **Upload JSONL files to HuggingFace**: `upload_jsonl_to_hf.py`
 
 ## Tips for New Team Members
 
