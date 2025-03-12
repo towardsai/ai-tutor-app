@@ -59,7 +59,7 @@ If you need to run specific steps individually:
 - **Add Context**: `add_context_to_nodes.py`
 - **Create Vector Stores**: `create_vector_stores.py`
 - **Upload to Chroma Vector Store to HuggingFace**: `upload_dbs_to_hf.py`
-- **Upload JSONL files to HuggingFace**: `upload_jsonl_to_hf.py`
+- **Upload JSONL files to HuggingFace**: `upload_data_to_hf.py`
 
 ## Tips for New Team Members
 
