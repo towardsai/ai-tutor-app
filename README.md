@@ -3,9 +3,8 @@ title: AI Tutor Chatbot
 emoji: 🧑🏻‍🏫
 colorFrom: gray
 colorTo: pink
-sdk: gradio
-sdk_version: 5.20.1
-app_file: scripts/main.py
+sdk: docker
+app_port: 7860
 pinned: false
 ---
 
