@@ -5,10 +5,9 @@ FROM python:3.13-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-# Install uv (installs to /root/.local/bin by default)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-# Make sure uv is on PATH for all later steps
-ENV PATH="/root/.local/bin:${PATH}"
+# Install uv to a global bin dir
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --bin-dir /usr/local/bin
+ENV PATH="/usr/local/bin:${PATH}"
 
 # Create the HF-required user (UID 1000) before copying files
 RUN useradd -m -u 1000 user
