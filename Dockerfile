@@ -1,34 +1,21 @@
-# Dockerfile
-FROM python:3.13-slim
+FROM python:3.13
 
-# (Recommended) Install curl & certs on -slim base
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install uv to a global bin dir
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --bin-dir /usr/local/bin
-ENV PATH="/usr/local/bin:${PATH}"
+ENV PATH="/root/.local/bin:${PATH}"
 
-# Create the HF-required user (UID 1000) before copying files
 RUN useradd -m -u 1000 user
+WORKDIR /app
 
-# Work in the user's home to avoid permissions issues
-ENV HOME=/home/user \
-    PATH="/root/.local/bin:/home/user/.local/bin:${PATH}"
-WORKDIR /home/user/app
-
-# Copy only deps first for better caching; make them owned by 'user'
-COPY --chown=user:user pyproject.toml uv.lock ./
-
-# Use the non-root user for env creation so .venv belongs to them
-USER user
+COPY pyproject.toml uv.lock ./
 RUN uv sync --locked
 
-# Copy the rest of your app
-COPY --chown=user:user . .
+COPY . .
 
-# Spaces expects your app to listen on this port; keep README app_port in sync
+
+ENV HOME=/home/user PATH="/root/.local/bin:/home/user/.local/bin:${PATH}"
+RUN chown -R user:user /app
+USER user
+
 EXPOSE 7860
-
-# Start the app via uv
 CMD ["uv", "run", "scripts/main.py"]
