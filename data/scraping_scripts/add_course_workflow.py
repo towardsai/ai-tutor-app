@@ -13,7 +13,7 @@ This script guides you through the complete process of adding a new course to th
 7. Update UI configuration
 
 Usage:
-    python add_course_workflow.py --course [COURSE_NAME]
+    uv run python -m data.scraping_scripts.add_course_workflow --course [COURSE_NAME]
 
     Additional flags to run specific steps (if you want to restart from a specific point):
     --skip-process-md       Skip the markdown processing step

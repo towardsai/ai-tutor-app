@@ -1,45 +1,127 @@
-# AI Tutor App Data Workflows
+# Python scripts for adding new courses and updating documentation
 
-This directory contains scripts for managing the AI Tutor App's data pipeline.
+## First workflow: Adding a New Course
 
-## Workflow Scripts
+Make sure you have the required environment variables set:
 
-### 1. Adding a New Course
+- `OPENAI_API_KEY` for LLM processing
+- `COHERE_API_KEY` for embeddings
+- `HF_TOKEN` for HuggingFace uploads and downloads
+- `GITHUB_TOKEN` for accessing files via the GitHub API
 
-To add a new course to the AI Tutor:
+## 1. Prepare the course data
+
+0. You must have access to the live course you want to add:
+
+   - [academy.towardsai.net](https://academy.towardsai.net/courses/take/agent-engineering/multimedia/67469692-lesson-1-part-1-the-ai-engineer-the-agent-landscape)
+
+1. In Notion, navigate to the main course page that contains the live lessons:
+
+   - e.g. [Notion page](https://www.notion.so/seldonia/AI-for-Business-Professionals-190f9b6f42708087863df100e9b4b556)
+
+2. Click on the three dots in the top right corner and select "Export"
+
+3. Select these options:
+   - Export format: "Markdown & CSV"
+   - Include databases: current view
+   - Include content: Everything
+   - Include subpages: yes
+   - Create folders for subpages: yes
+
+4. Click on "Export"
+
+5. Once the export is complete, unzip file.
+
+6. Move the unzipped folder into the `ai-tutor-app/data` directory
+
+7. Rename the folder to the course name.
+   - e.g. `ai_for_business_professionals`
+
+8. Open the `data/scraping_scripts/process_md_files.py` python file and locate the `SOURCE_CONFIGS` dictionary.
+
+9. Add the new course to the `SOURCE_CONFIGS` dictionary.
+
+   example:
+
+   ```python
+      "ai_for_business_professionals": {
+         "base_url": "",
+         "input_directory": "data/ai_for_business_professionals",  # Relative path to the directory that contains the Markdown files
+         "output_file": "data/ai_for_business_professionals_data.jsonl", # The output file that will be created by the script
+         "source_name": "ai_for_business_professionals",
+         "use_include_list": False,
+         "included_dirs": [],
+         "excluded_dirs": [],
+         "excluded_root_files": [],
+         "included_root_files": [],
+         "url_extension": "",
+      },
+   ```
+
+   - The most important fields are:
+      - input_directory, the relative path to the directory that contains the Markdown files
+      - output_file, the name of the output file that will be created by the script
+      - source_name, the name of the course (keep underscores, no spaces)
+   - The other fields can stay as empty lists or empty strings.
+
+## 2. Run the add_course_workflow.py script
 
 ```bash
-python add_course_workflow.py --course [COURSE_NAME]
+uv run -m data.scraping_scripts.add_course_workflow --course [COURSE_NAME]
 ```
 
-This will guide you through the complete process:
+example:
 
-1. Process markdown files from the Notion export
-2. Prompt you to manually add URLs to the course content
-3. Merge the course data into the main dataset
-4. Add contextual information to document nodes
-5. Create vector stores
-6. Upload databases to HuggingFace
-7. Update UI configuration
+```bash
+uv run -m data.scraping_scripts.add_course_workflow --course ai_for_business_professionals
+```
 
-**Requirements before running:**
+This script will guide you through the complete process, it will:
 
-- The course name must be properly configured in `process_md_files.py` under `SOURCE_CONFIGS`
-- Course markdown files must be placed in the directory specified in the configuration
-- You must have access to the live course platform to add URLs `https://academy.towardsai.net/enrollments`
+   1. Extract the markdown content from each of the lessons and create a new JSONL file for the course
+   2. Download the JSONL files from the other courses
+   3. Prompt you to manually add URLs to the course content, inside the newly created JSONL file
+   4. Merge the course data into the main dataset
+   5. Add contextual information to document nodes
+   6. Create vector stores
+   7. Upload databases to HuggingFace
+   8. Update UI configuration
 
-### 2. Updating Documentation via GitHub API
+## 3. Add URLs to the course content
+
+- After the script has processed the markdown files, it will prompt you to manually add URLs to the course content.
+- Answer "no" to the question "Have you added all the URLs?"
+- Open the `data/ai_for_business_professionals_data.jsonl` file in a text editor and open the love course page in the browser.
+- If the JSON looks split into multiple wrapped lines in VS Code / Cursor, you can toggle word wrap off.
+  - macOS: press ⌥ Option + Z
+  - Windows/Linux: press Alt + Z
+
+- For each lesson in the course [academy.towardsai.net](https://academy.towardsai.net/courses/take/agent-engineering/multimedia/67469692-lesson-1-part-1-the-ai-engineer-the-agent-landscape), copy the URL, and add it to the `url` field in the JSONL file, in the corresponding lesson.
+
+**Note:** While you do this, now is the time to clean up the .jsonl file, remove any lines/lessons that should not be added to the RAG chatbot.
+example: "Course Overview", "Course Structure", "Course Outline", "Quiz", "Assigments", etc.
+What you can do is add the URLs for all the lessons you want to add to the RAG chatbot, and when done, remove all the json lines that have an empty `url` field.
+
+## 4. Once done, run the script again and answer "yes" to the question "Have you added all the URLs?"
+
+```bash
+uv run -m data.scraping_scripts.add_course_workflow --course ai_for_business_professionals
+```
+
+----
+
+## Second workflow: Updating Documentation via GitHub API
 
 To update library documentation from GitHub repositories:
 
 ```bash
-python update_docs_workflow.py
+uv run -m data.scraping_scripts.update_docs_workflow
 ```
 
 This will update all supported documentation sources. You can also specify specific sources:
 
 ```bash
-python update_docs_workflow.py --sources transformers peft
+uv run -m data.scraping_scripts.update_docs_workflow --sources transformers peft langchain
 ```
 
 The workflow includes:
@@ -88,8 +170,3 @@ If you need to run specific steps individually:
    - If the PKL file exists, the `--new-context-only` flag will only process new content
    - You must have proper HuggingFace credentials with access to the private repository
 
-6. Make sure you have the required environment variables set:
-   - `OPENAI_API_KEY` for LLM processing
-   - `COHERE_API_KEY` for embeddings
-   - `HF_TOKEN` for HuggingFace uploads
-   - `GITHUB_TOKEN` for accessing documentation via the GitHub API

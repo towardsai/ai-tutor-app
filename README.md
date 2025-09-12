@@ -25,6 +25,7 @@ The Gradio demo is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugg
    ```
 
 2. Configure environment variables:
+
    ```bash
    cp .env.example .env  # then edit values
    ```
@@ -40,5 +41,5 @@ The Gradio demo is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugg
 ### Updating Data Sources
 
 For adding new courses or updating documentation:
-- See the detailed instructions in [data/scraping_scripts/README.md](./data/scraping_scripts/README.md)
 
+- See the detailed instructions in [data/scraping_scripts/README.md](./data/scraping_scripts/README.md)
