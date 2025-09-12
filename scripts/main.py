@@ -7,20 +7,12 @@ from llama_index.agent.openai import OpenAIAgent
 from llama_index.core.llms import MessageRole
 from llama_index.core.memory import ChatSummaryMemoryBuffer
 from llama_index.core.tools import RetrieverTool, ToolMetadata
-from llama_index.core.vector_stores import (
-    FilterCondition,
-    FilterOperator,
-    MetadataFilter,
-    MetadataFilters,
-)
+from llama_index.core.vector_stores import (FilterCondition, FilterOperator,
+                                            MetadataFilter, MetadataFilters)
 from llama_index.llms.openai import OpenAI
 from prompts import system_message_openai_agent
-from setup import (
-    AVAILABLE_SOURCES,
-    AVAILABLE_SOURCES_UI,
-    CONCURRENCY_COUNT,
-    custom_retriever_all_sources,
-)
+from setup import (AVAILABLE_SOURCES, AVAILABLE_SOURCES_UI, CONCURRENCY_COUNT,
+                   custom_retriever_all_sources)
 
 
 def update_query_engine_tools(selected_sources) -> list[RetrieverTool]:
@@ -263,4 +255,4 @@ with gr.Blocks(
 
 if __name__ == "__main__":
     demo.queue(default_concurrency_limit=CONCURRENCY_COUNT)
-    demo.launch(debug=False, share=False)
+    demo.launch(server_name="0.0.0.0", server_port=7860, debug=False, share=False)

@@ -28,7 +28,7 @@ The Gradio demo is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugg
 
 1. **Set environment variables:**
 
-- copy .env.example to a new .env file and fill in the values
+   - copy .env.example to a new .env file and fill in the values
 
 2. **Run the application:**
 
