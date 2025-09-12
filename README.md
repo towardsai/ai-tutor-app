@@ -16,33 +16,29 @@ The Gradio demo is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugg
 
 **Note:** A GitHub Action automatically deploys the Gradio demo when changes are pushed to the main branch (excluding documentation and scripts in the `data/scraping_scripts` directory).
 
-### Installation (for Gradio UI)
+### Gradio UI — Quick Start
 
-1. **Install dependencies with [uv](https://docs.astral.sh/uv/getting-started/installation/#installation-methods):**
+1. Install dependencies (requires [uv](https://docs.astral.sh/uv/getting-started/installation/#installation-methods)):
 
    ```bash
    uv sync
    ```
 
-### Usage (for Gradio UI)
+2. Configure environment variables:
+   ```bash
+   cp .env.example .env  # then edit values
+   ```
 
-1. **Set environment variables:**
-
-   - copy .env.example to a new .env file and fill in the values
-
-2. **Run the application:**
+3. Run:
 
    ```bash
    uv run scripts/main.py
    ```
 
-   This command starts the Gradio interface for the AI Tutor chatbot.
+   Starts the Gradio AI Tutor interface.
 
 ### Updating Data Sources
 
-This application uses a RAG (Retrieval Augmented Generation) system with multiple data sources, including documentation and courses. To update these sources:
-
-1. **For adding new courses or updating documentation:**
-   - See the detailed instructions in [data/scraping_scripts/README.md](./data/scraping_scripts/README.md)
-   - Python scripts are available for both course addition and documentation updates
+For adding new courses or updating documentation:
+- See the detailed instructions in [data/scraping_scripts/README.md](./data/scraping_scripts/README.md)
 
