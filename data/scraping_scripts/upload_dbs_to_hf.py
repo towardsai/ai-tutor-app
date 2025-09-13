@@ -34,5 +34,9 @@ api.upload_folder(
     # multi_commits=True,
     # multi_commits_verbose=True,
     delete_patterns=["*"],
-    ignore_patterns=["*.jsonl", "*.py", "*.txt", "*.ipynb", "*.md", "*.pyc"],
+    allow_patterns=[
+        "chroma-db-all_sources/**",
+        "all_sources_contextual_nodes.pkl",
+    ],
+    ignore_patterns=["*.jsonl", "*.py", "*.txt", "*.ipynb", "*.md", "*.pyc", "*.mdx"],
 )

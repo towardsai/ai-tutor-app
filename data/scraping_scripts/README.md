@@ -4,16 +4,19 @@
 
 Make sure you have the required environment variables set:
 
-- `OPENAI_API_KEY` for LLM processing
+- `OPENAI_API_KEY` for the LLM
 - `COHERE_API_KEY` for embeddings
-- `HF_TOKEN` for HuggingFace uploads and downloads
+- `HF_TOKEN` for HuggingFace uploads and downloads - [access to the private HuggingFace dataset repo](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-data/tree/main)
 - `GITHUB_TOKEN` for accessing files via the GitHub API
 
 ## 1. Prepare the course data
 
-0. You must have access to the live course you want to add:
+0. Make sure you have access to:
 
-   - [academy.towardsai.net](https://academy.towardsai.net/courses/take/agent-engineering/multimedia/67469692-lesson-1-part-1-the-ai-engineer-the-agent-landscape)
+   - the live course you want to add:
+     - [https://academy.towardsai.net/courses/...](https://academy.towardsai.net/courses/take/ai-business-professionals/multimedia/64071930-introduction)
+   - you are part of the HuggingFace towards-ai team, to access the private spaces:
+     - [towardsai-tutors](https://huggingface.co/towardsai-tutors)
 
 1. In Notion, navigate to the main course page that contains the live lessons:
 
@@ -35,7 +38,7 @@ Make sure you have the required environment variables set:
 6. Move the unzipped folder into the `ai-tutor-app/data` directory
 
 7. Rename the folder to the course name.
-   - e.g. `ai_for_business_professionals`
+   - e.g. `master_ai_for_work`
 
 8. Open the `data/scraping_scripts/process_md_files.py` python file and locate the `SOURCE_CONFIGS` dictionary.
 
@@ -44,11 +47,11 @@ Make sure you have the required environment variables set:
    example:
 
    ```python
-      "ai_for_business_professionals": {
+      "master_ai_for_work": {
          "base_url": "",
-         "input_directory": "data/ai_for_business_professionals",  # Relative path to the directory that contains the Markdown files
-         "output_file": "data/ai_for_business_professionals_data.jsonl", # The output file that will be created by the script
-         "source_name": "ai_for_business_professionals",
+         "input_directory": "data/master_ai_for_work",  # Relative path to the directory that contains the Markdown files
+         "output_file": "data/master_ai_for_work_data.jsonl", # The output file that will be created by the script
+         "source_name": "master_ai_for_work",
          "use_include_list": False,
          "included_dirs": [],
          "excluded_dirs": [],
@@ -59,9 +62,9 @@ Make sure you have the required environment variables set:
    ```
 
    - The most important fields are:
-      - input_directory, the relative path to the directory that contains the Markdown files
-      - output_file, the name of the output file that will be created by the script
-      - source_name, the name of the course (keep underscores, no spaces)
+      - input_directory: the relative path to the directory that contains the Markdown files
+      - output_file: the name of the output file that will be created by the script
+      - source_name: the name of the course (keep underscores, no spaces)
    - The other fields can stay as empty lists or empty strings.
 
 ## 2. Run the add_course_workflow.py script
@@ -73,39 +76,40 @@ uv run -m data.scraping_scripts.add_course_workflow --course [COURSE_NAME]
 example:
 
 ```bash
-uv run -m data.scraping_scripts.add_course_workflow --course ai_for_business_professionals
+uv run -m data.scraping_scripts.add_course_workflow --course master_ai_for_work
 ```
 
 This script will guide you through the complete process, it will:
 
    1. Extract the markdown content from each of the lessons and create a new JSONL file for the course
    2. Download the JSONL files from the other courses
-   3. Prompt you to manually add URLs to the course content, inside the newly created JSONL file
+   3. Prompt you to manually add URLs to the course content, inside the newly created JSONL file (more details in step 3 below)
    4. Merge the course data into the main dataset
    5. Add contextual information to document nodes
    6. Create vector stores
    7. Upload databases to HuggingFace
    8. Update UI configuration
 
-## 3. Add URLs to the course content
+## 3. Add URLs to the course content + Manual Dataset Cleaning (Most important step)
 
 - After the script has processed the markdown files, it will prompt you to manually add URLs to the course content.
 - Answer "no" to the question "Have you added all the URLs?"
-- Open the `data/ai_for_business_professionals_data.jsonl` file in a text editor and open the love course page in the browser.
+- Open the newly created `data/master_ai_for_work_data.jsonl` file in a text editor and open the live course page in the browser.
 - If the JSON looks split into multiple wrapped lines in VS Code / Cursor, you can toggle word wrap off.
   - macOS: press ⌥ Option + Z
   - Windows/Linux: press Alt + Z
 
-- For each lesson in the course [academy.towardsai.net](https://academy.towardsai.net/courses/take/agent-engineering/multimedia/67469692-lesson-1-part-1-the-ai-engineer-the-agent-landscape), copy the URL, and add it to the `url` field in the JSONL file, in the corresponding lesson.
+- For each lesson in the course [academy.towardsai.net](https://academy.towardsai.net/courses/take/ai-business-professionals/multimedia/64071930-introduction), copy the URL, and add it to the `url` field in the JSONL file, in the corresponding lesson.
 
 **Note:** While you do this, now is the time to clean up the .jsonl file, remove any lines/lessons that should not be added to the RAG chatbot.
-example: "Course Overview", "Course Structure", "Course Outline", "Quiz", "Assigments", etc.
-What you can do is add the URLs for all the lessons you want to add to the RAG chatbot, and when done, remove all the json lines that have an empty `url` field.
+example: "Course Admin and Syllabus", "Course Structure/Overview", "Course Outline", "Quiz", "Assigments", "Introduction to Module X" etc. You can also remove lines that are videos.
+
+- What you can do is add the URLs for all the lessons you want to add to the RAG chatbot, and when done, remove all the json lines that have an empty `url` field.
 
 ## 4. Once done, run the script again and answer "yes" to the question "Have you added all the URLs?"
 
 ```bash
-uv run -m data.scraping_scripts.add_course_workflow --course ai_for_business_professionals
+uv run -m data.scraping_scripts.add_course_workflow --course master_ai_for_work
 ```
 
 ----
@@ -152,7 +156,7 @@ If you need to run specific steps individually:
 2. When adding URLs to course content:
    - Get the URLs from the live course platform
    - Add them to the generated JSONL file in the `url` field
-   - Example URL format: `https://academy.towardsai.net/courses/take/python-for-genai/multimedia/62515980-course-structure`
+   - Example URL format: `https://academy.towardsai.net/courses/take/ai-business-professionals/multimedia/64072092-introduction-to-chatgpt-claude-and-gemini`
    - Make sure every document has a valid URL
 
 3. By default, only new content will have context added to save time and resources. Use `--process-all-context` only if you need to regenerate context for all documents. Use `--skip-data-upload` if you don't want to upload data files to the private HuggingFace repo (they're uploaded by default).

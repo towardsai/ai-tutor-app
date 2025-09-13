@@ -170,11 +170,11 @@ SOURCE_CONFIGS = {
         "included_root_files": [],
         "url_extension": "",
     },
-    "ai_for_business_professionals": {
+    "master_ai_for_work": {
         "base_url": "",
-        "input_directory": "data/ai_for_business_professionals",  # Path to the directory that contains the Markdown files
-        "output_file": "data/ai_for_business_professionals_data.jsonl",  # From Beginner to Advanced LLM Developer
-        "source_name": "ai_for_business_professionals",
+        "input_directory": "data/master_ai_for_work",  # Path to the directory that contains the Markdown files
+        "output_file": "data/master_ai_for_work_data.jsonl",  # From Beginner to Advanced LLM Developer
+        "source_name": "master_ai_for_work",
         "use_include_list": False,
         "included_dirs": [],
         "excluded_dirs": [],

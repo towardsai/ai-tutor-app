@@ -7,7 +7,7 @@ from typing import Dict, List
 import instructor
 import logfire
 import tiktoken
-from anthropic import AsyncAnthropic
+# from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from jinja2 import Template
 from llama_index.core import Document

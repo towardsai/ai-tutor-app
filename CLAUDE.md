@@ -6,10 +6,10 @@ This is an AI tutor application that uses RAG (Retrieval Augmented Generation) t
 
 ## Key Repositories and URLs
 
-- Repository on GitHub: https://github.com/towardsai/ai-tutor-app
-- Live demo: https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot
-- Vector database: https://huggingface.co/datasets/towardsai-tutors/ai-tutor-vector-db
-- Private JSONL repo (the raw document data): https://huggingface.co/datasets/towardsai-tutors/ai-tutor-data
+- [Repository on GitHub](https://github.com/towardsai/ai-tutor-app)
+- [Live demo](https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot)
+- [Vector database](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-vector-db)
+- [Private JSONL repo (the raw document data)](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-data)
 
 ## Architecture Overview
 

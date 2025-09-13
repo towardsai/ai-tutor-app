@@ -156,6 +156,7 @@ def process_source(source: str):
             api_key=os.environ["COHERE_API_KEY"],
             model_name="embed-english-v3.0",
             input_type="search_document",
+            base_url="https://api.cohere.com",
         ),
         show_progress=True,
         use_async=True,
