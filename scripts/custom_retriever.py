@@ -11,18 +11,11 @@ from dotenv import load_dotenv
 from llama_index.core import Document, QueryBundle
 from llama_index.core.async_utils import run_async_tasks
 from llama_index.core.callbacks import CBEventType, EventPayload
-from llama_index.core.retrievers import (
-    BaseRetriever,
-    KeywordTableSimpleRetriever,
-    VectorIndexRetriever,
-)
-from llama_index.core.schema import MetadataMode, NodeWithScore, QueryBundle, TextNode
-from llama_index.core.vector_stores import (
-    FilterCondition,
-    FilterOperator,
-    MetadataFilter,
-    MetadataFilters,
-)
+from llama_index.core.retrievers import (BaseRetriever,
+                                         KeywordTableSimpleRetriever,
+                                         VectorIndexRetriever)
+from llama_index.core.schema import (MetadataMode, NodeWithScore, QueryBundle,
+                                     TextNode)
 from llama_index.postprocessor.cohere_rerank import CohereRerank
 from llama_index.postprocessor.cohere_rerank.base import CohereRerank
 

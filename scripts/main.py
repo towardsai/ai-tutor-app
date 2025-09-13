@@ -2,7 +2,6 @@ import pdb
 
 import gradio as gr
 import logfire
-from custom_retriever import CustomRetriever
 from llama_index.agent.openai import OpenAIAgent
 from llama_index.core.llms import MessageRole
 from llama_index.core.memory import ChatSummaryMemoryBuffer
@@ -10,9 +9,11 @@ from llama_index.core.tools import RetrieverTool, ToolMetadata
 from llama_index.core.vector_stores import (FilterCondition, FilterOperator,
                                             MetadataFilter, MetadataFilters)
 from llama_index.llms.openai import OpenAI
-from prompts import system_message_openai_agent
-from setup import (AVAILABLE_SOURCES, AVAILABLE_SOURCES_UI, CONCURRENCY_COUNT,
-                   custom_retriever_all_sources)
+
+from .custom_retriever import CustomRetriever
+from .prompts import system_message_openai_agent
+from .setup import (AVAILABLE_SOURCES, AVAILABLE_SOURCES_UI, CONCURRENCY_COUNT,
+                    custom_retriever_all_sources)
 
 
 def update_query_engine_tools(selected_sources) -> list[RetrieverTool]:

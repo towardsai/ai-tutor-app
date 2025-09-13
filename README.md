@@ -33,7 +33,7 @@ The Gradio demo is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugg
 3. Run:
 
    ```bash
-   uv run scripts/main.py
+   uv run -m scripts.main
    ```
 
    Starts the Gradio AI Tutor interface.

@@ -18,4 +18,4 @@ RUN chown -R user:user /app
 USER user
 
 EXPOSE 7860
-CMD ["uv", "run", "scripts/main.py"]
+CMD ["uv", "run", "-m", "scripts.main"]

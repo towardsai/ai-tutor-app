@@ -6,14 +6,15 @@ import pickle
 
 import chromadb
 import logfire
-from custom_retriever import CustomRetriever
 from dotenv import load_dotenv
 from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.embeddings.cohere import CohereEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
-from utils import init_mongo_db
+
+from .custom_retriever import CustomRetriever
+from .utils import init_mongo_db
 
 load_dotenv()
 
@@ -33,39 +34,6 @@ if not os.path.exists("data/chroma-db-all_sources"):
         repo_type="dataset",
     )
     logfire.info(f"Downloaded vector database to 'data/chroma-db-all_sources'")
-
-
-def create_docs(input_file: str) -> list[Document]:
-    with open(input_file, "r") as f:
-        documents = []
-        for line in f:
-            data = json.loads(line)
-            documents.append(
-                Document(
-                    doc_id=data["doc_id"],
-                    text=data["content"],
-                    metadata={  # type: ignore
-                        "url": data["url"],
-                        "title": data["name"],
-                        "tokens": data["tokens"],
-                        "retrieve_doc": data["retrieve_doc"],
-                        "source": data["source"],
-                    },
-                    excluded_llm_metadata_keys=[
-                        "title",
-                        "tokens",
-                        "retrieve_doc",
-                        "source",
-                    ],
-                    excluded_embed_metadata_keys=[
-                        "url",
-                        "tokens",
-                        "retrieve_doc",
-                        "source",
-                    ],
-                )
-            )
-    return documents
 
 
 def setup_database(db_collection, dict_file_name) -> CustomRetriever:
