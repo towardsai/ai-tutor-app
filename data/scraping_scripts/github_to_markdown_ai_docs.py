@@ -33,8 +33,9 @@ import argparse
 import json
 import os
 import random
+import shutil
 import time
-from typing import Dict, List
+from typing import List
 
 import nbformat
 import requests
@@ -63,7 +64,16 @@ SOURCE_CONFIGS = {
     "llama_index": {
         "owner": "run-llama",
         "repo": "llama_index",
-        "path": "docs/docs",
+        "paths": [
+            {
+                "remote_path": "docs/src/content/docs/framework",
+                "local_subdir": "src/content/docs/framework",
+            },
+            {
+                "remote_path": "docs/examples",
+                "local_subdir": "examples",
+            },
+        ],
     },
     "openai_cookbooks": {
         "owner": "openai",
@@ -72,8 +82,36 @@ SOURCE_CONFIGS = {
     },
     "langchain": {
         "owner": "langchain-ai",
-        "repo": "langchain",
-        "path": "docs/docs",
+        "repo": "docs",
+        "paths": [
+            {"remote_path": "src/oss/concepts", "local_subdir": "concepts"},
+            {"remote_path": "src/oss/langchain", "local_subdir": "langchain"},
+            {
+                "remote_path": "src/oss/python/integrations",
+                "local_subdir": "python/integrations",
+            },
+            {
+                "remote_path": "src/oss/python/migrate",
+                "local_subdir": "python/migrate",
+            },
+            {
+                "remote_path": "src/oss/python/releases",
+                "local_subdir": "python/releases",
+            },
+            {
+                "remote_path": "src/oss/security-policy.mdx",
+                "local_subdir": "",
+            },
+            {
+                "remote_path": "src/oss/release-policy.mdx",
+                "local_subdir": "",
+            },
+            {
+                "remote_path": "src/oss/versioning.mdx",
+                "local_subdir": "",
+            },
+        ],
+        "local_dir": "data/langchain_md_files",
     },
 }
 
@@ -81,21 +119,68 @@ SOURCE_CONFIGS = {
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
 # Headers for authenticated requests
-HEADERS = {
-    "Authorization": f"token {GITHUB_TOKEN}",
-    "Accept": "application/vnd.github.v3+json",
-}
+HEADERS = {"Accept": "application/vnd.github.v3+json"}
+if GITHUB_TOKEN:
+    HEADERS["Authorization"] = f"token {GITHUB_TOKEN}"
 
 # Maximum number of retries
 MAX_RETRIES = 5
 
 
+class GitHubAPIError(RuntimeError):
+    """Raised when the GitHub API returns an unexpected error."""
+
+
+class GitHubAuthError(GitHubAPIError):
+    """Raised when GitHub credentials are missing, invalid, or unauthorized."""
+
+
+def _raise_for_github_error(response: requests.Response) -> None:
+    if response.ok:
+        return
+
+    message = ""
+    try:
+        payload = response.json()
+        message = str(payload.get("message", ""))
+    except Exception:
+        message = response.text.strip()
+
+    if response.status_code == 401:
+        raise GitHubAuthError(
+            "GitHub authentication failed: GITHUB_TOKEN is invalid, expired, or revoked."
+        )
+
+    if response.status_code == 403:
+        remaining = response.headers.get("X-RateLimit-Remaining")
+        if remaining == "0":
+            reset_at = response.headers.get("X-RateLimit-Reset")
+            raise GitHubAPIError(
+                f"GitHub API rate limit exceeded. Reset timestamp: {reset_at or 'unknown'}."
+            )
+        raise GitHubAuthError(
+            "GitHub authentication failed: access is forbidden. "
+            "Check token scopes and any required SSO authorization."
+        )
+
+    raise GitHubAPIError(
+        f"GitHub API request failed with status {response.status_code}: {message or response.reason}"
+    )
+
+
 def check_rate_limit():
     rate_limit_url = "https://api.github.com/rate_limit"
-    response = requests.get(rate_limit_url, headers=HEADERS)
+    response = requests.get(rate_limit_url, headers=HEADERS, timeout=30)
+    _raise_for_github_error(response)
     data = response.json()
-    remaining = data["resources"]["core"]["remaining"]
-    reset_time = data["resources"]["core"]["reset"]
+    resources = data.get("resources", {})
+    core = resources.get("core")
+    if core is None:
+        raise GitHubAPIError(
+            f"Unexpected rate limit response from GitHub: {json.dumps(data)[:300]}"
+        )
+    remaining = core["remaining"]
+    reset_time = core["reset"]
 
     if remaining < 10:  # Adjust this threshold as needed
         wait_time = reset_time - time.time()
@@ -103,12 +188,14 @@ def check_rate_limit():
         time.sleep(wait_time + 1)  # Add 1 second buffer
 
 
-def get_files_in_directory(api_url: str, retries: int = 0) -> List[Dict]:
+def get_files_in_directory(api_url: str, retries: int = 0):
     try:
         check_rate_limit()
-        response = requests.get(api_url, headers=HEADERS)
-        response.raise_for_status()
+        response = requests.get(api_url, headers=HEADERS, timeout=30)
+        _raise_for_github_error(response)
         return response.json()
+    except GitHubAPIError:
+        raise
     except requests.exceptions.RequestException as e:
         if retries < MAX_RETRIES:
             wait_time = (2**retries) + random.random()
@@ -127,10 +214,12 @@ def get_files_in_directory(api_url: str, retries: int = 0) -> List[Dict]:
 def download_file(file_url: str, file_path: str, retries: int = 0):
     try:
         check_rate_limit()
-        response = requests.get(file_url, headers=HEADERS)
-        response.raise_for_status()
+        response = requests.get(file_url, headers=HEADERS, timeout=60)
+        _raise_for_github_error(response)
         with open(file_path, "wb") as file:
             file.write(response.content)
+    except GitHubAPIError:
+        raise
     except requests.exceptions.RequestException as e:
         if retries < MAX_RETRIES:
             wait_time = (2**retries) + random.random()
@@ -173,6 +262,8 @@ def convert_ipynb_to_md(ipynb_path: str, md_path: str):
 
 def fetch_files(api_url: str, local_dir: str):
     files = get_files_in_directory(api_url)
+    if isinstance(files, dict):
+        files = [files]
     for file in files:
         if file["type"] == "file" and file["name"].endswith((".md", ".mdx", ".ipynb")):
             file_url = file["download_url"]
@@ -201,19 +292,41 @@ def process_source(source: str):
         return
 
     config = SOURCE_CONFIGS[source]
-    api_url = f"https://api.github.com/repos/{config['owner']}/{config['repo']}/contents/{config['path']}"
-    local_dir = f"data/{config['repo']}_md_files"
+    local_dir = config.get("local_dir", f"data/{config['repo']}_md_files")
+    shutil.rmtree(local_dir, ignore_errors=True)
     os.makedirs(local_dir, exist_ok=True)
 
     print(f"Processing source: {source}")
-    fetch_files(api_url, local_dir)
+
+    if "paths" in config:
+        for path_config in config["paths"]:
+            api_url = (
+                f"https://api.github.com/repos/{config['owner']}/{config['repo']}/contents/"
+                f"{path_config['remote_path']}"
+            )
+            target_dir = os.path.join(local_dir, path_config.get("local_subdir", ""))
+            os.makedirs(target_dir, exist_ok=True)
+            fetch_files(api_url, target_dir)
+    else:
+        api_url = (
+            f"https://api.github.com/repos/{config['owner']}/{config['repo']}/contents/{config['path']}"
+        )
+        fetch_files(api_url, local_dir)
+
     print(f"Finished processing {source}")
 
 
 def main(sources: List[str]):
-    for source in sources:
-        process_source(source)
-    print("All specified sources have been processed.")
+    try:
+        for source in sources:
+            process_source(source)
+        print("All specified sources have been processed.")
+    except GitHubAuthError as exc:
+        print(f"GitHub auth error: {exc}")
+        raise SystemExit(1) from exc
+    except GitHubAPIError as exc:
+        print(f"GitHub API error: {exc}")
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

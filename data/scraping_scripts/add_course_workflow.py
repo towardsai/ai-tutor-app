@@ -32,12 +32,13 @@ import os
 import pickle
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Dict, List, Set
 
 from dotenv import load_dotenv
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
+from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
+from scripts.chroma_rag import get_chunk_record_doc_id
 
 # Load environment variables from .env file
 load_dotenv()
@@ -49,6 +50,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def run_module(module_name: str, *module_args: str) -> subprocess.CompletedProcess:
+    """Run a repository script as a module with the current interpreter."""
+    return subprocess.run([sys.executable, "-m", module_name, *module_args])
+
+
+def ensure_hf_access() -> None:
+    try:
+        validate_hf_access(repo_id="towardsai-tutors/ai-tutor-data")
+    except HuggingFaceAuthError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+
+
 def ensure_required_files_exist():
     """Download required data files from HuggingFace if they don't exist locally."""
     # List of files to check and download
@@ -56,7 +70,6 @@ def ensure_required_files_exist():
         # Critical files
         "data/all_sources_data.jsonl": "all_sources_data.jsonl",
         "data/all_sources_contextual_nodes.pkl": "all_sources_contextual_nodes.pkl",
-        
         # Documentation source files
         "data/transformers_data.jsonl": "transformers_data.jsonl",
         "data/peft_data.jsonl": "peft_data.jsonl",
@@ -64,24 +77,25 @@ def ensure_required_files_exist():
         "data/llama_index_data.jsonl": "llama_index_data.jsonl",
         "data/langchain_data.jsonl": "langchain_data.jsonl",
         "data/openai_cookbooks_data.jsonl": "openai_cookbooks_data.jsonl",
-        
         # Course files
         "data/tai_blog_data.jsonl": "tai_blog_data.jsonl",
         "data/8-hour_primer_data.jsonl": "8-hour_primer_data.jsonl",
         "data/llm_developer_data.jsonl": "llm_developer_data.jsonl",
-        "data/python_primer_data.jsonl": "python_primer_data.jsonl"
+        "data/python_primer_data.jsonl": "python_primer_data.jsonl",
     }
-    
+
     # Critical files that must be downloaded
     critical_files = [
         "data/all_sources_data.jsonl",
-        "data/all_sources_contextual_nodes.pkl"
+        "data/all_sources_contextual_nodes.pkl",
     ]
-    
+
     # Check and download each file
     for local_path, remote_filename in required_files.items():
         if not os.path.exists(local_path):
-            logger.info(f"{remote_filename} not found. Attempting to download from HuggingFace...")
+            logger.info(
+                f"{remote_filename} not found. Attempting to download from HuggingFace..."
+            )
             try:
                 hf_hub_download(
                     token=os.getenv("HF_TOKEN"),
@@ -90,22 +104,29 @@ def ensure_required_files_exist():
                     repo_type="dataset",
                     local_dir="data",
                 )
-                logger.info(f"Successfully downloaded {remote_filename} from HuggingFace")
+                logger.info(
+                    f"Successfully downloaded {remote_filename} from HuggingFace"
+                )
             except Exception as e:
                 logger.warning(f"Could not download {remote_filename}: {e}")
-                
+
                 # Only create empty file for all_sources_data.jsonl if it's missing
                 if local_path == "data/all_sources_data.jsonl":
-                    logger.warning("Creating a new all_sources_data.jsonl file. This will not include previously existing data.")
-                    with open(local_path, "w") as f:
-                        pass
-                
+                    logger.warning(
+                        "Creating a new all_sources_data.jsonl file. This will not include previously existing data."
+                    )
+                    open(local_path, "w").close()
+
                 # If critical file is missing, print a more serious warning
                 if local_path in critical_files:
-                    logger.warning(f"Critical file {remote_filename} is missing. The workflow may not function correctly.")
-                    
+                    logger.warning(
+                        f"Critical file {remote_filename} is missing. The workflow may not function correctly."
+                    )
+
                     if local_path == "data/all_sources_contextual_nodes.pkl":
-                        logger.warning("The context addition step will process all documents since no existing contexts were found.")
+                        logger.warning(
+                            "The context addition step will process all documents since no existing contexts were found."
+                        )
 
 
 def load_jsonl(file_path: str) -> List[Dict]:
@@ -128,11 +149,10 @@ def save_jsonl(data: List[Dict], file_path: str) -> None:
 def process_markdown_files(course_name: str) -> str:
     """Process markdown files for a specific course. Returns path to output JSONL."""
     logger.info(f"Processing markdown files for course: {course_name}")
-    cmd = ["python", "data/scraping_scripts/process_md_files.py", course_name]
-    result = subprocess.run(cmd)
+    result = run_module("data.scraping_scripts.process_md_files", course_name)
 
     if result.returncode != 0:
-        logger.error(f"Error processing markdown files - check output above")
+        logger.error("Error processing markdown files - check output above")
         sys.exit(1)
 
     logger.info(f"Successfully processed markdown files for {course_name}")
@@ -150,14 +170,16 @@ def process_markdown_files(course_name: str) -> str:
 
 def manual_url_addition(jsonl_path: str) -> None:
     """Guide the user through manually adding URLs to the course JSONL."""
-    logger.info(f"=== MANDATORY MANUAL STEP: URL ADDITION ===")
+    logger.info("=== MANDATORY MANUAL STEP: URL ADDITION ===")
     logger.info(f"Please add the URLs to the course content in: {jsonl_path}")
-    logger.info(f"For each document in the JSONL file:")
-    logger.info(f"1. Open the file in a text editor")
-    logger.info(f"2. Find the empty 'url' field for each document")
-    logger.info(f"3. Add the appropriate URL from the live course platform")
-    logger.info(f"   Example URL format: https://academy.towardsai.net/courses/take/python-for-genai/multimedia/62515980-course-structure")
-    logger.info(f"4. Save the file when done")
+    logger.info("For each document in the JSONL file:")
+    logger.info("1. Open the file in a text editor")
+    logger.info("2. Find the empty 'url' field for each document")
+    logger.info("3. Add the appropriate URL from the live course platform")
+    logger.info(
+        "   Example URL format: https://academy.towardsai.net/courses/take/python-for-genai/multimedia/62515980-course-structure"
+    )
+    logger.info("4. Save the file when done")
 
     # Check if URLs are present
     data = load_jsonl(jsonl_path)
@@ -213,7 +235,7 @@ def get_processed_doc_ids() -> Set[str]:
     try:
         with open("data/all_sources_contextual_nodes.pkl", "rb") as f:
             nodes = pickle.load(f)
-            return {node.source_node.node_id for node in nodes}
+            return {get_chunk_record_doc_id(node) for node in nodes}
     except Exception as e:
         logger.error(f"Error loading processed doc_ids: {e}")
         return set()
@@ -241,7 +263,7 @@ def add_context_to_nodes(new_only: bool = False) -> None:
 
         # Temporarily modify the add_context_to_nodes.py script to use the temp file
         cmd = [
-            "python",
+            sys.executable,
             "-c",
             f"""
 import asyncio
@@ -249,6 +271,7 @@ import os
 import pickle
 import json
 from data.scraping_scripts.add_context_to_nodes import create_docs, process
+from scripts.chroma_rag import get_chunk_record_source
 
 async def main():
     # First, get the list of sources being updated from the temp file
@@ -276,14 +299,8 @@ async def main():
         removed_count = 0
         
         for node in existing_nodes:
-            # Try to extract source from node metadata
             try:
-                source = None
-                if hasattr(node, 'source_node') and hasattr(node.source_node, 'metadata'):
-                    source = node.source_node.metadata.get("source")
-                elif hasattr(node, 'metadata'):
-                    source = node.metadata.get("source")
-                
+                source = get_chunk_record_source(node)
                 if source not in updated_sources:
                     filtered_nodes.append(node)
                 else:
@@ -309,12 +326,12 @@ asyncio.run(main())
         ]
     else:
         # Process all documents
-        cmd = ["python", "data/scraping_scripts/add_context_to_nodes.py"]
+        cmd = [sys.executable, "-m", "data.scraping_scripts.add_context_to_nodes"]
 
     result = subprocess.run(cmd)
 
     if result.returncode != 0:
-        logger.error(f"Error adding context to nodes - check output above")
+        logger.error("Error adding context to nodes - check output above")
         sys.exit(1)
 
     logger.info("Successfully added context to nodes")
@@ -327,11 +344,10 @@ asyncio.run(main())
 def create_vector_stores() -> None:
     """Create vector stores from processed documents."""
     logger.info("Creating vector stores")
-    cmd = ["python", "data/scraping_scripts/create_vector_stores.py", "all_sources"]
-    result = subprocess.run(cmd)
+    result = run_module("data.scraping_scripts.create_vector_stores", "all_sources")
 
     if result.returncode != 0:
-        logger.error(f"Error creating vector stores - check output above")
+        logger.error("Error creating vector stores - check output above")
         sys.exit(1)
 
     logger.info("Successfully created vector stores")
@@ -340,11 +356,10 @@ def create_vector_stores() -> None:
 def upload_to_huggingface(upload_jsonl: bool = False) -> None:
     """Upload databases to HuggingFace."""
     logger.info("Uploading databases to HuggingFace")
-    cmd = ["python", "data/scraping_scripts/upload_dbs_to_hf.py"]
-    result = subprocess.run(cmd)
+    result = run_module("data.scraping_scripts.upload_dbs_to_hf")
 
     if result.returncode != 0:
-        logger.error(f"Error uploading databases - check output above")
+        logger.error("Error uploading databases - check output above")
         sys.exit(1)
 
     logger.info("Successfully uploaded databases to HuggingFace")
@@ -354,11 +369,10 @@ def upload_to_huggingface(upload_jsonl: bool = False) -> None:
 
         try:
             # Note: This uses a separate private repository
-            cmd = ["python", "data/scraping_scripts/upload_data_to_hf.py"]
-            result = subprocess.run(cmd)
+            result = run_module("data.scraping_scripts.upload_data_to_hf")
 
             if result.returncode != 0:
-                logger.error(f"Error uploading data files - check output above")
+                logger.error("Error uploading data files - check output above")
                 sys.exit(1)
 
             logger.info("Successfully uploaded data files to HuggingFace")
@@ -368,7 +382,7 @@ def upload_to_huggingface(upload_jsonl: bool = False) -> None:
 
 
 def update_ui_files(course_name: str) -> None:
-    """Update main.py and setup.py with the new source."""
+    """Update setup.py and the default selected UI sources for the new course."""
     logger.info(f"Updating UI files with new course: {course_name}")
 
     # Get the source configuration for display name
@@ -381,7 +395,7 @@ def update_ui_files(course_name: str) -> None:
     # Get a readable display name for the UI
     display_name = course_name.replace("_", " ").title()
 
-    # Update setup.py - add to AVAILABLE_SOURCES and AVAILABLE_SOURCES_UI
+    # Update setup.py - add to AVAILABLE_SOURCES, AVAILABLE_SOURCES_UI, and SOURCE_UI_TO_KEY
     setup_path = Path("scripts/setup.py")
     if setup_path.exists():
         setup_content = setup_path.read_text()
@@ -408,39 +422,38 @@ def update_ui_files(course_name: str) -> None:
                 + new_ui_content[sources_list_end:]
             )
 
+            mapping_start = new_content.find("SOURCE_UI_TO_KEY = {")
+            mapping_end = new_content.find("}", mapping_start)
+            if f'"{display_name}": "{course_name}"' not in new_content:
+                new_content = (
+                    new_content[:mapping_end]
+                    + f'    "{display_name}": "{course_name}",\n'
+                    + new_content[mapping_end:]
+                )
+
             # Write updated content
             setup_path.write_text(new_content)
             logger.info(f"Updated setup.py with {course_name}")
     else:
         logger.warning(f"setup.py not found at {setup_path}")
 
-    # Update main.py - add to source_mapping
+    # Update main.py - add to the default selected source list
     main_path = Path("scripts/main.py")
     if main_path.exists():
         main_content = main_path.read_text()
 
         # Check if already added
-        if f'"{display_name}": "{course_name}"' in main_content:
+        if f'"{display_name}"' in main_content:
             logger.info(f"Course {course_name} already in main.py")
         else:
-            # Add to source_mapping
-            mapping_start = main_content.find("source_mapping = {")
-            mapping_end = main_content.find("}", mapping_start)
-            new_main_content = (
-                main_content[:mapping_end]
-                + f'            "{display_name}": "{course_name}",\n'
-                + main_content[mapping_end:]
-            )
-
-            # Add to default selected sources if not there
-            value_start = new_main_content.find("value=[")
-            value_end = new_main_content.find("]", value_start)
-
-            if f'"{display_name}"' not in new_main_content[value_start:value_end]:
+            value_start = main_content.find("value=[")
+            value_end = main_content.find("]", value_start)
+            new_main_content = main_content
+            if value_start != -1 and value_end != -1:
                 new_main_content = (
-                    new_main_content[: value_start + 7]
+                    main_content[: value_start + 7]
                     + f'        "{display_name}",\n'
-                    + new_main_content[value_start + 7 :]
+                    + main_content[value_start + 7 :]
                 )
 
             # Write updated content
@@ -499,6 +512,8 @@ def main():
     args = parser.parse_args()
     course_name = args.course
 
+    ensure_hf_access()
+
     # Ensure required data files exist before proceeding
     ensure_required_files_exist()
 
@@ -513,7 +528,12 @@ def main():
 
     # Execute the workflow steps
     if not args.skip_process_md:
-        course_jsonl_path = process_markdown_files(course_name)
+        if os.path.exists(course_jsonl_path):
+            logger.info(
+                f"JSONL file {course_jsonl_path} already exists. Skipping markdown processing."
+            )
+        else:
+            course_jsonl_path = process_markdown_files(course_name)
 
     # Always do the manual URL addition step for courses
     manual_url_addition(course_jsonl_path)

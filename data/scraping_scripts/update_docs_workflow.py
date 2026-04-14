@@ -34,7 +34,9 @@ import sys
 from typing import Dict, List, Set
 
 from dotenv import load_dotenv
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
+from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
+from scripts.chroma_rag import get_chunk_record_doc_id
 
 # Load environment variables from .env file
 load_dotenv()
@@ -44,6 +46,19 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+def run_module(module_name: str, *module_args: str) -> subprocess.CompletedProcess:
+    """Run a repository script as a module with the current interpreter."""
+    return subprocess.run([sys.executable, "-m", module_name, *module_args])
+
+
+def ensure_hf_access() -> None:
+    try:
+        validate_hf_access(repo_id="towardsai-tutors/ai-tutor-data")
+    except HuggingFaceAuthError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
 
 
 def ensure_required_files_exist():
@@ -98,8 +113,7 @@ def ensure_required_files_exist():
                     logger.warning(
                         "Creating a new all_sources_data.jsonl file. This will not include previously existing data."
                     )
-                    with open(local_path, "w") as f:
-                        pass
+                    open(local_path, "w").close()
 
                 # If critical file is missing, print a more serious warning
                 if local_path in critical_files:
@@ -151,15 +165,13 @@ def download_from_github(sources: List[str]) -> None:
             continue
 
         logger.info(f"Downloading {source} documentation")
-        cmd = ["python", "data/scraping_scripts/github_to_markdown_ai_docs.py", source]
-        result = subprocess.run(cmd)
+        result = run_module("data.scraping_scripts.github_to_markdown_ai_docs", source)
 
         if result.returncode != 0:
             logger.error(
-                f"Error downloading {source} documentation - check output above"
+                f"Error downloading {source} documentation. Stopping workflow to avoid overwriting source JSONL files with incomplete data."
             )
-            # Continue with other sources instead of exiting
-            continue
+            sys.exit(1)
 
         logger.info(f"Successfully downloaded {source} documentation")
 
@@ -168,14 +180,13 @@ def process_markdown_files(sources: List[str]) -> None:
     """Process markdown files for specific sources."""
     logger.info(f"Processing markdown files for sources: {sources}")
 
-    cmd = ["python", "data/scraping_scripts/process_md_files.py"] + sources
-    result = subprocess.run(cmd)
+    result = run_module("data.scraping_scripts.process_md_files", *sources)
 
     if result.returncode != 0:
-        logger.error(f"Error processing markdown files - check output above")
+        logger.error("Error processing markdown files - check output above")
         sys.exit(1)
 
-    logger.info(f"Successfully processed markdown files")
+    logger.info("Successfully processed markdown files")
 
 
 def get_processed_doc_ids() -> Set[str]:
@@ -186,7 +197,7 @@ def get_processed_doc_ids() -> Set[str]:
     try:
         with open("data/all_sources_contextual_nodes.pkl", "rb") as f:
             nodes = pickle.load(f)
-            return {node.source_node.node_id for node in nodes}
+            return {get_chunk_record_doc_id(node) for node in nodes}
     except Exception as e:
         logger.error(f"Error loading processed doc_ids: {e}")
         return set()
@@ -214,7 +225,7 @@ def add_context_to_nodes(new_only: bool = False) -> None:
 
         # Temporarily modify the add_context_to_nodes.py script to use the temp file
         cmd = [
-            "python",
+            sys.executable,
             "-c",
             f"""
 import asyncio
@@ -222,6 +233,7 @@ import os
 import pickle
 import json
 from data.scraping_scripts.add_context_to_nodes import create_docs, process
+from scripts.chroma_rag import get_chunk_record_source
 
 async def main():
     # First, get the list of sources being updated from the temp file
@@ -249,14 +261,8 @@ async def main():
         removed_count = 0
         
         for node in existing_nodes:
-            # Try to extract source from node metadata
             try:
-                source = None
-                if hasattr(node, 'source_node') and hasattr(node.source_node, 'metadata'):
-                    source = node.source_node.metadata.get("source")
-                elif hasattr(node, 'metadata'):
-                    source = node.metadata.get("source")
-                
+                source = get_chunk_record_source(node)
                 if source not in updated_sources:
                     filtered_nodes.append(node)
                 else:
@@ -283,12 +289,12 @@ asyncio.run(main())
     else:
         # Process all documents
         logger.info("Adding context to all nodes")
-        cmd = ["python", "data/scraping_scripts/add_context_to_nodes.py"]
+        cmd = [sys.executable, "-m", "data.scraping_scripts.add_context_to_nodes"]
 
     result = subprocess.run(cmd)
 
     if result.returncode != 0:
-        logger.error(f"Error adding context to nodes - check output above")
+        logger.error("Error adding context to nodes - check output above")
         sys.exit(1)
 
     logger.info("Successfully added context to nodes")
@@ -301,11 +307,10 @@ asyncio.run(main())
 def create_vector_stores() -> None:
     """Create vector stores from processed documents."""
     logger.info("Creating vector stores")
-    cmd = ["python", "data/scraping_scripts/create_vector_stores.py", "all_sources"]
-    result = subprocess.run(cmd)
+    result = run_module("data.scraping_scripts.create_vector_stores", "all_sources")
 
     if result.returncode != 0:
-        logger.error(f"Error creating vector stores - check output above")
+        logger.error("Error creating vector stores - check output above")
         sys.exit(1)
 
     logger.info("Successfully created vector stores")
@@ -314,11 +319,10 @@ def create_vector_stores() -> None:
 def upload_to_huggingface(upload_jsonl: bool = False) -> None:
     """Upload databases to HuggingFace."""
     logger.info("Uploading databases to HuggingFace")
-    cmd = ["python", "data/scraping_scripts/upload_dbs_to_hf.py"]
-    result = subprocess.run(cmd)
+    result = run_module("data.scraping_scripts.upload_dbs_to_hf")
 
     if result.returncode != 0:
-        logger.error(f"Error uploading databases - check output above")
+        logger.error("Error uploading databases - check output above")
         sys.exit(1)
 
     logger.info("Successfully uploaded databases to HuggingFace")
@@ -328,11 +332,10 @@ def upload_to_huggingface(upload_jsonl: bool = False) -> None:
 
         try:
             # Note: This uses a separate private repository
-            cmd = ["python", "data/scraping_scripts/upload_data_to_hf.py"]
-            result = subprocess.run(cmd)
+            result = run_module("data.scraping_scripts.upload_data_to_hf")
 
             if result.returncode != 0:
-                logger.error(f"Error uploading data files - check output above")
+                logger.error("Error uploading data files - check output above")
                 sys.exit(1)
 
             logger.info("Successfully uploaded data files to HuggingFace")
@@ -381,6 +384,8 @@ def main():
     )
 
     args = parser.parse_args()
+
+    ensure_hf_access()
 
     # Ensure required data files exist before proceeding
     ensure_required_files_exist()

@@ -4,7 +4,7 @@ Upload Data Files to HuggingFace
 
 This script uploads key data files to a private HuggingFace dataset repository:
 1. all_sources_data.jsonl - The raw document data
-2. all_sources_contextual_nodes.pkl - The processed nodes with added context
+2. all_sources_contextual_nodes.pkl - The contextualized chunk manifest used for embedding
 
 This is useful for new team members who need the latest version of the data.
 
@@ -19,7 +19,10 @@ import argparse
 import os
 
 from dotenv import load_dotenv
-from huggingface_hub import HfApi
+try:
+    from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
+except ModuleNotFoundError:
+    from hf_auth import HuggingFaceAuthError, validate_hf_access
 
 load_dotenv()
 
@@ -75,18 +78,10 @@ def upload_files_to_huggingface(repo_id="towardsai-tutors/ai-tutor-data"):
         print("This is normal if you're only updating certain sources.")
 
     try:
-        api = HfApi(token=os.getenv("HF_TOKEN"))
+        api = validate_hf_access(repo_id=repo_id)
 
         # Check if repository exists, create if it doesn't
-        try:
-            api.repo_info(repo_id=repo_id, repo_type="dataset")
-            print(f"Repository {repo_id} exists")
-        except Exception:
-            print(
-                f"Repository {repo_id} doesn't exist. Please create it first on the HuggingFace platform."
-            )
-            print("Make sure to set it as private if needed.")
-            return False
+        print(f"Repository {repo_id} exists")
 
         # Upload all existing files
         for file_path in existing_files:
@@ -108,6 +103,9 @@ def upload_files_to_huggingface(repo_id="towardsai-tutors/ai-tutor-data"):
                 # Continue with other files even if one fails
 
         return True
+    except HuggingFaceAuthError as e:
+        print(e)
+        return False
     except Exception as e:
         print(f"Error uploading files: {e}")
         return False
@@ -122,7 +120,9 @@ def main():
     )
 
     args = parser.parse_args()
-    upload_files_to_huggingface(args.repo)
+    success = upload_files_to_huggingface(args.repo)
+    if not success:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -86,16 +86,17 @@ SOURCE_CONFIGS = {
         "source_name": "llama_index",
         "use_include_list": True,
         "included_dirs": [
-            "getting_started",
-            "understanding",
-            "use_cases",
+            "src/content/docs/framework/index.md",
+            "src/content/docs/framework/getting_started",
+            "src/content/docs/framework/understanding",
+            "src/content/docs/framework/use_cases",
+            "src/content/docs/framework/module_guides",
+            "src/content/docs/framework/optimizing",
             "examples",
-            "module_guides",
-            "optimizing",
         ],
         "excluded_dirs": [],
         "excluded_root_files": [],
-        "included_root_files": ["index.md"],
+        "included_root_files": [],
         "url_extension": "",
     },
     "openai_cookbooks": {
@@ -111,15 +112,25 @@ SOURCE_CONFIGS = {
         "url_extension": ".ipynb",
     },
     "langchain": {
-        "base_url": "https://python.langchain.com/docs/",
+        "base_url": "https://docs.langchain.com/oss/python/",
         "input_directory": "data/langchain_md_files",
         "output_file": "data/langchain_data.jsonl",
         "source_name": "langchain",
         "use_include_list": True,
-        "included_dirs": ["how_to", "versions", "turorials", "integrations"],
+        "included_dirs": [
+            "concepts",
+            "langchain",
+            "python/integrations",
+            "python/migrate",
+            "python/releases",
+        ],
         "excluded_dirs": [],
         "excluded_root_files": [],
-        "included_root_files": ["security.md", "concepts.mdx", "introduction.mdx"],
+        "included_root_files": [
+            "security-policy.mdx",
+            "release-policy.mdx",
+            "versioning.mdx",
+        ],
         "url_extension": "",
     },
     "tai_blog": {
@@ -208,6 +219,20 @@ def generate_url(file_path: str, config: Dict) -> str:
         return ""
 
     path_without_extension = os.path.splitext(file_path)[0]
+    source_name = config["source_name"]
+
+    if source_name == "llama_index":
+        framework_prefix = "src/content/docs/framework/"
+        if path_without_extension.startswith(framework_prefix):
+            path_without_extension = path_without_extension[len(framework_prefix) :]
+        if path_without_extension == "index":
+            path_without_extension = ""
+        elif path_without_extension.endswith("/index"):
+            path_without_extension = path_without_extension[: -len("/index")]
+
+    if source_name == "langchain" and path_without_extension.startswith("python/"):
+        path_without_extension = path_without_extension[len("python/") :]
+
     path_with_forward_slashes = path_without_extension.replace("\\", "/")
     return config["base_url"] + path_with_forward_slashes + config["url_extension"]
 

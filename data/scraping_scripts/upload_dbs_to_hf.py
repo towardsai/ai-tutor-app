@@ -18,25 +18,35 @@ Configuration:
 - It deletes all existing files in the repository before uploading (due to delete_patterns=["*"]).
 """
 
-import os
-
 from dotenv import load_dotenv
-from huggingface_hub import HfApi
+try:
+    from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
+except ModuleNotFoundError:
+    from hf_auth import HuggingFaceAuthError, validate_hf_access
 
 load_dotenv()
 
-api = HfApi(token=os.getenv("HF_TOKEN"))
+def main() -> None:
+    try:
+        api = validate_hf_access(repo_id="towardsai-tutors/ai-tutor-vector-db")
+    except HuggingFaceAuthError as exc:
+        print(exc)
+        raise SystemExit(1) from exc
 
-api.upload_folder(
-    folder_path="data",
-    repo_id="towardsai-tutors/ai-tutor-vector-db",
-    repo_type="dataset",
-    # multi_commits=True,
-    # multi_commits_verbose=True,
-    delete_patterns=["*"],
-    allow_patterns=[
-        "chroma-db-all_sources/**",
-        "all_sources_contextual_nodes.pkl",
-    ],
-    ignore_patterns=["*.jsonl", "*.py", "*.txt", "*.ipynb", "*.md", "*.pyc", "*.mdx"],
-)
+    api.upload_folder(
+        folder_path="data",
+        repo_id="towardsai-tutors/ai-tutor-vector-db",
+        repo_type="dataset",
+        # multi_commits=True,
+        # multi_commits_verbose=True,
+        delete_patterns=["*"],
+        allow_patterns=[
+            "chroma-db-all_sources/**",
+            "all_sources_contextual_nodes.pkl",
+        ],
+        ignore_patterns=["*.jsonl", "*.py", "*.txt", "*.ipynb", "*.md", "*.pyc", "*.mdx"],
+    )
+
+
+if __name__ == "__main__":
+    main()

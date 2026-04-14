@@ -85,7 +85,7 @@ This script will guide you through the complete process, it will:
    2. Download the JSONL files from the other courses
    3. Prompt you to manually add URLs to the course content, inside the newly created JSONL file (more details in step 3 below)
    4. Merge the course data into the main dataset
-   5. Add contextual information to document nodes
+   5. Add contextual information to document chunks before embedding
    6. Create vector stores
    7. Upload databases to HuggingFace
    8. Update UI configuration
@@ -99,10 +99,10 @@ This script will guide you through the complete process, it will:
   - macOS: press ⌥ Option + Z
   - Windows/Linux: press Alt + Z
 
-- For each lesson in the course [academy.towardsai.net](https://academy.towardsai.net/courses/take/ai-business-professionals/multimedia/64071930-introduction), copy the URL, and add it to the `url` field in the JSONL file, in the corresponding lesson.
+- For each lesson in the course, starting at the beginning [academy.towardsai.net](https://academy.towardsai.net/courses/take/ai-business-professionals/multimedia/64071930-introduction), copy the URL, and add it to the `url` field in the JSONL file, in the corresponding line/lesson. Read the note below to know what urls to add.
 
 **Note:** While you do this, now is the time to clean up the .jsonl file, remove any lines/lessons that should not be added to the RAG chatbot.
-example: "Course Admin and Syllabus", "Course Structure/Overview", "Course Outline", "Quiz", "Assigments", "Introduction to Module X" etc. You can also remove lines that are videos.
+example: "Course Admin and Syllabus", "Course Structure/Overview", "Course Outline", "Quiz", "Assigments", "Introduction to Module X" etc. You can also remove lines that are videos. Only actual lessons should be kept in the JSONL file, with the `url` field filled in.
 
 - What you can do is add the URLs for all the lessons you want to add to the RAG chatbot, and when done, remove all the json lines that have an empty `url` field.
 
@@ -110,6 +110,14 @@ example: "Course Admin and Syllabus", "Course Structure/Overview", "Course Outli
 
 ```bash
 uv run -m data.scraping_scripts.add_course_workflow --course master_ai_for_work
+```
+
+## 5. Its done
+
+Run the chatbot locally to test if the course has been added correctly.
+
+```bash
+uv run -m scripts.main
 ```
 
 ----
@@ -132,9 +140,11 @@ The workflow includes:
 
 1. Downloading documentation from GitHub using the API
 2. Processing markdown files to create JSONL data
-3. Adding contextual information to document nodes
+3. Adding contextual information to document chunks
 4. Creating vector stores
 5. Uploading vector db and new JSONL files to HuggingFace
+
+Both workflows validate Hugging Face access up front, and the docs workflow now stops immediately on GitHub auth/API failures so it does not overwrite source JSONL files with incomplete data.
 
 ## Individual Components
 
@@ -162,7 +172,7 @@ If you need to run specific steps individually:
 3. By default, only new content will have context added to save time and resources. Use `--process-all-context` only if you need to regenerate context for all documents. Use `--skip-data-upload` if you don't want to upload data files to the private HuggingFace repo (they're uploaded by default).
 
 4. When adding a new course, verify that it appears in the Gradio UI:
-   - The workflow automatically updates `main.py` and `setup.py` to include the new source
+   - The workflow automatically updates `scripts/setup.py` to include the new source and `scripts/main.py` to preselect it by default
    - Check that the new source appears in the dropdown menu in the UI
    - Make sure it's properly included in the default selected sources
    - Restart the Gradio app to see the changes
@@ -170,7 +180,10 @@ If you need to run specific steps individually:
 5. First time setup or missing files:
    - Both workflows automatically check for and download required data files:
      - `all_sources_data.jsonl` - Contains the raw document data
-     - `all_sources_contextual_nodes.pkl` - Contains the processed nodes with added context
-   - If the PKL file exists, the `--new-context-only` flag will only process new content
+     - `all_sources_contextual_nodes.pkl` - Contains the context-enriched chunk manifest used for embedding
+   - If the PKL file exists, the default behavior only processes new content; use `--process-all-context` to regenerate context for every document
    - You must have proper HuggingFace credentials with access to the private repository
 
+6. Vector-store creation:
+   - `create_vector_stores.py` now shows terminal progress for embedding generation and Chroma upserts
+   - `all_sources_contextual_nodes.pkl` stores chunk records for embedding; legacy pickles containing LlamaIndex nodes are still accepted by the runtime compatibility helpers

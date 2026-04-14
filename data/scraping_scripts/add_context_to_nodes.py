@@ -1,11 +1,9 @@
 import asyncio
 import json
-import pdb
 import pickle
-from typing import Dict, List
+from typing import List
 
 import instructor
-import logfire
 import tiktoken
 # from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
@@ -19,10 +17,9 @@ from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 from tqdm.asyncio import tqdm
 
+from scripts.chroma_rag import ChunkRecord
+
 load_dotenv(".env")
-
-# logfire.configure()
-
 
 def create_docs(input_file: str) -> List[Document]:
     with open(input_file, "r") as f:
@@ -73,7 +70,6 @@ class SituatedContext(BaseModel):
 #     mode=Mode.ANTHROPIC_TOOLS,
 # )
 aclient = AsyncOpenAI()
-# logfire.instrument_openai(aclient)
 client: instructor.AsyncInstructor = instructor.from_openai(aclient)
 
 
@@ -113,7 +109,19 @@ Answer only with the succinct context and nothing else.
     return response.context
 
 
-async def process_chunk(node: TextNode, document_dict: dict) -> TextNode:
+def node_to_chunk_record(node: TextNode) -> ChunkRecord:
+    doc_id = str(node.source_node.node_id)  # type: ignore[union-attr]
+    metadata = dict(node.metadata)
+    metadata["doc_id"] = doc_id
+    return ChunkRecord(
+        chunk_id=str(node.node_id),
+        doc_id=doc_id,
+        text=str(node.text),
+        metadata=metadata,
+    )
+
+
+async def process_chunk(node: TextNode, document_dict: dict[str, Document]) -> ChunkRecord:
     doc_id: str = node.source_node.node_id  # type: ignore
     doc: Document = document_dict[doc_id]
 
@@ -134,12 +142,12 @@ async def process_chunk(node: TextNode, document_dict: dict) -> TextNode:
 
     context: str = await situate_context(doc.get_content(), node.text)
     node.text = f"{node.text}\n\n{context}"
-    return node
+    return node_to_chunk_record(node)
 
 
 async def process(
     documents: List[Document], semaphore_limit: int = 50
-) -> List[TextNode]:
+) -> List[ChunkRecord]:
 
     # From the document, we create chunks
     pipeline = IngestionPipeline(
@@ -160,35 +168,27 @@ async def process(
 
     tasks = [process_with_semaphore(node) for node in all_nodes]
 
-    results: List[TextNode] = await tqdm.gather(*tasks, desc="Processing chunks")
-
-    # pdb.set_trace()
+    results: List[ChunkRecord] = await tqdm.gather(*tasks, desc="Processing chunks")
 
     return results
 
 
 async def main():
     documents: List[Document] = create_docs("data/all_sources_data.jsonl")
-    enhanced_nodes: List[TextNode] = await process(documents)
+    enhanced_nodes: List[ChunkRecord] = await process(documents)
 
     with open("data/all_sources_contextual_nodes.pkl", "wb") as f:
         pickle.dump(enhanced_nodes, f)
 
-    # pipeline = IngestionPipeline(
-    #     transformations=[SentenceSplitter(chunk_size=800, chunk_overlap=0)]
-    # )
-    # all_nodes: list[TextNode] = pipeline.run(documents=documents, show_progress=True)
-    # print(all_nodes[7933])
-    # pdb.set_trace()
-
     with open("data/all_sources_contextual_nodes.pkl", "rb") as f:
-        enhanced_nodes: list[TextNode] = pickle.load(f)
+        enhanced_nodes: list[ChunkRecord] = pickle.load(f)
 
     for i, node in enumerate(enhanced_nodes):
         print(f"Chunk {i + 1}:")
-        print(f"Node: {node}")
+        print(f"Chunk ID: {node.chunk_id}")
+        print(f"Document ID: {node.doc_id}")
         print(f"Text: {node.text}")
-        # pdb.set_trace()
+        print(f"Metadata: {node.metadata}")
         break
 
 

@@ -1,4 +1,4 @@
-# AI Tutor App Instructions for Claude
+# AI Tutor App Instructions for Codex
 
 ## Project Overview
 

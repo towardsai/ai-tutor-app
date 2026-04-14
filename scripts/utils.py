@@ -11,6 +11,6 @@ def init_mongo_db(uri: str, db_name: str):
         database = client[db_name]
         print("Connected to MongoDB")
         return database
-    except Exception as e:
+    except Exception:
         print("Something went wrong connecting to mongodb")
         return

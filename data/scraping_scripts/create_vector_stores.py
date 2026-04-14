@@ -1,212 +1,208 @@
 """
-Vector Store Creation Script
+Build local Chroma indexes from the JSONL corpus.
 
-Purpose:
-This script processes various data sources (e.g., transformers, peft, trl, llama_index, openai_cookbooks, langchain)
-to create vector stores using Chroma and LlamaIndex. It reads data from JSONL files, creates document embeddings,
-and stores them in persistent Chroma databases for efficient retrieval.
+The script keeps the previous command surface so existing workflows can still call:
 
-Usage:
-python script_name.py <source1> <source2> ...
-
-Example:
-python script_name.py transformers peft llama_index
-
-The script accepts one or more source names as command-line arguments. Valid source names are:
-transformers, peft, trl, llama_index, openai_cookbooks, langchain
-
-For each specified source, the script will:
-1. Read data from the corresponding JSONL file
-2. Create document embeddings
-3. Store the embeddings in a Chroma vector database
-4. Save a dictionary of documents for future reference
-
-Note: Ensure that the input JSONL files are present in the 'data' directory.
+    uv run -m data.scraping_scripts.create_vector_stores all_sources
 """
 
+from __future__ import annotations
+
 import argparse
-import json
+import asyncio
+import logging
 import os
-import pdb
 import pickle
 import shutil
+from typing import Any, Sequence
 
 import chromadb
+import cohere
 from dotenv import load_dotenv
-from llama_index.core import Document, StorageContext, VectorStoreIndex
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.schema import MetadataMode, TextNode
-from llama_index.embeddings.cohere import CohereEmbedding
-from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.llms.openai import OpenAI
-from llama_index.vector_stores.chroma import ChromaVectorStore
+from tqdm.auto import tqdm
+
+try:
+    from data.scraping_scripts.add_context_to_nodes import create_docs, process
+    from scripts.chroma_rag import (
+        DEFAULT_EMBED_MODEL,
+        build_document_dict,
+        embed_texts,
+        load_jsonl_documents,
+        normalize_chunk_record,
+        save_document_dict,
+    )
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[2]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from data.scraping_scripts.add_context_to_nodes import create_docs, process
+    from scripts.chroma_rag import (
+        DEFAULT_EMBED_MODEL,
+        build_document_dict,
+        embed_texts,
+        load_jsonl_documents,
+        normalize_chunk_record,
+        save_document_dict,
+    )
 
 load_dotenv()
 
-# Configuration for different sources
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
 SOURCE_CONFIGS = {
     "transformers": {
         "input_file": "data/transformers_data.jsonl",
         "db_name": "chroma-db-transformers",
+        "document_dict_file": "document_dict_transformers.pkl",
     },
-    "peft": {"input_file": "data/peft_data.jsonl", "db_name": "chroma-db-peft"},
-    "trl": {"input_file": "data/trl_data.jsonl", "db_name": "chroma-db-trl"},
+    "peft": {
+        "input_file": "data/peft_data.jsonl",
+        "db_name": "chroma-db-peft",
+        "document_dict_file": "document_dict_peft.pkl",
+    },
+    "trl": {
+        "input_file": "data/trl_data.jsonl",
+        "db_name": "chroma-db-trl",
+        "document_dict_file": "document_dict_trl.pkl",
+    },
     "llama_index": {
         "input_file": "data/llama_index_data.jsonl",
         "db_name": "chroma-db-llama_index",
+        "document_dict_file": "document_dict_llama_index.pkl",
     },
     "openai_cookbooks": {
         "input_file": "data/openai_cookbooks_data.jsonl",
         "db_name": "chroma-db-openai_cookbooks",
+        "document_dict_file": "document_dict_openai_cookbooks.pkl",
     },
     "langchain": {
         "input_file": "data/langchain_data.jsonl",
         "db_name": "chroma-db-langchain",
+        "document_dict_file": "document_dict_langchain.pkl",
     },
     "tai_blog": {
         "input_file": "data/tai_blog_data.jsonl",
         "db_name": "chroma-db-tai_blog",
+        "document_dict_file": "document_dict_tai_blog.pkl",
     },
     "all_sources": {
         "input_file": "data/all_sources_data.jsonl",
         "db_name": "chroma-db-all_sources",
+        "document_dict_file": "document_dict_all_sources.pkl",
     },
 }
 
 
-def create_docs(input_file: str) -> list[Document]:
-    with open(input_file, "r") as f:
-        documents = []
-        for line in f:
-            data = json.loads(line)
-            documents.append(
-                Document(
-                    doc_id=data["doc_id"],
-                    text=data["content"],
-                    metadata={  # type: ignore
-                        "url": data["url"],
-                        "title": data["name"],
-                        "tokens": data["tokens"],
-                        "retrieve_doc": data["retrieve_doc"],
-                        "source": data["source"],
-                    },
-                    excluded_llm_metadata_keys=[  # url is included in LLM context
-                        "title",
-                        "tokens",
-                        "retrieve_doc",
-                        "source",
-                    ],
-                    excluded_embed_metadata_keys=[  # title is embedded along the content
-                        "url",
-                        "tokens",
-                        "retrieve_doc",
-                        "source",
-                    ],
-                )
-            )
-    return documents
-
-
-def process_source(source: str):
+def load_or_create_chunk_records(source: str) -> list[Any]:
     config = SOURCE_CONFIGS[source]
+    if source == "all_sources" and os.path.exists("data/all_sources_contextual_nodes.pkl"):
+        with open("data/all_sources_contextual_nodes.pkl", "rb") as handle:
+            return pickle.load(handle)
 
-    input_file = config["input_file"]
+    documents = create_docs(config["input_file"])
+    return asyncio.run(process(documents))
+
+
+def iter_batches(items: Sequence[Any], batch_size: int):
+    for start in range(0, len(items), batch_size):
+        yield items[start : start + batch_size]
+
+
+def process_source(source: str) -> None:
+    config = SOURCE_CONFIGS[source]
+    document_rows = load_jsonl_documents(config["input_file"])
+    if not document_rows:
+        print(f"No documents found for {source}")
+        return
+
     db_name = config["db_name"]
     db_path = f"data/{db_name}"
-
-    print(f"Processing source: {source}")
-
-    documents: list[Document] = create_docs(input_file)
-    print(f"Created {len(documents)} documents")
-
-    # Check if the folder exists and delete it
     if os.path.exists(db_path):
-        print(f"Existing database found at {db_path}. Deleting...")
         shutil.rmtree(db_path)
-        print(f"Deleted existing database at {db_path}")
 
-    # Create Chroma client and collection
-    chroma_client = chromadb.PersistentClient(path=f"data/{db_name}")
-    chroma_collection = chroma_client.create_collection(db_name)
+    os.makedirs(db_path, exist_ok=True)
 
-    # Create vector store and storage context
-    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    chunk_records = [
+        normalize_chunk_record(record)
+        for record in load_or_create_chunk_records(source)
+    ]
+    if not chunk_records:
+        logger.info("No chunk records found for %s", source)
+        return
 
-    # Save document dictionary
-    document_dict: dict[str, Document] = {doc.doc_id: doc for doc in documents}
-    document_dict_file = f"data/{db_name}/document_dict_{source}.pkl"
-    with open(document_dict_file, "wb") as f:
-        pickle.dump(document_dict, f)
-    print(f"Saved document dictionary to {document_dict_file}")
+    chunk_ids = [record.chunk_id for record in chunk_records]
+    chunk_texts = [record.text for record in chunk_records]
+    chunk_metadatas = [record.metadata for record in chunk_records]
 
-    # Load nodes with context
-    with open("data/all_sources_contextual_nodes.pkl", "rb") as f:
-        nodes_with_context: list[TextNode] = pickle.load(f)
+    logger.info(
+        "Preparing %s chunks from %s documents for %s",
+        len(chunk_records),
+        len(document_rows),
+        source,
+    )
 
-    print(f"Loaded {len(nodes_with_context)} nodes with context")
-    # pdb.set_trace()
-    # exit()
-
-    # Create vector store index
-    index = VectorStoreIndex(
-        nodes=nodes_with_context,
-        # embed_model=OpenAIEmbedding(model="text-embedding-3-large", mode="similarity"),
-        embed_model=CohereEmbedding(
-            api_key=os.environ["COHERE_API_KEY"],
-            model_name="embed-english-v3.0",
-            input_type="search_document",
-            base_url="https://api.cohere.com",
-        ),
+    cohere_client = cohere.ClientV2(api_key=os.environ["COHERE_API_KEY"])
+    logger.info("Generating embeddings for %s", source)
+    embeddings = embed_texts(
+        cohere_client,
+        chunk_texts,
+        input_type="search_document",
+        model=DEFAULT_EMBED_MODEL,
         show_progress=True,
-        use_async=True,
-        storage_context=storage_context,
+        progress_desc=f"Embedding {source}",
     )
-    llm = OpenAI(
-        temperature=1,
-        model="gpt-4o-mini",
-        # model="gpt-4o",
-        max_tokens=5000,
-        max_retries=3,
+
+    chroma_client = chromadb.PersistentClient(path=db_path)
+    collection = chroma_client.get_or_create_collection(name=db_name)
+    max_batch_size = chroma_client.get_max_batch_size()
+    logger.info(
+        "Writing %s embeddings to Chroma for %s in batches of up to %s",
+        len(chunk_ids),
+        source,
+        max_batch_size,
     )
-    query_engine = index.as_query_engine(llm=llm)
-    response = query_engine.query("How to fine-tune an llm?")
-    print(response)
-    for src in response.source_nodes:
-        print("Node ID\t", src.node_id)
-        print("Title\t", src.metadata["title"])
-        print("Text\t", src.text)
-        print("Score\t", src.score)
-        print("-_" * 20)
+    with tqdm(total=len(chunk_ids), desc=f"Upserting {source}", unit="chunk") as progress:
+        for batch_ids, batch_embeddings, batch_texts, batch_metadatas in zip(
+            iter_batches(chunk_ids, max_batch_size),
+            iter_batches(embeddings, max_batch_size),
+            iter_batches(chunk_texts, max_batch_size),
+            iter_batches(chunk_metadatas, max_batch_size),
+        ):
+            collection.upsert(
+                ids=batch_ids,
+                embeddings=batch_embeddings,
+                documents=batch_texts,
+                metadatas=batch_metadatas,
+            )
+            progress.update(len(batch_ids))
 
-    # # Create vector store index
-    # index = VectorStoreIndex.from_documents(
-    #     documents,
-    #     # embed_model=OpenAIEmbedding(model="text-embedding-3-large", mode="similarity"),
-    #     embed_model=CohereEmbedding(
-    #         api_key=os.environ["COHERE_API_KEY"],
-    #         model_name="embed-english-v3.0",
-    #         input_type="search_document",
-    #     ),
-    #     transformations=[SentenceSplitter(chunk_size=800, chunk_overlap=0)],
-    #     show_progress=True,
-    #     use_async=True,
-    #     storage_context=storage_context,
-    # )
-    print(f"Created vector store index for {source}")
+    document_dict = build_document_dict(document_rows)
+    save_document_dict(
+        document_dict,
+        f"{db_path}/{config['document_dict_file']}",
+    )
+
+    print(
+        f"Indexed {len(chunk_records)} chunks from {len(document_rows)} documents into {db_path}"
+    )
 
 
-def main(sources: list[str]):
+def main(sources: list[str]) -> None:
     for source in sources:
-        if source in SOURCE_CONFIGS:
-            process_source(source)
-        else:
-            print(f"Unknown source: {source}. Skipping.")
+        if source not in SOURCE_CONFIGS:
+            print(f"Unknown source: {source}")
+            continue
+        process_source(source)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Process sources and create vector stores."
+        description="Process sources and create local Chroma vector stores."
     )
     parser.add_argument(
         "sources",
@@ -215,5 +211,4 @@ if __name__ == "__main__":
         help="Specify one or more sources to process",
     )
     args = parser.parse_args()
-
     main(args.sources)

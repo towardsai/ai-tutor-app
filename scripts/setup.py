@@ -1,77 +1,19 @@
-import asyncio
-import json
-import logging
 import os
-import pickle
 
-import chromadb
 import logfire
 from dotenv import load_dotenv
-from llama_index.core import Document, VectorStoreIndex
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.retrievers import VectorIndexRetriever
-from llama_index.embeddings.cohere import CohereEmbedding
-from llama_index.vector_stores.chroma import ChromaVectorStore
 
-from .custom_retriever import CustomRetriever
 from .utils import init_mongo_db
 
 load_dotenv()
+try:
+    logfire.configure()
+except Exception:
+    pass
 
-logfire.configure()
-
-if not os.path.exists("data/chroma-db-all_sources"):
-    # Download the vector database from the Hugging Face Hub if it doesn't exist locally
-    # https://huggingface.co/datasets/towardsai-buster/ai-tutor-vector-db/tree/main
-    logfire.warn(
-        f"Vector database does not exist at 'data/chroma-db-all_sources', downloading from Hugging Face Hub"
-    )
-    from huggingface_hub import snapshot_download
-
-    snapshot_download(
-        repo_id="towardsai-tutors/ai-tutor-vector-db",
-        local_dir="data",
-        repo_type="dataset",
-    )
-    logfire.info(f"Downloaded vector database to 'data/chroma-db-all_sources'")
-
-
-def setup_database(db_collection, dict_file_name) -> CustomRetriever:
-    db = chromadb.PersistentClient(path=f"data/{db_collection}")
-    chroma_collection = db.get_or_create_collection(db_collection)
-    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-    embed_model = CohereEmbedding(
-        api_key=os.environ["COHERE_API_KEY"],
-        model_name="embed-english-v3.0",
-        input_type="search_query",
-    )
-
-    index = VectorStoreIndex.from_vector_store(
-        vector_store=vector_store,
-        transformations=[SentenceSplitter(chunk_size=800, chunk_overlap=0)],
-        show_progress=True,
-        # use_async=True,
-    )
-    vector_retriever = VectorIndexRetriever(
-        index=index,
-        similarity_top_k=15,
-        embed_model=embed_model,
-        # use_async=True,
-    )
-    with open(f"data/{db_collection}/{dict_file_name}", "rb") as f:
-        document_dict = pickle.load(f)
-
-    return CustomRetriever(vector_retriever, document_dict)
-
-
-custom_retriever_all_sources: CustomRetriever = setup_database(
-    "chroma-db-all_sources",
-    "document_dict_all_sources.pkl",
-)
-
-
-CONCURRENCY_COUNT = int(os.getenv("CONCURRENCY_COUNT", 64))
-MONGODB_URI = os.getenv("MONGODB_URI")
+VECTOR_DB_DIR = "data/chroma-db-all_sources"
+VECTOR_COLLECTION_NAME = "chroma-db-all_sources"
+DOCUMENT_DICT_PATH = f"{VECTOR_DB_DIR}/document_dict_all_sources.pkl"
 
 AVAILABLE_SOURCES_UI = [
     "Transformers Docs",
@@ -84,6 +26,7 @@ AVAILABLE_SOURCES_UI = [
     "8 Hour Primer",
     "Advanced LLM Developer",
     "Python Primer",
+    "Master AI For Work",
 ]
 
 AVAILABLE_SOURCES = [
@@ -97,7 +40,42 @@ AVAILABLE_SOURCES = [
     "8-hour_primer",
     "llm_developer",
     "python_primer",
+    "master_ai_for_work",
 ]
+
+SOURCE_UI_TO_KEY = {
+    "Transformers Docs": "transformers",
+    "PEFT Docs": "peft",
+    "TRL Docs": "trl",
+    "LlamaIndex Docs": "llama_index",
+    "LangChain Docs": "langchain",
+    "OpenAI Cookbooks": "openai_cookbooks",
+    "Towards AI Blog": "tai_blog",
+    "8 Hour Primer": "8-hour_primer",
+    "Advanced LLM Developer": "llm_developer",
+    "Python Primer": "python_primer",
+    "Master AI For Work": "master_ai_for_work",
+}
+
+CONCURRENCY_COUNT = int(os.getenv("CONCURRENCY_COUNT", 64))
+MONGODB_URI = os.getenv("MONGODB_URI")
+
+
+def ensure_local_vector_db() -> None:
+    if os.path.exists(VECTOR_DB_DIR) and os.path.exists(DOCUMENT_DICT_PATH):
+        return
+
+    logfire.warn(
+        "Vector database does not exist locally, downloading from Hugging Face"
+    )
+    from huggingface_hub import snapshot_download
+
+    snapshot_download(
+        repo_id="towardsai-tutors/ai-tutor-vector-db",
+        local_dir="data",
+        repo_type="dataset",
+    )
+
 
 mongo_db = (
     init_mongo_db(uri=MONGODB_URI, db_name="towardsai-buster")
@@ -106,9 +84,13 @@ mongo_db = (
 )
 
 __all__ = [
-    "custom_retriever_all_sources",
-    "mongo_db",
-    "CONCURRENCY_COUNT",
-    "AVAILABLE_SOURCES_UI",
     "AVAILABLE_SOURCES",
+    "AVAILABLE_SOURCES_UI",
+    "CONCURRENCY_COUNT",
+    "DOCUMENT_DICT_PATH",
+    "SOURCE_UI_TO_KEY",
+    "VECTOR_COLLECTION_NAME",
+    "VECTOR_DB_DIR",
+    "ensure_local_vector_db",
+    "mongo_db",
 ]
