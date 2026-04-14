@@ -32,6 +32,13 @@ class AppContext:
 
 
 SOURCES_HEADER = "📝 Here are the sources I used to answer your question:"
+THOUGHTS_BLOCK_START = "<!-- GEMINI_THOUGHTS_START -->"
+THOUGHTS_BLOCK_END = "<!-- GEMINI_THOUGHTS_END -->"
+THOUGHTS_HEADER = "**Thinking**"
+THOUGHTS_HINT = "_Reasoning summary from Gemini. This is not the final answer._"
+ANSWER_HEADER = "**Answer**"
+LEGACY_THOUGHTS_DETAILS_OPEN = "<details><summary>Gemini thoughts</summary>"
+LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED = "<details open><summary>Gemini thoughts</summary>"
 CHECKPOINTER = InMemorySaver()
 
 
@@ -55,18 +62,6 @@ def retrieve_tutor_context(query: str, runtime: ToolRuntime[AppContext]) -> str:
         allowed_sources=list(runtime.context.allowed_sources),
     )
     return format_tool_payload(query, results)
-
-
-@lru_cache(maxsize=4)
-def build_agent(model_name: str):
-    model = build_chat_model(model_name)
-    return create_agent(
-        model=model,
-        tools=[retrieve_tutor_context],
-        system_prompt=system_message_openai_agent,
-        context_schema=AppContext,
-        checkpointer=CHECKPOINTER,
-    )
 
 
 def message_content_to_text(content: Any) -> str:
@@ -97,6 +92,38 @@ def strip_sources_block(text: str) -> str:
     return text.strip()
 
 
+def strip_thoughts_block(text: str) -> str:
+    stripped = text
+
+    while True:
+        start = stripped.find(THOUGHTS_BLOCK_START)
+        if start == -1:
+            break
+        end = stripped.find(THOUGHTS_BLOCK_END, start)
+        if end == -1:
+            stripped = stripped[:start]
+            break
+        stripped = (
+            stripped[:start] + stripped[end + len(THOUGHTS_BLOCK_END) :]
+        )
+
+    for marker in (
+        LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED,
+        LEGACY_THOUGHTS_DETAILS_OPEN,
+    ):
+        separator = f"\n\n{marker}"
+        body, found, _ = stripped.partition(separator)
+        if found:
+            return body.strip()
+        if stripped.startswith(marker):
+            return ""
+    return stripped.strip()
+
+
+def strip_display_blocks(text: str) -> str:
+    return strip_thoughts_block(strip_sources_block(text))
+
+
 def normalize_history(
     history: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
@@ -107,7 +134,7 @@ def normalize_history(
             continue
         content = message_content_to_text(message.get("content"))
         if role == "assistant":
-            content = strip_sources_block(content)
+            content = strip_display_blocks(content)
         normalized.append({"role": role, "content": content})
     return normalized
 
@@ -127,7 +154,7 @@ def checkpoint_messages_to_history(
             history.append(
                 {
                     "role": "assistant",
-                    "content": strip_sources_block(
+                    "content": strip_display_blocks(
                         message_content_to_text(message.content)
                     ),
                 }
@@ -237,7 +264,73 @@ def normalize_model_name(model_name: str) -> str:
     return normalized
 
 
-def build_chat_model(model_name: str):
+def is_google_genai_model(model_name: str) -> bool:
+    provider_model = normalize_model_name(model_name)
+    provider, _, _actual_model = provider_model.partition(":")
+    return provider == "google-genai"
+
+
+def extract_thought_summaries(content: Any) -> list[str]:
+    if not isinstance(content, list):
+        return []
+
+    thoughts: list[str] = []
+    for item in content:
+        if not hasattr(item, "get"):
+            continue
+
+        item_type = item.get("type")
+        if item_type == "thinking":
+            thought = str(item.get("thinking", "")).strip()
+        elif item_type == "reasoning":
+            thought = str(item.get("reasoning", "")).strip()
+        else:
+            continue
+
+        if thought:
+            thoughts.append(thought)
+    return thoughts
+
+
+def as_blockquote(text: str) -> str:
+    lines = text.splitlines()
+    if not lines:
+        return ""
+    return "\n".join("> " + line if line else ">" for line in lines)
+
+
+def format_thoughts(content: Any) -> str:
+    thoughts = extract_thought_summaries(content)
+    if not thoughts:
+        return ""
+    quoted_thoughts = "\n\n".join(as_blockquote(thought) for thought in thoughts)
+    return (
+        f"{THOUGHTS_BLOCK_START}\n\n"
+        f"{THOUGHTS_HEADER}\n"
+        f"{THOUGHTS_HINT}\n\n"
+        f"{quoted_thoughts}\n\n"
+        f"{THOUGHTS_BLOCK_END}"
+    )
+
+
+def render_output(
+    answer: str, thoughts_block: str = "", sources_block: str = ""
+) -> str:
+    visible_answer = answer.strip()
+    visible_thoughts = thoughts_block.strip()
+    visible_sources = sources_block.strip()
+
+    output_parts = [visible_thoughts]
+    if visible_answer:
+        if visible_thoughts:
+            output_parts.append(f"{ANSWER_HEADER}\n\n{visible_answer}")
+        else:
+            output_parts.append(visible_answer)
+    output_parts.append(visible_sources)
+    return "\n\n".join(part for part in output_parts if part)
+
+
+def build_chat_model(model_name: str, include_thoughts: bool = False):
     provider_model = normalize_model_name(model_name)
     provider, _, actual_model = provider_model.partition(":")
 
@@ -260,25 +353,50 @@ def build_chat_model(model_name: str):
                 "Gemini support requires langchain-google-genai and google-genai in the environment. Run uv sync after updating dependencies."
             ) from exc
 
-        return ChatGoogleGenerativeAI(model=actual_model, temperature=1)
+        return ChatGoogleGenerativeAI(
+            model=actual_model,
+            temperature=1,
+            include_thoughts=include_thoughts,
+        )
 
     raise ValueError(
         "Unsupported model provider. Use openai, anthropic, or google-genai."
     )
 
 
-async def generate_completion(query: str, history, sources, model, thread_id):
+@lru_cache(maxsize=8)
+def build_agent(model_name: str, include_thoughts: bool = False):
+    model = build_chat_model(model_name, include_thoughts=include_thoughts)
+    return create_agent(
+        model=model,
+        tools=[retrieve_tutor_context],
+        system_prompt=system_message_openai_agent,
+        context_schema=AppContext,
+        checkpointer=CHECKPOINTER,
+    )
+
+
+async def generate_completion(
+    query: str,
+    history,
+    sources,
+    model,
+    show_gemini_thoughts,
+    thread_id,
+):
     source_keys = tuple(
         SOURCE_UI_TO_KEY[source] for source in sources if source in SOURCE_UI_TO_KEY
     )
     normalized_history = normalize_history(history)
     matches_by_doc_id: dict[str, dict[str, Any]] = {}
-    streamed_parts: list[str] = []
+    streamed_message: AIMessageChunk | None = None
     completed_answer = ""
+    completed_thoughts = ""
     last_emitted = ""
+    include_thoughts = bool(show_gemini_thoughts) and is_google_genai_model(model)
 
     logfire.info("Running query", query=query)
-    agent = build_agent(model)
+    agent = build_agent(model, include_thoughts=include_thoughts)
     active_thread_id = sync_thread_with_history(
         agent,
         thread_id.strip() or new_thread_id(),
@@ -293,13 +411,20 @@ async def generate_completion(query: str, history, sources, model, thread_id):
     ):
         if chunk["type"] == "messages":
             token, _metadata = chunk["data"]
-            if not isinstance(token, AIMessageChunk) or not token.text:
+            if not isinstance(token, AIMessageChunk):
                 continue
-            streamed_parts.append(token.text)
-            current_answer = "".join(streamed_parts)
-            if current_answer and current_answer != last_emitted:
-                last_emitted = current_answer
-                yield current_answer, active_thread_id
+            if not token.content and not token.text:
+                continue
+
+            streamed_message = (
+                token if streamed_message is None else streamed_message + token
+            )
+            current_answer = message_content_to_text(streamed_message.content)
+            current_thoughts = format_thoughts(streamed_message.content)
+            current_output = render_output(current_answer, current_thoughts)
+            if current_output and current_output != last_emitted:
+                last_emitted = current_output
+                yield current_output, active_thread_id
             continue
 
         if chunk["type"] != "updates":
@@ -322,10 +447,20 @@ async def generate_completion(query: str, history, sources, model, thread_id):
             if getattr(message, "tool_calls", None):
                 continue
             completed_answer = message_content_to_text(message.content)
+            completed_thoughts = format_thoughts(message.content)
 
-    answer = "".join(streamed_parts).strip() or completed_answer.strip()
+    answer = (
+        message_content_to_text(streamed_message.content).strip()
+        if streamed_message is not None
+        else ""
+    ) or completed_answer.strip()
+    thoughts_block = (
+        format_thoughts(streamed_message.content)
+        if streamed_message is not None
+        else ""
+    ) or completed_thoughts.strip()
     sources_block = format_sources(matches_by_doc_id)
-    final_output = f"{answer}\n\n{sources_block}" if sources_block else answer
+    final_output = render_output(answer, thoughts_block, sources_block)
     if final_output != last_emitted:
         yield final_output, active_thread_id
 
@@ -354,6 +489,11 @@ model = gr.Textbox(
     value="google-genai:gemini-flash-latest",
     interactive=False,
     placeholder="openai:gpt-5.4-mini | anthropic:claude-opus-4-6 | google-genai:gemini-3.1-pro-preview",
+)
+show_gemini_thoughts = gr.Checkbox(
+    label="Show Gemini thought summaries",
+    value=True,
+    info="Uses Gemini include_thoughts when the selected model supports it.",
 )
 thread_id = gr.Textbox(
     label="Thread ID",
@@ -408,7 +548,7 @@ with gr.Blocks(
     gr.ChatInterface(
         fn=generate_completion,
         chatbot=chatbot,
-        additional_inputs=[sources, model, thread_id],
+        additional_inputs=[sources, model, show_gemini_thoughts, thread_id],
         additional_outputs=[thread_id],
         additional_inputs_accordion=accordion,
         api_name="chat",
