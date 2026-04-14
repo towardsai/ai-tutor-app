@@ -40,6 +40,80 @@ The Gradio demo is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugg
 
    Starts the Gradio AI Tutor interface.
 
+### Gradio API
+
+The chat endpoint is exposed as `chat`, so the API flow is:
+
+```bash
+POST /gradio_api/call/chat
+GET /gradio_api/call/chat/{event_id}
+```
+
+The `POST` body must send `data` in this exact order:
+
+1. User message: string
+2. History: array
+3. Sources: array of source labels exactly as shown in the UI
+4. Model: `provider:model` string
+5. Show Gemini thoughts: boolean
+6. Thread ID: string, empty for a new conversation
+
+Example first turn:
+
+```bash
+curl -s http://127.0.0.1:7860/gradio_api/call/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "data": [
+      "What is LoRA?",
+      [],
+      ["PEFT Docs", "Transformers Docs"],
+      "openai:gpt-4o-mini",
+      false,
+      ""
+    ]
+  }'
+```
+
+That returns an `event_id`. Open the server-sent event stream with:
+
+```bash
+curl -N http://127.0.0.1:7860/gradio_api/call/chat/<event_id>
+```
+
+The streamed payloads look like this:
+
+```json
+["Partial assistant text", null, "thread-id"]
+```
+
+- `data[0]`: current streamed assistant text
+- `data[1]`: Gradio's hidden state placeholder, ignore this
+- `data[2]`: `thread_id` to reuse on the next turn
+
+Example follow-up turn on the same conversation:
+
+```bash
+curl -s http://127.0.0.1:7860/gradio_api/call/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "data": [
+      "How is it different from adapters?",
+      [],
+      ["PEFT Docs", "Transformers Docs"],
+      "openai:gpt-4o-mini",
+      false,
+      "thread-id-from-previous-response"
+    ]
+  }'
+```
+
+Notes:
+
+- API clients should usually send `[]` for history and continue the conversation with `thread_id`.
+- The source filter is request-scoped, so you can keep the same `thread_id` while changing sources between turns.
+- Sending an empty `thread_id` starts a new backend conversation.
+
 ### Rebuild Local Retrieval Index
 
 After updating the JSONL corpus, rebuild the local Chroma index with:
