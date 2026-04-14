@@ -6,6 +6,7 @@ import pickle
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import unquote, urlparse
 
 import chromadb
 import cohere
@@ -226,6 +227,34 @@ def get_full_doc_content(full_doc: Any) -> str:
     raise TypeError("Unsupported full document type in document dictionary.")
 
 
+def _is_missing_metadata_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    if isinstance(value, str):
+        normalized = value.strip()
+        return not normalized or normalized.lower() == "nan"
+    return False
+
+
+def _string_metadata_value(*candidates: Any, default: str = "") -> str:
+    for candidate in candidates:
+        if _is_missing_metadata_value(candidate):
+            continue
+        return str(candidate).strip()
+    return default
+
+
+def _title_from_url(url: str) -> str:
+    if not url:
+        return ""
+    slug = urlparse(url).path.rstrip("/").split("/")[-1]
+    if not slug:
+        return ""
+    return unquote(slug).replace("-", " ").replace("_", " ").strip()
+
+
 def _cohere_embeddings_list(response: Any) -> list[list[float]]:
     embeddings = getattr(response, "embeddings", None)
     if embeddings is None:
@@ -411,15 +440,46 @@ class LocalChromaRetriever:
             else:
                 content = chunk_text
 
+            full_doc_name = full_doc.get("name") if isinstance(full_doc, dict) else None
+            url = _string_metadata_value(
+                metadata.get("url"),
+                full_doc.get("url") if isinstance(full_doc, dict) else None,
+            )
+            title = _string_metadata_value(
+                metadata.get("title"),
+                full_doc_name,
+                _title_from_url(url),
+                doc_id,
+            )
+            source = _string_metadata_value(
+                metadata.get("source"),
+                full_doc.get("source") if isinstance(full_doc, dict) else None,
+                default="unknown",
+            )
+            retrieve_doc = bool(
+                metadata.get("retrieve_doc")
+                if "retrieve_doc" in metadata
+                else (
+                    full_doc.get("retrieve_doc") if isinstance(full_doc, dict) else False
+                )
+            )
+            tokens_value = metadata.get("tokens")
+            if _is_missing_metadata_value(tokens_value) and isinstance(full_doc, dict):
+                tokens_value = full_doc.get("tokens")
+            try:
+                tokens = int(tokens_value)
+            except (TypeError, ValueError):
+                tokens = 0
+
             dense_hits.append(
                 SearchResult(
                     chunk_id=str(chunk_id),
                     doc_id=doc_id,
-                    title=str(metadata["title"]),
-                    url=str(metadata["url"]),
-                    source=str(metadata["source"]),
-                    retrieve_doc=bool(metadata["retrieve_doc"]),
-                    tokens=int(metadata["tokens"]),
+                    title=title,
+                    url=url,
+                    source=source,
+                    retrieve_doc=retrieve_doc,
+                    tokens=tokens,
                     score=_distance_to_score(distance),
                     content=content,
                     chunk_content=str(chunk_text),
