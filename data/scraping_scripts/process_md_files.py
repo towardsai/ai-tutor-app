@@ -193,7 +193,18 @@ SOURCE_CONFIGS = {
         "included_root_files": [],
         "url_extension": "",
     },
-
+    "agentic_ai_engineering": {
+        "base_url": "",
+        "input_directory": "data/agentic_ai_engineering",  # Path to the directory that contains the Markdown files
+        "output_file": "data/agentic_ai_engineering_data.jsonl",  # Agentic AI Engineering
+        "source_name": "agentic_ai_engineering",
+        "use_include_list": False,
+        "included_dirs": [],
+        "excluded_dirs": [],
+        "excluded_root_files": [],
+        "included_root_files": [],
+        "url_extension": "",
+    },
 }
 
 
@@ -312,7 +323,7 @@ def save_jsonl(data: List[Dict], output_file: str) -> None:
 def combine_all_sources(sources: List[str]) -> None:
     """
     Combine JSONL files from multiple sources, preserving existing sources not being processed.
-    
+
     For example, if sources = ['transformers'], this will:
     1. Load data from transformers_data.jsonl
     2. Load data from all other source JSONL files that exist (course files, etc.)
@@ -320,37 +331,37 @@ def combine_all_sources(sources: List[str]) -> None:
     """
     all_data = []
     output_file = "data/all_sources_data.jsonl"
-    
+
     # Track which sources we're processing
     processed_sources = set()
-    
+
     # First, add data from sources we're explicitly processing
     for source in sources:
         if source not in SOURCE_CONFIGS:
             logger.error(f"Unknown source '{source}'. Skipping.")
             continue
-            
+
         processed_sources.add(source)
         input_file = SOURCE_CONFIGS[source]["output_file"]
         logger.info(f"Processing updated source: {source} from {input_file}")
-        
+
         try:
             source_data = []
             with open(input_file, "r", encoding="utf-8") as f:
                 for line in f:
                     source_data.append(json.loads(line))
-            
+
             logger.info(f"Added {len(source_data)} documents from {source}")
             all_data.extend(source_data)
         except Exception as e:
             logger.error(f"Error loading {input_file}: {e}")
-    
+
     # Now add data from all other sources not being processed
     for source_name, config in SOURCE_CONFIGS.items():
         # Skip sources we already processed
         if source_name in processed_sources:
             continue
-            
+
         # Try to load the individual source file
         source_file = config["output_file"]
         if os.path.exists(source_file):
@@ -360,12 +371,14 @@ def combine_all_sources(sources: List[str]) -> None:
                 with open(source_file, "r", encoding="utf-8") as f:
                     for line in f:
                         source_data.append(json.loads(line))
-                
-                logger.info(f"Preserved {len(source_data)} documents from {source_name}")
+
+                logger.info(
+                    f"Preserved {len(source_data)} documents from {source_name}"
+                )
                 all_data.extend(source_data)
             except Exception as e:
                 logger.error(f"Error loading {source_file}: {e}")
-    
+
     logger.info(f"Total documents combined: {len(all_data)}")
     save_jsonl(all_data, output_file)
     logger.info(f"Combined data saved to {output_file}")

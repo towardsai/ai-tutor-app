@@ -50,7 +50,9 @@ TOOL_HEADER = "**Tool**"
 TOOL_PENDING_HINT = "_Searching the selected sources..._"
 ANSWER_HEADER = "**Answer**"
 LEGACY_THOUGHTS_DETAILS_OPEN = "<details><summary>Gemini thoughts</summary>"
-LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED = "<details open><summary>Gemini thoughts</summary>"
+LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED = (
+    "<details open><summary>Gemini thoughts</summary>"
+)
 CHECKPOINTER = InMemorySaver()
 SOURCE_KEY_TO_LABEL = {value: key for key, value in SOURCE_UI_TO_KEY.items()}
 
@@ -444,11 +446,7 @@ def render_activity_block(events: list[ActivityEvent]) -> str:
         return ""
 
     rendered_sections = "\n\n".join(section for section in sections if section)
-    return (
-        f"{ACTIVITY_BLOCK_START}\n\n"
-        f"{rendered_sections}\n\n"
-        f"{ACTIVITY_BLOCK_END}"
-    )
+    return f"{ACTIVITY_BLOCK_START}\n\n{rendered_sections}\n\n{ACTIVITY_BLOCK_END}"
 
 
 def render_output(
@@ -610,7 +608,9 @@ async def generate_completion(
                     payload,
                 )
                 if show_activity:
-                    tool_call_id = str(getattr(message, "tool_call_id", "") or uuid4().hex)
+                    tool_call_id = str(
+                        getattr(message, "tool_call_id", "") or uuid4().hex
+                    )
                     tool_call = tool_calls_by_id.get(
                         tool_call_id,
                         {"name": getattr(message, "name", "tool"), "args": None},
@@ -620,7 +620,9 @@ async def generate_completion(
                         key=f"tool:{tool_call_id}",
                         kind="tool",
                         body=format_tool_event(
-                            str(tool_call.get("name", getattr(message, "name", "tool"))),
+                            str(
+                                tool_call.get("name", getattr(message, "name", "tool"))
+                            ),
                             tool_call.get("args"),
                             summarize_tool_result(
                                 str(getattr(message, "name", "tool")),
@@ -657,6 +659,7 @@ sources = gr.CheckboxGroup(
     AVAILABLE_SOURCES_UI,
     label="Sources",
     value=[
+        "Agentic AI Engineering",
         "Master AI For Work",
         "Advanced LLM Developer",
         "8 Hour Primer",

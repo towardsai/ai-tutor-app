@@ -27,6 +27,7 @@ AVAILABLE_SOURCES_UI = [
     "Advanced LLM Developer",
     "Python Primer",
     "Master AI For Work",
+    "Agentic AI Engineering",
 ]
 
 AVAILABLE_SOURCES = [
@@ -41,6 +42,7 @@ AVAILABLE_SOURCES = [
     "llm_developer",
     "python_primer",
     "master_ai_for_work",
+    "agentic_ai_engineering",
 ]
 
 SOURCE_UI_TO_KEY = {
@@ -55,6 +57,7 @@ SOURCE_UI_TO_KEY = {
     "Advanced LLM Developer": "llm_developer",
     "Python Primer": "python_primer",
     "Master AI For Work": "master_ai_for_work",
+    "Agentic AI Engineering": "agentic_ai_engineering",
 }
 
 CONCURRENCY_COUNT = int(os.getenv("CONCURRENCY_COUNT", 64))
