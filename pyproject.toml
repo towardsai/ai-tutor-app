@@ -8,6 +8,7 @@ dependencies = [
     "anthropic",
     "chromadb",
     "cohere",
+    "fastapi",
     "google-genai",
     "gradio",
     "hf-xet",
@@ -28,9 +29,11 @@ dependencies = [
     "python-dotenv",
     "requests",
     "tiktoken",
+    "uvicorn",
 ]
 
 [dependency-groups]
 dev = [
+    "httpx",
     "ruff>=0.15.10",
 ]

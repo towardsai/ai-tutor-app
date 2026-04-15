@@ -14,6 +14,7 @@ except Exception:
 VECTOR_DB_DIR = "data/chroma-db-all_sources"
 VECTOR_COLLECTION_NAME = "chroma-db-all_sources"
 DOCUMENT_DICT_PATH = f"{VECTOR_DB_DIR}/document_dict_all_sources.pkl"
+DEFAULT_MODEL_NAME = "google-genai:gemini-flash-latest"
 
 AVAILABLE_SOURCES_UI = [
     "Transformers Docs",
@@ -28,6 +29,21 @@ AVAILABLE_SOURCES_UI = [
     "Python Primer",
     "Master AI For Work",
     "Agentic AI Engineering",
+]
+
+DEFAULT_SELECTED_SOURCES_UI = [
+    "Agentic AI Engineering",
+    "Master AI For Work",
+    "Advanced LLM Developer",
+    "8 Hour Primer",
+    "Python Primer",
+    "Towards AI Blog",
+    "Transformers Docs",
+    "PEFT Docs",
+    "TRL Docs",
+    "LlamaIndex Docs",
+    "LangChain Docs",
+    "OpenAI Cookbooks",
 ]
 
 AVAILABLE_SOURCES = [
@@ -60,6 +76,11 @@ SOURCE_UI_TO_KEY = {
     "Agentic AI Engineering": "agentic_ai_engineering",
 }
 
+SOURCE_KEY_TO_LABEL = {value: key for key, value in SOURCE_UI_TO_KEY.items()}
+DEFAULT_SELECTED_SOURCE_KEYS = tuple(
+    SOURCE_UI_TO_KEY[label] for label in DEFAULT_SELECTED_SOURCES_UI
+)
+
 CONCURRENCY_COUNT = int(os.getenv("CONCURRENCY_COUNT", 64))
 MONGODB_URI = os.getenv("MONGODB_URI")
 
@@ -89,8 +110,12 @@ mongo_db = (
 __all__ = [
     "AVAILABLE_SOURCES",
     "AVAILABLE_SOURCES_UI",
+    "DEFAULT_SELECTED_SOURCE_KEYS",
+    "DEFAULT_SELECTED_SOURCES_UI",
     "CONCURRENCY_COUNT",
+    "DEFAULT_MODEL_NAME",
     "DOCUMENT_DICT_PATH",
+    "SOURCE_KEY_TO_LABEL",
     "SOURCE_UI_TO_KEY",
     "VECTOR_COLLECTION_NAME",
     "VECTOR_DB_DIR",

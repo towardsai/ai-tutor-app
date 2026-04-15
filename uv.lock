@@ -18,6 +18,7 @@ dependencies = [
     { name = "anthropic" },
     { name = "chromadb" },
     { name = "cohere" },
+    { name = "fastapi" },
     { name = "google-genai" },
     { name = "gradio" },
     { name = "hf-xet" },
@@ -38,10 +39,12 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "tiktoken" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "ruff" },
 ]
 
@@ -50,6 +53,7 @@ requires-dist = [
     { name = "anthropic" },
     { name = "chromadb" },
     { name = "cohere" },
+    { name = "fastapi" },
     { name = "google-genai" },
     { name = "gradio" },
     { name = "hf-xet" },
@@ -70,10 +74,14 @@ requires-dist = [
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "tiktoken" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.15.10" }]
+dev = [
+    { name = "httpx" },
+    { name = "ruff", specifier = ">=0.15.10" },
+]
 
 [[package]]
 name = "aiohappyeyeballs"
