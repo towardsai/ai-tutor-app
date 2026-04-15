@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -31,15 +32,27 @@ class AppContext:
     allowed_sources: tuple[str, ...]
 
 
+@dataclass
+class ActivityEvent:
+    key: str
+    kind: str
+    body: str
+
+
 SOURCES_HEADER = "📝 Here are the sources I used to answer your question:"
+ACTIVITY_BLOCK_START = "<!-- MODEL_ACTIVITY_START -->"
+ACTIVITY_BLOCK_END = "<!-- MODEL_ACTIVITY_END -->"
 THOUGHTS_BLOCK_START = "<!-- GEMINI_THOUGHTS_START -->"
 THOUGHTS_BLOCK_END = "<!-- GEMINI_THOUGHTS_END -->"
 THOUGHTS_HEADER = "**Thinking**"
 THOUGHTS_HINT = "_Reasoning summary from Gemini. This is not the final answer._"
+TOOL_HEADER = "**Tool**"
+TOOL_PENDING_HINT = "_Searching the selected sources..._"
 ANSWER_HEADER = "**Answer**"
 LEGACY_THOUGHTS_DETAILS_OPEN = "<details><summary>Gemini thoughts</summary>"
 LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED = "<details open><summary>Gemini thoughts</summary>"
 CHECKPOINTER = InMemorySaver()
+SOURCE_KEY_TO_LABEL = {value: key for key, value in SOURCE_UI_TO_KEY.items()}
 
 
 @lru_cache(maxsize=1)
@@ -92,20 +105,21 @@ def strip_sources_block(text: str) -> str:
     return text.strip()
 
 
-def strip_thoughts_block(text: str) -> str:
+def strip_hidden_block(text: str, start_marker: str, end_marker: str) -> str:
     stripped = text
-
     while True:
-        start = stripped.find(THOUGHTS_BLOCK_START)
+        start = stripped.find(start_marker)
         if start == -1:
-            break
-        end = stripped.find(THOUGHTS_BLOCK_END, start)
+            return stripped
+        end = stripped.find(end_marker, start)
         if end == -1:
-            stripped = stripped[:start]
-            break
-        stripped = (
-            stripped[:start] + stripped[end + len(THOUGHTS_BLOCK_END) :]
-        )
+            return stripped[:start]
+        stripped = stripped[:start] + stripped[end + len(end_marker) :]
+
+
+def strip_activity_block(text: str) -> str:
+    stripped = strip_hidden_block(text, ACTIVITY_BLOCK_START, ACTIVITY_BLOCK_END)
+    stripped = strip_hidden_block(stripped, THOUGHTS_BLOCK_START, THOUGHTS_BLOCK_END)
 
     for marker in (
         LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED,
@@ -120,8 +134,18 @@ def strip_thoughts_block(text: str) -> str:
     return stripped.strip()
 
 
+def strip_answer_header(text: str) -> str:
+    stripped = text.strip()
+    answer_prefix = f"{ANSWER_HEADER}\n\n"
+    if stripped.startswith(answer_prefix):
+        return stripped[len(answer_prefix) :].strip()
+    if stripped == ANSWER_HEADER:
+        return ""
+    return stripped
+
+
 def strip_display_blocks(text: str) -> str:
-    return strip_thoughts_block(strip_sources_block(text))
+    return strip_answer_header(strip_activity_block(strip_sources_block(text)))
 
 
 def normalize_history(
@@ -299,30 +323,144 @@ def as_blockquote(text: str) -> str:
     return "\n".join("> " + line if line else ">" for line in lines)
 
 
-def format_thoughts(content: Any) -> str:
-    thoughts = extract_thought_summaries(content)
-    if not thoughts:
+def merge_stream_text(existing: str, incoming: str) -> str:
+    current = existing.strip()
+    update = incoming.strip()
+    if not update:
+        return current
+    if not current:
+        return update
+    if update == current or update in current:
+        return current
+    if current in update:
+        return update
+    return f"{current}\n\n{update}"
+
+
+def upsert_activity_event(
+    events: list[ActivityEvent],
+    *,
+    key: str,
+    kind: str,
+    body: str,
+    replace: bool = False,
+) -> None:
+    if not body.strip():
+        return
+
+    for index, event in enumerate(events):
+        if event.key != key:
+            continue
+        events[index] = ActivityEvent(
+            key=key,
+            kind=kind,
+            body=body.strip() if replace else merge_stream_text(event.body, body),
+        )
+        return
+
+    events.append(ActivityEvent(key=key, kind=kind, body=body.strip()))
+
+
+def format_tool_args(args: Any) -> str:
+    if isinstance(args, dict):
+        query = str(args.get("query", "")).strip()
+        if query:
+            trimmed_query = query[:157] + "..." if len(query) > 160 else query
+            return f'Query: "{trimmed_query}"'
+        if args:
+            serialized = json.dumps(args, ensure_ascii=False, sort_keys=True)
+            trimmed = serialized[:197] + "..." if len(serialized) > 200 else serialized
+            return f"Args: `{trimmed}`"
         return ""
-    quoted_thoughts = "\n\n".join(as_blockquote(thought) for thought in thoughts)
+    if args is None:
+        return ""
+    serialized = str(args).strip()
+    if not serialized:
+        return ""
+    trimmed = serialized[:197] + "..." if len(serialized) > 200 else serialized
+    return f"Args: `{trimmed}`"
+
+
+def summarize_activity_sources(sources: list[str], *, max_items: int = 3) -> str:
+    if not sources:
+        return ""
+    if len(sources) <= max_items:
+        return ", ".join(sources)
+    remaining = len(sources) - max_items
+    return f"{', '.join(sources[:max_items])}, and {remaining} more"
+
+
+def summarize_tool_result(tool_name: str, payload: str) -> str:
+    if tool_name != "retrieve_tutor_context":
+        return "_Tool completed._"
+
+    matches = parse_tool_payload(payload)
+    if not matches:
+        return "_No matching sources found in the selected sources._"
+
+    ordered_sources: list[str] = []
+    seen_sources: set[str] = set()
+    for match in matches:
+        source_label = SOURCE_KEY_TO_LABEL.get(match.source, match.source)
+        if source_label in seen_sources:
+            continue
+        seen_sources.add(source_label)
+        ordered_sources.append(source_label)
+
+    source_summary = summarize_activity_sources(ordered_sources)
+    match_count = len(matches)
+    match_label = "match" if match_count == 1 else "matches"
+    return f"_Found {match_count} {match_label} from {source_summary}._"
+
+
+def format_tool_event(tool_name: str, args: Any, status_line: str) -> str:
+    lines = [f"Using `{tool_name}`"]
+    args_line = format_tool_args(args)
+    if args_line:
+        lines.append(args_line)
+    lines.append(status_line)
+    return "\n".join(lines)
+
+
+def render_activity_block(events: list[ActivityEvent]) -> str:
+    sections: list[str] = []
+    for event in events:
+        if event.kind == "thinking":
+            sections.append(
+                "\n".join(
+                    [
+                        THOUGHTS_HEADER,
+                        THOUGHTS_HINT,
+                        "",
+                        as_blockquote(event.body),
+                    ]
+                ).strip()
+            )
+            continue
+        if event.kind == "tool":
+            sections.append(f"{TOOL_HEADER}\n{event.body}".strip())
+
+    if not sections:
+        return ""
+
+    rendered_sections = "\n\n".join(section for section in sections if section)
     return (
-        f"{THOUGHTS_BLOCK_START}\n\n"
-        f"{THOUGHTS_HEADER}\n"
-        f"{THOUGHTS_HINT}\n\n"
-        f"{quoted_thoughts}\n\n"
-        f"{THOUGHTS_BLOCK_END}"
+        f"{ACTIVITY_BLOCK_START}\n\n"
+        f"{rendered_sections}\n\n"
+        f"{ACTIVITY_BLOCK_END}"
     )
 
 
 def render_output(
-    answer: str, thoughts_block: str = "", sources_block: str = ""
+    answer: str, activity_block: str = "", sources_block: str = ""
 ) -> str:
     visible_answer = answer.strip()
-    visible_thoughts = thoughts_block.strip()
+    visible_activity = activity_block.strip()
     visible_sources = sources_block.strip()
 
-    output_parts = [visible_thoughts]
+    output_parts = [visible_activity]
     if visible_answer:
-        if visible_thoughts:
+        if visible_activity:
             output_parts.append(f"{ANSWER_HEADER}\n\n{visible_answer}")
         else:
             output_parts.append(visible_answer)
@@ -389,11 +527,13 @@ async def generate_completion(
     )
     normalized_history = normalize_history(history)
     matches_by_doc_id: dict[str, dict[str, Any]] = {}
-    streamed_message: AIMessageChunk | None = None
+    activity_events: list[ActivityEvent] = []
+    tool_calls_by_id: dict[str, dict[str, Any]] = {}
+    answer_chunks: list[str] = []
     completed_answer = ""
-    completed_thoughts = ""
     last_emitted = ""
     include_thoughts = bool(show_gemini_thoughts) and is_google_genai_model(model)
+    show_activity = include_thoughts
 
     logfire.info("Running query", query=query)
     agent = build_agent(model, include_thoughts=include_thoughts)
@@ -410,18 +550,46 @@ async def generate_completion(
         version="v2",
     ):
         if chunk["type"] == "messages":
-            token, _metadata = chunk["data"]
+            token, metadata = chunk["data"]
             if not isinstance(token, AIMessageChunk):
                 continue
-            if not token.content and not token.text:
-                continue
 
-            streamed_message = (
-                token if streamed_message is None else streamed_message + token
+            step = str(metadata.get("langgraph_step", ""))
+            if show_activity:
+                thought_text = "\n\n".join(extract_thought_summaries(token.content))
+                if thought_text:
+                    upsert_activity_event(
+                        activity_events,
+                        key=f"thinking:{step}",
+                        kind="thinking",
+                        body=thought_text,
+                    )
+
+                for tool_call in getattr(token, "tool_calls", []) or []:
+                    tool_call_id = str(tool_call.get("id") or uuid4().hex)
+                    tool_calls_by_id[tool_call_id] = tool_call
+                    upsert_activity_event(
+                        activity_events,
+                        key=f"tool:{tool_call_id}",
+                        kind="tool",
+                        body=format_tool_event(
+                            str(tool_call.get("name", "tool")),
+                            tool_call.get("args"),
+                            TOOL_PENDING_HINT,
+                        ),
+                        replace=True,
+                    )
+
+            text_delta = token.text or ""
+            if not text_delta and token.content:
+                text_delta = message_content_to_text(token.content)
+            if text_delta:
+                answer_chunks.append(text_delta)
+
+            current_output = render_output(
+                "".join(answer_chunks),
+                render_activity_block(activity_events) if show_activity else "",
             )
-            current_answer = message_content_to_text(streamed_message.content)
-            current_thoughts = format_thoughts(streamed_message.content)
-            current_output = render_output(current_answer, current_thoughts)
             if current_output and current_output != last_emitted:
                 last_emitted = current_output
                 yield current_output, active_thread_id
@@ -436,10 +604,38 @@ async def generate_completion(
                 getattr(message, "type", None) == "tool"
                 and getattr(message, "name", "") == "retrieve_tutor_context"
             ):
+                payload = message_content_to_text(message.content)
                 update_source_matches(
                     matches_by_doc_id,
-                    message_content_to_text(message.content),
+                    payload,
                 )
+                if show_activity:
+                    tool_call_id = str(getattr(message, "tool_call_id", "") or uuid4().hex)
+                    tool_call = tool_calls_by_id.get(
+                        tool_call_id,
+                        {"name": getattr(message, "name", "tool"), "args": None},
+                    )
+                    upsert_activity_event(
+                        activity_events,
+                        key=f"tool:{tool_call_id}",
+                        kind="tool",
+                        body=format_tool_event(
+                            str(tool_call.get("name", getattr(message, "name", "tool"))),
+                            tool_call.get("args"),
+                            summarize_tool_result(
+                                str(getattr(message, "name", "tool")),
+                                payload,
+                            ),
+                        ),
+                        replace=True,
+                    )
+                    current_output = render_output(
+                        "".join(answer_chunks),
+                        render_activity_block(activity_events),
+                    )
+                    if current_output and current_output != last_emitted:
+                        last_emitted = current_output
+                        yield current_output, active_thread_id
                 continue
 
             if step != "model" or getattr(message, "type", None) != "ai":
@@ -447,20 +643,11 @@ async def generate_completion(
             if getattr(message, "tool_calls", None):
                 continue
             completed_answer = message_content_to_text(message.content)
-            completed_thoughts = format_thoughts(message.content)
 
-    answer = (
-        message_content_to_text(streamed_message.content).strip()
-        if streamed_message is not None
-        else ""
-    ) or completed_answer.strip()
-    thoughts_block = (
-        format_thoughts(streamed_message.content)
-        if streamed_message is not None
-        else ""
-    ) or completed_thoughts.strip()
+    answer = "".join(answer_chunks).strip() or completed_answer.strip()
+    activity_block = render_activity_block(activity_events) if show_activity else ""
     sources_block = format_sources(matches_by_doc_id)
-    final_output = render_output(answer, thoughts_block, sources_block)
+    final_output = render_output(answer, activity_block, sources_block)
     if final_output != last_emitted:
         yield final_output, active_thread_id
 
@@ -491,9 +678,9 @@ model = gr.Textbox(
     placeholder="openai:gpt-5.4-mini | anthropic:claude-opus-4-6 | google-genai:gemini-3.1-pro-preview",
 )
 show_gemini_thoughts = gr.Checkbox(
-    label="Show Gemini thought summaries",
+    label="Show Gemini thinking and tool timeline",
     value=True,
-    info="Uses Gemini include_thoughts when the selected model supports it.",
+    info="Uses Gemini include_thoughts and shows tool activity when supported.",
 )
 thread_id = gr.Textbox(
     label="Thread ID",
