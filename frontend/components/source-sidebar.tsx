@@ -7,13 +7,21 @@ import {
   ExternalLink,
   Globe,
   GraduationCap,
+  Info,
   Library,
   Link as LinkIcon,
   SquarePen,
   Wrench,
 } from "lucide-react";
-import { useState, type ComponentType, type SVGProps } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type SVGProps,
+} from "react";
 import type { TutorSource, TutorTool } from "@/lib/api";
+import { COURSE_METADATA } from "@/lib/course-metadata";
 
 type SourceSidebarProps = {
   onNewChat: () => void;
@@ -211,6 +219,30 @@ function SourceGroup({
   selectedSourceKeys: string[];
   onToggleSource: (sourceKey: string) => void;
 }) {
+  const [openPopoverKey, setOpenPopoverKey] = useState<string | null>(null);
+  const groupRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (openPopoverKey === null) return;
+    function onDocMouseDown(event: MouseEvent) {
+      if (
+        groupRef.current &&
+        !groupRef.current.contains(event.target as Node)
+      ) {
+        setOpenPopoverKey(null);
+      }
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpenPopoverKey(null);
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [openPopoverKey]);
+
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-1.5 px-1">
@@ -220,43 +252,113 @@ function SourceGroup({
         </h2>
       </div>
 
-      <div className="space-y-1">
-        {sources.map((source) => {
-          const selected = selectedSourceKeys.includes(source.key);
-          const isCourse = source.group === "courses";
-          return (
-            <button
-              key={source.key}
-              type="button"
-              onClick={() => onToggleSource(source.key)}
-              className={clsx(
-                "flex w-full items-center gap-2 rounded-[0.75rem] border px-2 py-1.5 text-left transition",
-                selected
-                  ? isCourse
-                    ? "border-[var(--accent)] bg-[var(--accent)] text-white shadow-[0_4px_12px_rgba(11,136,238,0.18)]"
-                    : "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--ink)]"
-                  : "border-[var(--line)] bg-[var(--surface-soft)] text-[var(--ink)] hover:border-[var(--line-strong)] hover:bg-[var(--surface-hover)]",
-              )}
-            >
-              <span
-                className={clsx(
-                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[9px] font-bold",
-                  selected
-                    ? isCourse
-                      ? "border-white/70 bg-white text-[var(--accent)]"
-                      : "border-[var(--accent)] bg-[var(--accent)] text-white"
-                    : "border-[var(--line-strong)] text-transparent",
-                )}
-              >
-                ✓
-              </span>
-              <span className="min-w-0 truncate text-[12.5px] font-medium tracking-[-0.01em]">
-                {formatSourceLabel(source.label)}
-              </span>
-            </button>
-          );
-        })}
+      <div ref={groupRef} className="space-y-1">
+        {sources.map((source) => (
+          <SourceRow
+            key={source.key}
+            source={source}
+            selected={selectedSourceKeys.includes(source.key)}
+            onToggle={onToggleSource}
+            popoverOpen={openPopoverKey === source.key}
+            onPopoverToggle={() =>
+              setOpenPopoverKey((current) =>
+                current === source.key ? null : source.key,
+              )
+            }
+          />
+        ))}
       </div>
+    </div>
+  );
+}
+
+function SourceRow({
+  source,
+  selected,
+  onToggle,
+  popoverOpen,
+  onPopoverToggle,
+}: {
+  source: TutorSource;
+  selected: boolean;
+  onToggle: (sourceKey: string) => void;
+  popoverOpen: boolean;
+  onPopoverToggle: () => void;
+}) {
+  const isCourse = source.group === "courses";
+  const metadata = isCourse ? COURSE_METADATA[source.key] : undefined;
+
+  return (
+    <div className="relative">
+      <div
+        className={clsx(
+          "flex items-center gap-1 rounded-[0.75rem] border py-1.5 pl-2 pr-1 transition",
+          selected
+            ? isCourse
+              ? "border-[var(--accent)] bg-[var(--accent)] text-white shadow-[0_4px_12px_rgba(11,136,238,0.18)]"
+              : "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--ink)]"
+            : "border-[var(--line)] bg-[var(--surface-soft)] text-[var(--ink)] hover:border-[var(--line-strong)] hover:bg-[var(--surface-hover)]",
+        )}
+      >
+        <button
+          type="button"
+          onClick={() => onToggle(source.key)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <span
+            className={clsx(
+              "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[9px] font-bold",
+              selected
+                ? isCourse
+                  ? "border-white/70 bg-white text-[var(--accent)]"
+                  : "border-[var(--accent)] bg-[var(--accent)] text-white"
+                : "border-[var(--line-strong)] text-transparent",
+            )}
+          >
+            ✓
+          </span>
+          <span className="min-w-0 truncate text-[12.5px] font-medium tracking-[-0.01em]">
+            {formatSourceLabel(source.label)}
+          </span>
+        </button>
+        {metadata ? (
+          <button
+            type="button"
+            onClick={onPopoverToggle}
+            aria-label={`About ${source.label}`}
+            aria-expanded={popoverOpen}
+            className={clsx(
+              "flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition",
+              selected
+                ? "text-white/80 hover:bg-white/15 hover:text-white"
+                : "text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]",
+            )}
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+        ) : (
+          <span className="h-5 w-5 shrink-0" aria-hidden />
+        )}
+      </div>
+      {metadata && popoverOpen ? (
+        <div
+          role="dialog"
+          className="absolute left-0 right-0 top-full z-20 mt-1 rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
+        >
+          <p className="text-[12px] leading-[1.45] text-[var(--ink)]">
+            {metadata.description}
+          </p>
+          <a
+            href={metadata.academyUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-semibold text-[var(--accent)] hover:underline"
+          >
+            View on Academy
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        </div>
+      ) : null}
     </div>
   );
 }

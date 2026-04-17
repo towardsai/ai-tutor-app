@@ -237,8 +237,8 @@ export function ChatShell() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 176)}px`;
   }, [input]);
 
-  async function handleSubmit() {
-    const trimmed = input.trim();
+  async function handleSubmit(override?: string) {
+    const trimmed = (override ?? input).trim();
     if (!trimmed || isStreaming) {
       return;
     }
@@ -380,8 +380,7 @@ export function ChatShell() {
               <div className={clsx(chatColumnClass, "flex min-h-full")}>
                 <EmptyConversation
                   onSelect={(prompt) => {
-                    setInput(prompt);
-                    composerInputRef.current?.focus();
+                    void handleSubmit(prompt);
                   }}
                 />
               </div>
@@ -674,11 +673,24 @@ function ComposerActionButton({
   );
 }
 
-const SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
+type Suggestion = { title: string; prompt: string };
+
+const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
+  // Core technical — covered by courses and/or open-source docs
   {
     title: "RAG vs fine-tuning",
     prompt:
       "When should I use retrieval-augmented generation instead of fine-tuning a model?",
+  },
+  {
+    title: "Evaluate a RAG pipeline",
+    prompt:
+      "What are practical ways to evaluate the quality of a RAG pipeline?",
+  },
+  {
+    title: "LangGraph tool-calling",
+    prompt:
+      "How do I build a tool-calling agent with LangGraph, step by step?",
   },
   {
     title: "LoRA with PEFT",
@@ -686,22 +698,127 @@ const SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
       "Walk me through fine-tuning a model with LoRA using the PEFT library.",
   },
   {
-    title: "Build a LangGraph agent",
+    title: "DPO with TRL",
     prompt:
-      "How do I build a tool-calling agent with LangGraph, step by step?",
+      "How do I run Direct Preference Optimization (DPO) on a model using TRL?",
   },
   {
-    title: "Evaluate a RAG pipeline",
+    title: "Run a model locally",
     prompt:
-      "What are practical ways to evaluate the quality of a RAG pipeline?",
+      "Show me how to load and run a Hugging Face transformer model locally.",
+  },
+  {
+    title: "Query your own docs",
+    prompt:
+      "How do I build a query engine over my own documents with LlamaIndex?",
+  },
+  {
+    title: "Structured JSON output",
+    prompt:
+      "What's the most reliable way to get structured JSON output from the OpenAI API?",
+  },
+
+  // Trending topics
+  {
+    title: "What is Claude Code?",
+    prompt:
+      "What is Claude Code and how does it compare to Cursor or Codex for daily coding work?",
+  },
+  {
+    title: "Long-term agent memory",
+    prompt:
+      "How do I give an AI agent long-term memory that persists across sessions?",
+  },
+  {
+    title: "Agent harnesses today",
+    prompt:
+      "What are the main AI agent harnesses in use today and how do they differ in practice?",
+  },
+  {
+    title: "Build an MCP server",
+    prompt:
+      "How do I build a Model Context Protocol (MCP) server to expose an internal tool to an agent?",
+  },
+  {
+    title: "Designing LLM evals",
+    prompt:
+      "How should I design evals for my LLM app before shipping it to real users?",
+  },
+  {
+    title: "Context engineering",
+    prompt:
+      "What is context engineering, and how is it different from prompt engineering?",
+  },
+
+  // Beginner / getting started
+  {
+    title: "LLM crash course",
+    prompt:
+      "I'm new to LLMs — what are the core concepts I need to understand before I start building anything?",
+  },
+  {
+    title: "Python for AI",
+    prompt:
+      "I'm new to Python — what's the minimum I need to know to start building AI apps?",
+  },
+  {
+    title: "First OpenAI API call",
+    prompt:
+      "Walk me through making my first call to the OpenAI API in Python.",
+  },
+
+  // Non-technical (Master AI for Work)
+  {
+    title: "AI for daily work",
+    prompt:
+      "What's a realistic way to use ChatGPT to speed up my weekly reports and emails?",
+  },
+  {
+    title: "Prompt like a pro",
+    prompt:
+      "What separates a good prompt from a great one for everyday work tasks?",
+  },
+  {
+    title: "Roll out AI at work",
+    prompt:
+      "How can a team start using AI tools together without creating chaos?",
+  },
+  {
+    title: "ChatGPT vs Claude vs Gemini",
+    prompt:
+      "I'm not technical — how do I pick between ChatGPT, Claude, and Gemini for my work?",
+  },
+  {
+    title: "Spot AI use cases",
+    prompt:
+      "How do I identify which parts of my job AI can realistically help with?",
   },
 ];
+
+const INITIAL_SUGGESTION_COUNT = 4;
+
+function pickRandomSuggestions(count: number): Suggestion[] {
+  const shuffled = [...SUGGESTION_POOL];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled.slice(0, count);
+}
 
 function EmptyConversation({
   onSelect,
 }: {
   onSelect: (prompt: string) => void;
 }) {
+  const [suggestions, setSuggestions] = useState<Suggestion[]>(() =>
+    SUGGESTION_POOL.slice(0, INITIAL_SUGGESTION_COUNT),
+  );
+
+  useEffect(() => {
+    setSuggestions(pickRandomSuggestions(INITIAL_SUGGESTION_COUNT));
+  }, []);
+
   return (
     <div className="flex min-h-full flex-1 flex-col items-center justify-center px-4 py-10 text-center">
       <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--accent-faint)] text-[var(--accent)]">
@@ -724,7 +841,7 @@ function EmptyConversation({
         these to start:
       </p>
       <div className="mt-6 grid w-full max-w-[640px] grid-cols-1 gap-2 sm:grid-cols-2">
-        {SUGGESTIONS.map((suggestion) => (
+        {suggestions.map((suggestion) => (
           <button
             key={suggestion.title}
             type="button"
