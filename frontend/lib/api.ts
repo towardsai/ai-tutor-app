@@ -47,10 +47,11 @@ export type SourcePartData = {
 const FALLBACK_API_BASE_URL = "http://127.0.0.1:8000";
 
 export function getApiBaseUrl() {
-  return (
-    process.env.NEXT_PUBLIC_AI_TUTOR_API_BASE_URL?.replace(/\/+$/, "") ??
-    FALLBACK_API_BASE_URL
-  );
+  const configured =
+    process.env.NEXT_PUBLIC_AI_TUTOR_API_BASE_URL?.replace(/\/+$/, "");
+  if (configured) return configured;
+  if (typeof window !== "undefined") return window.location.origin;
+  return FALLBACK_API_BASE_URL;
 }
 
 export async function fetchTools(
