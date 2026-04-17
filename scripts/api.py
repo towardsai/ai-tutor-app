@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .chat_service import (
@@ -459,6 +460,21 @@ async def chat(payload: ApiChatRequest) -> StreamingResponse:
             "Connection": "keep-alive",
             "x-vercel-ai-ui-message-stream": "v1",
         },
+    )
+
+
+FRONTEND_OUT_DIR = Path(__file__).resolve().parent.parent / "frontend" / "out"
+
+if FRONTEND_OUT_DIR.is_dir():
+    app.mount(
+        "/",
+        StaticFiles(directory=str(FRONTEND_OUT_DIR), html=True),
+        name="frontend",
+    )
+else:
+    logfire.info(
+        "Frontend static export not found; skipping static mount.",
+        path=str(FRONTEND_OUT_DIR),
     )
 
 

@@ -1,0 +1,41 @@
+# Version control
+.git
+.github
+
+# Python build artifacts
+__pycache__
+*.pyc
+.venv
+venv
+.pytest_cache
+.mypy_cache
+
+# Node build artifacts
+frontend/node_modules
+frontend/.next
+frontend/out
+
+# Local env files (secrets / per-developer config)
+.env
+.env.local
+.env.*.local
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# Editor/OS
+.vscode
+.idea
+.DS_Store
+
+# Docs and tests (optional – shrink build context)
+docs
+tests
+*.md
+!README.md
+
+# Heavy data that will be downloaded at runtime from HF Hub
+data/chroma-db-all_sources
+data/*.jsonl
+data/*.pkl
+data/*_md_files
