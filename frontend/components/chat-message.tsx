@@ -304,7 +304,7 @@ function ReasoningBlock({
       {isActive ? (
         <span
           aria-hidden="true"
-          className="activity-sheen pointer-events-none absolute inset-x-0 top-0 h-[2.75rem]"
+          className="activity-sheen pointer-events-none absolute inset-0"
         />
       ) : null}
       <button
@@ -313,26 +313,24 @@ function ReasoningBlock({
           event.stopPropagation();
           setIsOpen((current) => !current);
         }}
-        className="relative z-[1] flex w-full items-center justify-between gap-2 text-left text-[13px] font-semibold tracking-[-0.012em] text-[var(--ink)]"
+        className="relative z-[1] flex w-full items-center justify-between gap-3 text-left"
         aria-expanded={isOpen}
       >
-        <span className="inline-flex items-center gap-2 text-[var(--accent)]">
+        <div className="inline-flex items-center gap-2 text-[13px] font-semibold tracking-[-0.012em] text-[var(--ink)]">
           <Sparkles
             className={clsx(
               "h-4 w-4 text-[var(--accent)]",
               isActive && "animate-pulse",
             )}
           />
-          <span className="text-[var(--ink)]">
-            {isActive ? "Thinking" : "Reasoning trace"}
-          </span>
+          <span>{isActive ? "Thinking" : "Reasoning trace"}</span>
           {isActive ? (
             <span
               aria-hidden="true"
-              className="processing-button__pulse ml-0.5 h-1.5 w-1.5 rounded-full"
+              className="processing-button__pulse ml-0.5 h-1.5 w-1.5 rounded-full text-[var(--accent)]"
             />
           ) : null}
-        </span>
+        </div>
         <ChevronDown
           className={clsx(
             "h-4 w-4 text-[var(--muted)] transition-transform",
@@ -376,7 +374,7 @@ function ToolActivityBlock({
       {isActive ? (
         <span
           aria-hidden="true"
-          className="activity-sheen pointer-events-none absolute inset-x-0 top-0 h-[2.75rem]"
+          className="activity-sheen pointer-events-none absolute inset-0"
         />
       ) : null}
       <button
