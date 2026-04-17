@@ -17,8 +17,10 @@ RUN npm run build
 # Stage 2: Python runtime + FastAPI + bundled static frontend
 FROM python:3.13
 
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:${PATH}"
+# Install uv into /usr/local/bin (on PATH for every user, including HF's uid 1000).
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/ \
+    && rm -rf /root/.local /root/.cache
 
 RUN useradd -m -u 1000 user
 WORKDIR /app
@@ -30,10 +32,9 @@ COPY . .
 COPY --from=frontend /frontend/out ./frontend/out
 
 ENV HOME=/home/user \
-    PATH="/root/.local/bin:/home/user/.local/bin:${PATH}" \
     PORT=7860
 RUN chown -R user:user /app
 USER user
 
 EXPOSE 7860
-CMD ["sh", "-c", "uv run uvicorn scripts.api:app --host 0.0.0.0 --port ${PORT:-7860}"]
+CMD ["uv", "run", "-m", "scripts.api"]
