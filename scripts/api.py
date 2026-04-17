@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from .chat_service import (
     get_retriever,
+    is_anthropic_model,
     is_google_genai_model,
     message_content_to_text,
     stream_chat,
@@ -373,6 +374,23 @@ def _tool_catalog(model_name: str) -> list[dict[str, Any]]:
             {
                 "key": "url_context",
                 "label": "URL reading",
+                "kind": "toggle",
+                "active": True,
+            }
+        )
+    elif is_anthropic_model(model_name):
+        tools.append(
+            {
+                "key": "web_search",
+                "label": "Web search",
+                "kind": "toggle",
+                "active": True,
+            }
+        )
+        tools.append(
+            {
+                "key": "web_fetch",
+                "label": "Web fetch",
                 "kind": "toggle",
                 "active": True,
             }

@@ -18,9 +18,9 @@ DEFAULT_MODEL_NAME = "google-genai:gemini-3-flash-preview"
 
 AVAILABLE_MODELS: tuple[dict[str, str], ...] = (
     {"id": "google-genai:gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
-    {"id": "anthropic:claude-sonnet-4-6", "label": "Claude Sonnet 4.6"},
-    {"id": "anthropic:claude-opus-4-7", "label": "Claude Opus 4.7"},
-    {"id": "openai:gpt-5", "label": "GPT-5"},
+    {"id": "anthropic:claude-haiku-4-5", "label": "Claude Haiku 4.5"},
+    # {"id": "anthropic:claude-opus-4-7", "label": "Claude Opus 4.7"},
+    # {"id": "openai:gpt-5", "label": "GPT-5"},
 )
 
 AVAILABLE_SOURCES_UI = [

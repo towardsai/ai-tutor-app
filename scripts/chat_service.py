@@ -279,6 +279,12 @@ def is_google_genai_model(model_name: str) -> bool:
     return provider == "google-genai"
 
 
+def is_anthropic_model(model_name: str) -> bool:
+    provider_model = normalize_model_name(model_name)
+    provider, _, _actual_model = provider_model.partition(":")
+    return provider == "anthropic"
+
+
 def extract_thought_summaries(content: Any) -> list[str]:
     if not isinstance(content, list):
         return []
@@ -386,6 +392,21 @@ def build_agent(model_name: str, include_thoughts: bool = False):
         tools.append({"google_search": {}})
         tools.append({"url_context": {}})
         middleware.append(GeminiServerSideToolsMiddleware())
+    elif is_anthropic_model(model_name):
+        tools.append(
+            {
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "allowed_callers": ["direct"],
+            }
+        )
+        tools.append(
+            {
+                "type": "web_fetch_20260209",
+                "name": "web_fetch",
+                "allowed_callers": ["direct"],
+            }
+        )
     return create_agent(
         model=model,
         tools=tools,
@@ -453,6 +474,119 @@ def extract_grounding_source_matches(
 
 
 GOOGLE_SEARCH_TOOL_NAME = "google_search"
+ANTHROPIC_SERVER_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
+ANTHROPIC_RESULT_BLOCK_TYPES = {
+    "web_search_tool_result": ("web_search", "Web"),
+    "web_fetch_tool_result": ("web_fetch", "Web page"),
+}
+
+
+def extract_anthropic_source_matches(
+    content: Any,
+    matches_by_doc_id: dict[str, SourceMatch],
+) -> tuple[dict[str, list[SourceMatch]], dict[str, dict[str, Any]]]:
+    """Parse Claude's server-side web tool invocations and their results.
+
+    Scans ``message.content`` for three kinds of blocks emitted when Claude
+    runs the built-in ``web_search`` / ``web_fetch`` tools:
+
+    * ``tool_use`` — the model's call (id, name, input args)
+    * ``web_search_tool_result`` / ``web_fetch_tool_result`` — the server's
+      response, keyed by ``tool_use_id``
+    * ``text`` blocks with ``citations`` — fallback for citations without a
+      matching result block
+
+    Returns ``(matches_by_tool_use_id, tool_use_index)`` where
+    ``tool_use_index`` maps tool_use id → ``{"name", "args"}`` so the caller
+    can emit ``tool_call_started`` events with the right metadata.
+    ``langchain-anthropic`` does not always surface server-side tool_use in
+    ``AIMessage.tool_calls``, so we read them off the content blocks directly.
+    """
+    if not isinstance(content, list):
+        return {}, {}
+
+    updates: dict[str, list[SourceMatch]] = {}
+    tool_use_index: dict[str, dict[str, Any]] = {}
+
+    for block in content:
+        if not hasattr(block, "get"):
+            continue
+
+        block_type = block.get("type")
+
+        if block_type in ("server_tool_use", "tool_use"):
+            tool_use_id = str(block.get("id") or "")
+            tool_name = str(block.get("name") or "")
+            if tool_use_id and tool_name in ANTHROPIC_SERVER_TOOL_NAMES:
+                args = block.get("input") or {}
+                if not args:
+                    partial = block.get("partial_json")
+                    if isinstance(partial, str) and partial.strip():
+                        try:
+                            parsed = json.loads(partial)
+                        except json.JSONDecodeError:
+                            parsed = None
+                        if isinstance(parsed, dict):
+                            args = parsed
+                tool_use_index[tool_use_id] = {
+                    "id": tool_use_id,
+                    "name": tool_name,
+                    "args": args,
+                }
+            continue
+
+        mapping = ANTHROPIC_RESULT_BLOCK_TYPES.get(block_type)
+        if mapping:
+            source_key, source_label = mapping
+            tool_use_id = str(block.get("tool_use_id") or "")
+            results = block.get("content") or []
+            if not isinstance(results, list):
+                continue
+            for result in results:
+                if not hasattr(result, "get"):
+                    continue
+                url = str(result.get("url") or "").strip()
+                if not url:
+                    continue
+                title = str(result.get("title") or url).strip()
+                doc_id = f"{source_key}::{url}"
+                if doc_id in matches_by_doc_id:
+                    continue
+                source_match = SourceMatch(
+                    doc_id=doc_id,
+                    title=title,
+                    url=url,
+                    source_key=source_key,
+                    source_label=source_label,
+                    score=1.0,
+                )
+                matches_by_doc_id[doc_id] = source_match
+                updates.setdefault(tool_use_id, []).append(source_match)
+            continue
+
+        if block_type == "text":
+            for citation in block.get("citations") or []:
+                if not hasattr(citation, "get"):
+                    continue
+                url = str(citation.get("url") or "").strip()
+                if not url:
+                    continue
+                title = str(citation.get("title") or url).strip()
+                doc_id = f"web_search::{url}"
+                if doc_id in matches_by_doc_id:
+                    continue
+                source_match = SourceMatch(
+                    doc_id=doc_id,
+                    title=title,
+                    url=url,
+                    source_key="web_search",
+                    source_label="Web",
+                    score=1.0,
+                )
+                matches_by_doc_id[doc_id] = source_match
+                updates.setdefault("", []).append(source_match)
+
+    return updates, tool_use_index
 
 
 async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
@@ -668,6 +802,61 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                         "call_id": google_search_call_id,
                     },
                 )
+
+            if is_anthropic_model(request.model_name):
+                anthropic_updates, anthropic_tool_uses = extract_anthropic_source_matches(
+                    message.content,
+                    matches_by_doc_id,
+                )
+                for tool_use_id, tool_use in anthropic_tool_uses.items():
+                    if tool_use_id in tool_calls_by_id:
+                        continue
+                    tool_calls_by_id[tool_use_id] = tool_use
+                    yield ChatEvent(
+                        "tool_call_started",
+                        {
+                            "message_id": message_id,
+                            "call_id": tool_use_id,
+                            "tool_name": tool_use["name"],
+                            "args": tool_use.get("args"),
+                            "args_text": format_tool_args(tool_use.get("args")),
+                        },
+                    )
+                for tool_use_id, new_matches in anthropic_updates.items():
+                    for source_match in new_matches:
+                        yield ChatEvent(
+                            "source_match",
+                            {
+                                "message_id": message_id,
+                                "doc_id": source_match.doc_id,
+                                "title": source_match.title,
+                                "url": source_match.url,
+                                "source_key": source_match.source_key,
+                                "source_label": source_match.source_label,
+                                "score": source_match.score,
+                                "call_id": tool_use_id,
+                            },
+                        )
+                    if not tool_use_id:
+                        continue
+                    tool_call = tool_calls_by_id.get(tool_use_id, {})
+                    tool_name = str(tool_call.get("name") or "web_search")
+                    plural = "" if len(new_matches) == 1 else "s"
+                    output_text = (
+                        f"{tool_name} returned {len(new_matches)} result{plural}."
+                    )
+                    yield ChatEvent(
+                        "tool_call_completed",
+                        {
+                            "message_id": message_id,
+                            "step": step,
+                            "call_id": tool_use_id,
+                            "tool_name": tool_name,
+                            "args": tool_call.get("args"),
+                            "args_text": format_tool_args(tool_call.get("args")),
+                            "output_text": output_text,
+                        },
+                    )
 
             if getattr(message, "tool_calls", None):
                 continue

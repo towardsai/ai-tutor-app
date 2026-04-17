@@ -30,6 +30,7 @@ type ToggleToolMeta = {
 const TOGGLE_TOOL_META: Record<string, ToggleToolMeta> = {
   web_search: { icon: Globe },
   url_context: { icon: LinkIcon },
+  web_fetch: { icon: LinkIcon },
 };
 
 export function SourceSidebar({
