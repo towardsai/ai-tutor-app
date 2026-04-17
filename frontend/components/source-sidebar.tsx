@@ -4,20 +4,23 @@ import clsx from "clsx";
 import {
   BookOpen,
   ChevronDown,
+  ExternalLink,
   Globe,
   GraduationCap,
   Library,
   Link as LinkIcon,
+  SquarePen,
   Wrench,
 } from "lucide-react";
 import { useState, type ComponentType, type SVGProps } from "react";
 import type { TutorSource, TutorTool } from "@/lib/api";
 
 type SourceSidebarProps = {
+  onNewChat: () => void;
+  onToggleSource: (sourceKey: string) => void;
   selectedSourceKeys: string[];
   sourceError: string | null;
   tools: TutorTool[];
-  onToggleSource: (sourceKey: string) => void;
 };
 
 type ToggleToolMeta = {
@@ -30,10 +33,11 @@ const TOGGLE_TOOL_META: Record<string, ToggleToolMeta> = {
 };
 
 export function SourceSidebar({
+  onNewChat,
+  onToggleSource,
   selectedSourceKeys,
   sourceError,
   tools,
-  onToggleSource,
 }: SourceSidebarProps) {
   const retrievalTool = tools.find(
     (tool): tool is Extract<TutorTool, { kind: "configurable" }> =>
@@ -52,25 +56,48 @@ export function SourceSidebar({
     <aside className="glass-panel relative overflow-hidden rounded-[1.5rem] p-2.5 lg:flex lg:min-h-0 lg:max-h-[calc(100vh-1rem)] lg:min-h-[calc(100vh-1rem)] lg:flex-col">
       <div className="grain-mask absolute inset-0" />
       <div className="relative flex flex-col gap-2.5 lg:min-h-0 lg:flex-1">
-        <div className="space-y-0.5 px-1 pt-0.5">
-          <h1 className="text-[1.3rem] font-semibold leading-tight tracking-[-0.03em] text-[var(--ink)]">
+        <div className="flex items-center gap-2.5 px-1 pt-0.5">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/towardsai-logo.png"
+            alt="Towards AI"
+            width={36}
+            height={36}
+            className="shrink-0 rounded-full shadow-[0_4px_12px_rgba(11,136,238,0.18)]"
+          />
+          <h1 className="text-[1.35rem] font-semibold leading-none tracking-[-0.03em] text-[var(--ink)]">
             AI Tutor
           </h1>
-          <p className="text-[11.5px] leading-[1.45] text-[var(--muted)]">
-            Pick the tools that guide the agent.
-          </p>
         </div>
 
-        <div className="flex items-center justify-between border-t border-[var(--line)] px-1 pt-2">
-          <div className="flex items-center gap-1.5">
-            <Wrench className="h-3.5 w-3.5 text-[var(--accent)]" />
-            <span className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-              Tools
+        <div className="border-t border-[var(--line)] px-1 pt-2">
+          <button
+            type="button"
+            onClick={onNewChat}
+            className="group flex w-full items-center gap-2 rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--accent-faint)] px-2.5 py-2 text-left shadow-[0_4px_12px_rgba(11,136,238,0.08)] transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:shadow-[0_8px_20px_rgba(11,136,238,0.16)]"
+          >
+            <SquarePen className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+            <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold tracking-[-0.01em] text-[var(--accent)]">
+              New chat
+            </span>
+          </button>
+        </div>
+
+        <div className="space-y-1 border-t border-[var(--line)] px-1 pt-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Wrench className="h-3.5 w-3.5 text-[var(--accent)]" />
+              <span className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                Tools
+              </span>
+            </div>
+            <span className="rounded-full bg-[var(--accent-faint)] px-2 py-0.5 text-[10.5px] font-semibold tracking-[-0.01em] text-[var(--accent)]">
+              {activeCount}/{totalCount}
             </span>
           </div>
-          <span className="rounded-full bg-[var(--accent-faint)] px-2 py-0.5 text-[10.5px] font-semibold tracking-[-0.01em] text-[var(--accent)]">
-            {activeCount}/{totalCount}
-          </span>
+          <p className="text-[11px] leading-[1.4] text-[var(--muted)]">
+            Choose which sources the tutor searches.
+          </p>
         </div>
 
         <div className="scrollbar-thin space-y-2 pr-0.5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
@@ -91,6 +118,21 @@ export function SourceSidebar({
             {sourceError}
           </p>
         ) : null}
+
+        <a
+          href="https://academy.towardsai.net/"
+          target="_blank"
+          rel="noreferrer"
+          className="group inline-flex items-center justify-between gap-2 border-t border-[var(--line)] px-1 pt-2 text-[10.5px] text-[var(--muted)] transition hover:text-[var(--accent)]"
+        >
+          <span className="tracking-[-0.005em]">
+            Powered by{" "}
+            <span className="font-semibold text-[var(--ink)] transition group-hover:text-[var(--accent)]">
+              Towards AI Academy
+            </span>
+          </span>
+          <ExternalLink className="h-3 w-3 shrink-0 opacity-60 transition group-hover:opacity-100" />
+        </a>
       </div>
     </aside>
   );

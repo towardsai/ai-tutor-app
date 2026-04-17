@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 from .utils import init_mongo_db
 
-load_dotenv()
+load_dotenv(override=True)
 try:
     logfire.configure()
 except Exception:
@@ -15,6 +15,13 @@ VECTOR_DB_DIR = "data/chroma-db-all_sources"
 VECTOR_COLLECTION_NAME = "chroma-db-all_sources"
 DOCUMENT_DICT_PATH = f"{VECTOR_DB_DIR}/document_dict_all_sources.pkl"
 DEFAULT_MODEL_NAME = "google-genai:gemini-3-flash-preview"
+
+AVAILABLE_MODELS: tuple[dict[str, str], ...] = (
+    {"id": "google-genai:gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
+    {"id": "anthropic:claude-sonnet-4-6", "label": "Claude Sonnet 4.6"},
+    {"id": "anthropic:claude-opus-4-7", "label": "Claude Opus 4.7"},
+    {"id": "openai:gpt-5", "label": "GPT-5"},
+)
 
 AVAILABLE_SOURCES_UI = [
     "Transformers Docs",
@@ -114,6 +121,7 @@ mongo_db = (
 )
 
 __all__ = [
+    "AVAILABLE_MODELS",
     "AVAILABLE_SOURCES",
     "AVAILABLE_SOURCES_UI",
     "COURSE_SOURCE_KEYS",

@@ -21,6 +21,7 @@ from .chat_service import (
 )
 from .chat_types import ChatEvent, ChatRequest, ChatTurn
 from .setup import (
+    AVAILABLE_MODELS,
     AVAILABLE_SOURCES,
     AVAILABLE_SOURCES_UI,
     COURSE_SOURCE_KEYS,
@@ -382,7 +383,11 @@ def _tool_catalog(model_name: str) -> list[dict[str, Any]]:
 @app.get("/api/tools")
 def list_tools(model: str | None = None) -> dict[str, Any]:
     model_name = (model or DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
-    return {"model": model_name, "tools": _tool_catalog(model_name)}
+    return {
+        "model": model_name,
+        "availableModels": list(AVAILABLE_MODELS),
+        "tools": _tool_catalog(model_name),
+    }
 
 
 @app.post("/api/chat")

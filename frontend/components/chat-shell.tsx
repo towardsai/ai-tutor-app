@@ -3,7 +3,7 @@
 import clsx from "clsx";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { Send, Square, WandSparkles } from "lucide-react";
+import { Check, ChevronDown, Lock, Send, Square, WandSparkles } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -13,7 +13,12 @@ import {
 } from "react";
 import { ChatMessage } from "@/components/chat-message";
 import { SourceSidebar } from "@/components/source-sidebar";
-import { fetchTools, getApiBaseUrl, type TutorTool } from "@/lib/api";
+import {
+  fetchTools,
+  getApiBaseUrl,
+  type AvailableModel,
+  type TutorTool,
+} from "@/lib/api";
 import {
   getMessageTextContent,
   hasRenderableContent,
@@ -32,6 +37,8 @@ export function ChatShell() {
     () => new DefaultChatTransport({ api: `${getApiBaseUrl()}/api/chat` }),
   );
   const [tools, setTools] = useState<TutorTool[]>([]);
+  const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>("");
   const [selectedSourceKeys, setSelectedSourceKeys] = useState<string[]>([]);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -48,6 +55,7 @@ export function ChatShell() {
   const {
     messages,
     sendMessage,
+    setMessages,
     regenerate,
     stop,
     status,
@@ -66,13 +74,21 @@ export function ChatShell() {
     experimental_throttle: 50,
   });
 
+  const initialFetchDoneRef = useRef(false);
+
   useEffect(() => {
     const controller = new AbortController();
 
     async function loadTools() {
       try {
-        const { tools: loadedTools } = await fetchTools(controller.signal);
+        const {
+          tools: loadedTools,
+          availableModels: models,
+          model,
+        } = await fetchTools(controller.signal);
         setTools(loadedTools);
+        setAvailableModels(models ?? []);
+        setSelectedModel(model);
         const retrieval = loadedTools.find(
           (tool) => tool.kind === "configurable",
         );
@@ -99,6 +115,39 @@ export function ChatShell() {
     void loadTools();
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (!selectedModel) {
+      return;
+    }
+    if (!initialFetchDoneRef.current) {
+      initialFetchDoneRef.current = true;
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function refetchTools() {
+      try {
+        const { tools: loadedTools, availableModels: models } =
+          await fetchTools(controller.signal, selectedModel);
+        setTools(loadedTools);
+        setAvailableModels(models ?? []);
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setSourceError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Unable to load tool registry.",
+        );
+      }
+    }
+
+    void refetchTools();
+    return () => controller.abort();
+  }, [selectedModel]);
 
   const isStreaming = status === "submitted" || status === "streaming";
   const isReady = status === "ready";
@@ -207,6 +256,7 @@ export function ChatShell() {
           sourceKeys: selectedSourceKeys,
           includeReasoning: true,
           threadId,
+          model: selectedModel,
         },
       },
     );
@@ -221,6 +271,7 @@ export function ChatShell() {
         sourceKeys: selectedSourceKeys,
         includeReasoning: true,
         threadId,
+        model: selectedModel,
       },
     });
   }
@@ -282,9 +333,23 @@ export function ChatShell() {
           sourceKeys: selectedSourceKeys,
           includeReasoning: true,
           threadId,
+          model: selectedModel,
         },
       },
     );
+  }
+
+  function handleNewChat() {
+    if (isStreaming) {
+      stop();
+    }
+    clearError();
+    setMessages([]);
+    setThreadId("");
+    setInput("");
+    setEditingMessageId(null);
+    setEditingText("");
+    setCopiedMessageId(null);
   }
 
   function toggleSource(sourceKey: string) {
@@ -299,10 +364,11 @@ export function ChatShell() {
     <main className="min-h-screen p-2 lg:h-screen lg:overflow-hidden">
       <div className="flex min-h-[calc(100vh-1rem)] w-full flex-col gap-2 lg:h-[calc(100vh-1rem)] lg:min-h-0 lg:grid lg:grid-cols-[248px_minmax(0,1fr)]">
         <SourceSidebar
+          onNewChat={handleNewChat}
+          onToggleSource={toggleSource}
           selectedSourceKeys={selectedSourceKeys}
           sourceError={sourceError}
           tools={tools}
-          onToggleSource={toggleSource}
         />
 
         <section className="glass-panel flex min-h-0 flex-col overflow-hidden rounded-[1.5rem] p-2 sm:p-2.5 lg:max-h-[calc(100vh-1rem)] lg:min-h-[calc(100vh-1rem)]">
@@ -374,7 +440,13 @@ export function ChatShell() {
                   className="max-h-44 min-h-10 w-full resize-none overflow-y-auto bg-transparent px-0.5 py-2 text-[15px] leading-[1.6] tracking-[-0.012em] text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
                 />
 
-                <div className="mt-1.5 flex items-center justify-end gap-2">
+                <div className="mt-1.5 flex items-center justify-between gap-2">
+                  <ModelPicker
+                    availableModels={availableModels}
+                    locked={typedMessages.length > 0}
+                    onSelect={setSelectedModel}
+                    selectedModel={selectedModel}
+                  />
                   <ComposerActionButton
                     disabled={!isStreaming && (!input.trim() || !isReady)}
                     isStreaming={isStreaming}
@@ -396,6 +468,155 @@ export function ChatShell() {
 
       </div>
     </main>
+  );
+}
+
+function formatModelName(raw: string): string {
+  const name = raw.includes(":") ? raw.split(":").slice(1).join(":") : raw;
+  return name
+    .replace(/-latest$/, "")
+    .replace(/-preview$/, " preview")
+    .replace(/-/g, " ")
+    .replace(/\bgpt\b/gi, "GPT")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
+function ModelPicker({
+  availableModels,
+  locked,
+  onSelect,
+  selectedModel,
+}: {
+  availableModels: AvailableModel[];
+  locked: boolean;
+  onSelect: (modelId: string) => void;
+  selectedModel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    function handlePointerDown(event: MouseEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  if (!selectedModel) {
+    return <span />;
+  }
+
+  const label =
+    availableModels.find((model) => model.id === selectedModel)?.label ??
+    formatModelName(selectedModel);
+  const hasOptions = availableModels.length > 0;
+
+  return (
+    <div ref={containerRef} className="group relative">
+      {locked ? (
+        <span
+          role="tooltip"
+          className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 whitespace-nowrap rounded-[0.6rem] border border-[var(--line)] bg-[var(--panel-strong)] px-2.5 py-1.5 opacity-0 shadow-[0_8px_20px_rgba(18,42,204,0.12)] backdrop-blur-xl transition-opacity duration-150 group-hover:opacity-100"
+        >
+          <span className="text-[10.5px] font-medium tracking-[-0.005em] text-[var(--ink)]">
+            Start a new chat to change models
+          </span>
+        </span>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => {
+          if (!locked && hasOptions) {
+            setOpen((current) => !current);
+          }
+        }}
+        disabled={locked || !hasOptions}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={
+          locked
+            ? undefined
+            : hasOptions
+              ? "Change model"
+              : selectedModel
+        }
+        className={clsx(
+          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition",
+          locked
+            ? "cursor-not-allowed border-[var(--line)] bg-[var(--surface-soft)] text-[var(--muted)] opacity-75"
+            : "border-[var(--line)] bg-[var(--surface-soft)] text-[var(--muted)] hover:border-[var(--accent)] hover:bg-[var(--accent-faint)] hover:text-[var(--accent)]",
+        )}
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
+        <span className="text-[10.5px] font-medium tracking-[-0.005em]">
+          {label}
+        </span>
+        {locked ? (
+          <Lock className="h-2.5 w-2.5" aria-hidden="true" />
+        ) : (
+          <ChevronDown
+            className={clsx(
+              "h-3 w-3 transition-transform",
+              open && "rotate-180",
+            )}
+            aria-hidden="true"
+          />
+        )}
+      </button>
+
+      {open ? (
+        <div
+          role="listbox"
+          aria-label="Select model"
+          className="absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-[0.9rem] border border-[var(--line)] bg-[var(--panel-strong)] p-1 shadow-[0_16px_40px_rgba(18,42,204,0.18)] backdrop-blur-xl"
+        >
+          {availableModels.map((model) => {
+            const isActive = model.id === selectedModel;
+            return (
+              <button
+                key={model.id}
+                type="button"
+                role="option"
+                aria-selected={isActive}
+                onClick={() => {
+                  onSelect(model.id);
+                  setOpen(false);
+                }}
+                className={clsx(
+                  "flex w-full items-center justify-between gap-2 rounded-[0.65rem] px-2.5 py-1.5 text-left transition",
+                  isActive
+                    ? "bg-[var(--accent-faint)] text-[var(--accent)]"
+                    : "text-[var(--ink)] hover:bg-[var(--surface-hover)]",
+                )}
+              >
+                <span className="truncate text-[12.5px] font-medium tracking-[-0.01em]">
+                  {model.label}
+                </span>
+                {isActive ? (
+                  <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -490,7 +711,16 @@ function EmptyConversation({
         Ask your AI tutor
       </h2>
       <p className="mt-2 max-w-md text-[13.5px] leading-[1.6] text-[var(--muted)]">
-        Answers are grounded in the sources you selected on the left. Try one of
+        Your companion for{" "}
+        <a
+          href="https://academy.towardsai.net/"
+          target="_blank"
+          rel="noreferrer"
+          className="font-semibold text-[var(--ink)] underline decoration-[var(--accent)]/40 underline-offset-2 transition hover:text-[var(--accent)] hover:decoration-[var(--accent)]"
+        >
+          Towards AI Academy
+        </a>{" "}
+        courses. Answers are grounded in the sources you select — try one of
         these to start:
       </p>
       <div className="mt-6 grid w-full max-w-[640px] grid-cols-1 gap-2 sm:grid-cols-2">
