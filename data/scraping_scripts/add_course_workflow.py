@@ -2,26 +2,31 @@
 """
 AI Tutor App - Course Addition Workflow
 
-This script guides you through the complete process of adding a new course to the AI Tutor App:
+This script guides you through adding or updating one or more courses in the AI Tutor App:
 
-1. Process course markdown files to create JSONL data
-2. MANDATORY MANUAL STEP: Add URLs to course content in the generated JSONL
-3. Merge course JSONL into all_sources_data.jsonl
-4. Add contextual information to document nodes
-5. Create vector stores
-6. Upload databases to HuggingFace
-7. Update UI configuration
+1. Process course markdown files to create per-course JSONL data
+2. MANDATORY MANUAL STEP: Add URLs to each course JSONL
+3. Rebuild all_sources_data.jsonl from the per-source JSONLs listed in SOURCE_CONFIGS
+   (this naturally drops any retired sources no longer in SOURCE_CONFIGS)
+4. Optionally purge retired sources from the contextual-nodes PKL
+5. Add contextual information to document nodes (only new docs by default)
+6. Create vector stores
+7. Upload databases + data files to HuggingFace
+8. Update UI configuration for each course
 
 Usage:
-    uv run python -m data.scraping_scripts.add_course_workflow --course [COURSE_NAME]
+    uv run python -m data.scraping_scripts.add_course_workflow --courses [COURSE_1] [COURSE_2] ...
 
-    Additional flags to run specific steps (if you want to restart from a specific point):
+    Additional flags:
+    --purge-sources S1 S2   Remove nodes for these source names from the contextual-nodes PKL
+                            (use after renaming/retiring a course, e.g. llm_developper, python_primer)
     --skip-process-md       Skip the markdown processing step
-    --skip-merge            Skip merging into all_sources_data.jsonl
-    --new-context-only      Only process new content when adding context
+    --skip-merge            Skip rebuilding all_sources_data.jsonl
+    --process-all-context   Regenerate context for all docs (default: only new docs)
     --skip-context          Skip the context addition step entirely
     --skip-vectors          Skip vector store creation
     --skip-upload           Skip uploading to HuggingFace
+    --skip-data-upload      Skip uploading .jsonl/.pkl data files (they upload by default)
     --skip-ui-update        Skip updating the UI configuration
 """
 
@@ -37,6 +42,7 @@ from typing import Dict, List, Set
 
 from dotenv import load_dotenv
 from huggingface_hub import hf_hub_download
+
 from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
 from scripts.chroma_rag import get_chunk_record_doc_id
 
@@ -80,8 +86,10 @@ def ensure_required_files_exist():
         # Course files
         "data/tai_blog_data.jsonl": "tai_blog_data.jsonl",
         "data/8-hour_primer_data.jsonl": "8-hour_primer_data.jsonl",
-        "data/llm_developer_data.jsonl": "llm_developer_data.jsonl",
-        "data/python_primer_data.jsonl": "python_primer_data.jsonl",
+        "data/master_ai_for_work_data.jsonl": "master_ai_for_work_data.jsonl",
+        "data/agentic_ai_engineering_data.jsonl": "agentic_ai_engineering_data.jsonl",
+        "data/full_stack_ai_engineering_data.jsonl": "full_stack_ai_engineering_data.jsonl",
+        "data/beginner_python_for_ai_engineering_data.jsonl": "beginner_python_for_ai_engineering_data.jsonl",
     }
 
     # Critical files that must be downloaded
@@ -198,33 +206,59 @@ def manual_url_addition(jsonl_path: str) -> None:
         logger.info("All documents have URLs. Continuing with the workflow.")
 
 
-def merge_into_all_sources(course_jsonl_path: str) -> None:
-    """Merge the course JSONL into all_sources_data.jsonl."""
-    all_sources_path = "data/all_sources_data.jsonl"
-    logger.info(f"Merging {course_jsonl_path} into {all_sources_path}")
+def rebuild_all_sources(courses: List[str]) -> None:
+    """Rebuild all_sources_data.jsonl from the per-source JSONLs in SOURCE_CONFIGS.
 
-    # Load course data
-    course_data = load_jsonl(course_jsonl_path)
+    Unlike the previous append-style merge, this drops any source whose entry
+    has been removed from SOURCE_CONFIGS (e.g. retired/renamed courses) and
+    reloads every other source from its own JSONL. Safe against stale rows
+    for sources like llm_developper / python_primer that were renamed.
+    """
+    from data.scraping_scripts.process_md_files import combine_all_sources
 
-    # Load existing all_sources data if it exists
-    all_data = []
-    if os.path.exists(all_sources_path):
-        all_data = load_jsonl(all_sources_path)
+    logger.info("Rebuilding data/all_sources_data.jsonl from per-source JSONLs")
+    combine_all_sources(courses)
 
-    # Get doc_ids from existing data
-    existing_ids = {item["doc_id"] for item in all_data}
 
-    # Add new course data (avoiding duplicates)
-    new_items = 0
-    for item in course_data:
-        if item["doc_id"] not in existing_ids:
-            all_data.append(item)
-            existing_ids.add(item["doc_id"])
-            new_items += 1
+def purge_sources_from_pkl(sources_to_purge: List[str]) -> None:
+    """Remove nodes belonging to the given source names from the contextual-nodes PKL.
 
-    # Save the combined data
-    save_jsonl(all_data, all_sources_path)
-    logger.info(f"Added {new_items} new documents to {all_sources_path}")
+    Use this after renaming/retiring a course so its old chunks don't linger
+    in the vector DB on the next rebuild.
+    """
+    from scripts.chroma_rag import get_chunk_record_source
+
+    pkl_path = "data/all_sources_contextual_nodes.pkl"
+    if not os.path.exists(pkl_path):
+        logger.info(f"{pkl_path} does not exist; nothing to purge")
+        return
+
+    with open(pkl_path, "rb") as f:
+        nodes = pickle.load(f)
+
+    purge_set = set(sources_to_purge)
+    kept: List = []
+    removed = 0
+    unknown_source = 0
+    for node in nodes:
+        try:
+            source = get_chunk_record_source(node)
+        except Exception:
+            kept.append(node)
+            unknown_source += 1
+            continue
+        if source in purge_set:
+            removed += 1
+        else:
+            kept.append(node)
+
+    with open(pkl_path, "wb") as f:
+        pickle.dump(kept, f)
+
+    logger.info(
+        f"Purged {removed} nodes for sources {sorted(purge_set)} from {pkl_path}; "
+        f"{len(kept)} remain ({unknown_source} retained with undetermined source)"
+    )
 
 
 def get_processed_doc_ids() -> Set[str]:
@@ -468,9 +502,17 @@ def main():
         description="AI Tutor App Course Addition Workflow"
     )
     parser.add_argument(
-        "--course",
+        "--courses",
+        nargs="+",
         required=True,
-        help="Name of the course to process (must match SOURCE_CONFIGS)",
+        help="One or more course names to process (must match SOURCE_CONFIGS)",
+    )
+    parser.add_argument(
+        "--purge-sources",
+        nargs="+",
+        default=[],
+        help="Source names to remove from the contextual-nodes PKL before re-adding context "
+        "(use for retired/renamed courses like llm_developper, python_primer)",
     )
     parser.add_argument(
         "--skip-process-md",
@@ -480,7 +522,7 @@ def main():
     parser.add_argument(
         "--skip-merge",
         action="store_true",
-        help="Skip merging into all_sources_data.jsonl",
+        help="Skip rebuilding all_sources_data.jsonl",
     )
     parser.add_argument(
         "--process-all-context",
@@ -510,36 +552,42 @@ def main():
     )
 
     args = parser.parse_args()
-    course_name = args.course
+    courses: List[str] = args.courses
 
     ensure_hf_access()
 
     # Ensure required data files exist before proceeding
     ensure_required_files_exist()
 
-    # Get the output file path
     from data.scraping_scripts.process_md_files import SOURCE_CONFIGS
 
-    if course_name not in SOURCE_CONFIGS:
-        logger.error(f"Course {course_name} not found in SOURCE_CONFIGS")
-        sys.exit(1)
+    # Validate every course up front so we fail fast
+    for course_name in courses:
+        if course_name not in SOURCE_CONFIGS:
+            logger.error(f"Course {course_name} not found in SOURCE_CONFIGS")
+            sys.exit(1)
 
-    course_jsonl_path = SOURCE_CONFIGS[course_name]["output_file"]
+    # Per-course: process markdown + manual URL addition
+    for course_name in courses:
+        course_jsonl_path = SOURCE_CONFIGS[course_name]["output_file"]
 
-    # Execute the workflow steps
-    if not args.skip_process_md:
-        if os.path.exists(course_jsonl_path):
-            logger.info(
-                f"JSONL file {course_jsonl_path} already exists. Skipping markdown processing."
-            )
-        else:
-            course_jsonl_path = process_markdown_files(course_name)
+        if not args.skip_process_md:
+            if os.path.exists(course_jsonl_path):
+                logger.info(
+                    f"JSONL file {course_jsonl_path} already exists. Skipping markdown processing for {course_name}."
+                )
+            else:
+                course_jsonl_path = process_markdown_files(course_name)
 
-    # Always do the manual URL addition step for courses
-    manual_url_addition(course_jsonl_path)
+        # Manual URL addition is mandatory for each course
+        manual_url_addition(course_jsonl_path)
 
+    # Shared steps — run once across all courses
     if not args.skip_merge:
-        merge_into_all_sources(course_jsonl_path)
+        rebuild_all_sources(courses)
+
+    if args.purge_sources:
+        purge_sources_from_pkl(args.purge_sources)
 
     if not args.skip_context:
         add_context_to_nodes(not args.process_all_context)
@@ -552,7 +600,8 @@ def main():
         upload_to_huggingface(not args.skip_data_upload)
 
     if not args.skip_ui_update:
-        update_ui_files(course_name)
+        for course_name in courses:
+            update_ui_files(course_name)
 
     logger.info("Course addition workflow completed successfully")
 

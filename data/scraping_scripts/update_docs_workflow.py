@@ -35,6 +35,7 @@ from typing import Dict, List, Set
 
 from dotenv import load_dotenv
 from huggingface_hub import hf_hub_download
+
 from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
 from scripts.chroma_rag import get_chunk_record_doc_id
 
@@ -78,8 +79,10 @@ def ensure_required_files_exist():
         # Course files
         "data/tai_blog_data.jsonl": "tai_blog_data.jsonl",
         "data/8-hour_primer_data.jsonl": "8-hour_primer_data.jsonl",
-        "data/llm_developer_data.jsonl": "llm_developer_data.jsonl",
-        "data/python_primer_data.jsonl": "python_primer_data.jsonl",
+        "data/master_ai_for_work_data.jsonl": "master_ai_for_work_data.jsonl",
+        "data/agentic_ai_engineering_data.jsonl": "agentic_ai_engineering_data.jsonl",
+        "data/full_stack_ai_engineering_data.jsonl": "full_stack_ai_engineering_data.jsonl",
+        "data/beginner_python_for_ai_engineering_data.jsonl": "beginner_python_for_ai_engineering_data.jsonl",
     }
 
     # Critical files that must be downloaded

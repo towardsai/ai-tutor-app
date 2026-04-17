@@ -19,6 +19,7 @@ import argparse
 import os
 
 from dotenv import load_dotenv
+
 try:
     from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
 except ModuleNotFoundError:
@@ -44,8 +45,10 @@ def upload_files_to_huggingface(repo_id="towardsai-tutors/ai-tutor-data"):
         # Course files
         "data/tai_blog_data.jsonl",
         "data/8-hour_primer_data.jsonl",
-        "data/llm_developer_data.jsonl",
-        "data/python_primer_data.jsonl",
+        "data/master_ai_for_work_data.jsonl",
+        "data/agentic_ai_engineering_data.jsonl",
+        "data/full_stack_ai_engineering_data.jsonl",
+        "data/beginner_python_for_ai_engineering_data.jsonl",
     ]
 
     # Filter to only include files that exist

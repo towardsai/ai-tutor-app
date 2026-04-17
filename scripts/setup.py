@@ -19,30 +19,28 @@ DEFAULT_MODEL_NAME = "google-genai:gemini-3-flash-preview"
 AVAILABLE_MODELS: tuple[dict[str, str], ...] = (
     {"id": "google-genai:gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
     {"id": "anthropic:claude-haiku-4-5", "label": "Claude Haiku 4.5"},
-    # {"id": "anthropic:claude-opus-4-7", "label": "Claude Opus 4.7"},
-    # {"id": "openai:gpt-5", "label": "GPT-5"},
 )
 
 AVAILABLE_SOURCES_UI = [
+    "LangChain Docs",
+    "LlamaIndex Docs",
     "Transformers Docs",
     "PEFT Docs",
     "TRL Docs",
-    "LlamaIndex Docs",
-    "LangChain Docs",
     "OpenAI Cookbooks",
-    "8 Hour Primer",
-    "Advanced LLM Developer",
-    "Python Primer",
-    "Master AI For Work",
     "Agentic AI Engineering",
+    "Master AI For Work",
+    "Full Stack AI Engineering",
+    "Beginner Python for AI Engineering",
+    "8 Hour Primer",
 ]
 
 DEFAULT_SELECTED_SOURCES_UI = [
     "Agentic AI Engineering",
     "Master AI For Work",
-    "Advanced LLM Developer",
+    "Full Stack AI Engineering",
+    "Beginner Python for AI Engineering",
     "8 Hour Primer",
-    "Python Primer",
     "Transformers Docs",
     "PEFT Docs",
     "TRL Docs",
@@ -59,8 +57,8 @@ AVAILABLE_SOURCES = [
     "langchain",
     "openai_cookbooks",
     "8-hour_primer",
-    "llm_developer",
-    "python_primer",
+    "full_stack_ai_engineering",
+    "beginner_python_for_ai_engineering",
     "master_ai_for_work",
     "agentic_ai_engineering",
 ]
@@ -73,7 +71,8 @@ SOURCE_UI_TO_KEY = {
     "LangChain Docs": "langchain",
     "OpenAI Cookbooks": "openai_cookbooks",
     "8 Hour Primer": "8-hour_primer",
-    "Advanced LLM Developer": "llm_developer",
+    "Full Stack AI Engineering": "full_stack_ai_engineering",
+    "Beginner Python for AI Engineering": "beginner_python_for_ai_engineering",
     "Python Primer": "python_primer",
     "Master AI For Work": "master_ai_for_work",
     "Agentic AI Engineering": "agentic_ai_engineering",
@@ -82,8 +81,8 @@ SOURCE_UI_TO_KEY = {
 COURSE_SOURCE_KEYS = frozenset(
     {
         "8-hour_primer",
-        "llm_developer",
-        "python_primer",
+        "full_stack_ai_engineering",
+        "beginner_python_for_ai_engineering",
         "master_ai_for_work",
         "agentic_ai_engineering",
     }

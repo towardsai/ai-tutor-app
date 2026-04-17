@@ -157,11 +157,11 @@ SOURCE_CONFIGS = {
         "included_root_files": [],
         "url_extension": "",
     },
-    "llm_developer": {
+    "full_stack_ai_engineering": {
         "base_url": "",
-        "input_directory": "data/llm_developer",  # Path to the directory that contains the Markdown files
-        "output_file": "data/llm_developer_data.jsonl",  # From Beginner to Advanced LLM Developer
-        "source_name": "llm_developer",
+        "input_directory": "data/full_stack_ai_engineering",  # Path to the directory that contains the Markdown files
+        "output_file": "data/full_stack_ai_engineering_data.jsonl",
+        "source_name": "full_stack_ai_engineering",
         "use_include_list": False,
         "included_dirs": [],
         "excluded_dirs": [],
@@ -169,11 +169,11 @@ SOURCE_CONFIGS = {
         "included_root_files": [],
         "url_extension": "",
     },
-    "python_primer": {
+    "beginner_python_for_ai_engineering": {
         "base_url": "",
-        "input_directory": "data/python_primer",  # Path to the directory that contains the Markdown files
-        "output_file": "data/python_primer_data.jsonl",  # From Beginner to Advanced LLM Developer
-        "source_name": "python_primer",
+        "input_directory": "data/beginner_python_for_ai_engineering",  # Path to the directory that contains the Markdown files
+        "output_file": "data/beginner_python_for_ai_engineering_data.jsonl",
+        "source_name": "beginner_python_for_ai_engineering",
         "use_include_list": False,
         "included_dirs": [],
         "excluded_dirs": [],
@@ -184,7 +184,7 @@ SOURCE_CONFIGS = {
     "master_ai_for_work": {
         "base_url": "",
         "input_directory": "data/master_ai_for_work",  # Path to the directory that contains the Markdown files
-        "output_file": "data/master_ai_for_work_data.jsonl",  # From Beginner to Advanced LLM Developer
+        "output_file": "data/master_ai_for_work_data.jsonl",
         "source_name": "master_ai_for_work",
         "use_include_list": False,
         "included_dirs": [],

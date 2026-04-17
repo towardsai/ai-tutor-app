@@ -164,7 +164,25 @@ Rewrite the jsonl line-by-line, only ever mutating the `url` field, so
 surrounding keys and formatting are preserved. Print:
 
 - filled vs empty counts,
-- how many sidebar lessons are still unused.
+- how many sidebar lessons are still unused,
+- **URL collisions** — group rows by their assigned `url` and report every
+  URL claimed by more than one row, along with each row's `name`. Expected
+  causes: "(Old)" / "(Tutorial version)" / "(new)" variants of the same
+  lesson, renamed lessons whose previous name still lives in the jsonl, or
+  a lesson whose content got chunked into multiple jsonl rows (identical
+  `name`). Surface these so the human can decide whether to keep, merge, or
+  drop each duplicate — don't silently deduplicate.
+
+```python
+from collections import Counter
+counts = Counter(r['url'] for r in rows if r.get('url'))
+dups = {u: n for u, n in counts.items() if n > 1}
+for url, n in dups.items():
+    print(f'{n}x {url}')
+    for r in rows:
+        if r.get('url') == url:
+            print(f'  - {r["name"]}')
+```
 
 For a well-authored pair of sources you'd expect every sidebar lesson to be
 claimed by exactly one jsonl row. If a sidebar lesson has no jsonl match,
@@ -193,6 +211,9 @@ open(JSONL_PATH, 'w').writelines(out)
 - [ ] Pre-existing URLs in the source jsonl audited.
 - [ ] Final counts: filled + empty == total; unused sidebar lessons == 0
   (or documented exceptions).
+- [ ] URL collisions printed (rows sharing a `url`) and human-reviewed:
+  "(Old)" / "(Tutorial version)" variants dropped or kept per request;
+  identical-name chunk duplicates resolved.
 - [ ] Empty rows dropped (if appropriate for the file's scope).
 
 ## Operational notes that tend to bite
