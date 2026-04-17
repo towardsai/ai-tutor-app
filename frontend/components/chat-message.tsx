@@ -403,7 +403,7 @@ function ToolActivityBlock({
         </div>
         <div className="flex items-center gap-3">
           {sourceCountLabel ? (
-            <span className="rounded-full bg-[var(--surface)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--muted)]">
+            <span className="rounded-full bg-[var(--surface)] px-2.5 py-1 text-[10px] font-semibold uppercase leading-none tracking-[0.1em] text-[var(--muted)]">
               {sourceCountLabel}
             </span>
           ) : null}
