@@ -75,8 +75,8 @@ export function SourceSidebar({
             height={48}
             className="shrink-0 rounded-full shadow-[0_4px_12px_rgba(11,136,238,0.18)]"
           />
-          <h1 className="min-w-0 flex-1 text-[1.2rem] font-semibold leading-[1.1] tracking-[-0.03em] text-[var(--ink)]">
-            Towards <span className="text-[var(--accent)]">AI Tutor</span>
+          <h1 className="text-[1.35rem] font-semibold leading-none tracking-[-0.03em] text-[var(--accent)]">
+            AI Tutor
           </h1>
         </div>
 
