@@ -40,6 +40,53 @@ The Gradio demo is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugg
 
    Starts the Gradio AI Tutor interface.
 
+### Next.js Frontend — Quick Start
+
+The repo now also includes a separate Next.js frontend in [frontend](./frontend) that talks to the FastAPI backend instead of the Gradio transport.
+
+1. Start the Python API:
+
+   ```bash
+   uv run -m scripts.api
+   ```
+
+   If `8000` is already taken, bind another port instead:
+
+   ```bash
+   AI_TUTOR_API_PORT=8001 uv run -m scripts.api
+   ```
+
+2. In a second terminal, install the frontend dependencies:
+
+   ```bash
+   cd frontend
+   npm install
+   ```
+
+3. Configure the frontend API target:
+
+   ```bash
+   cp .env.example .env.local
+   ```
+
+   The default points at `http://127.0.0.1:8000`, which matches the local FastAPI app.
+   If you override the backend port, update `NEXT_PUBLIC_AI_TUTOR_API_BASE_URL` to match.
+
+4. Run the frontend:
+
+   ```bash
+   npm run dev
+   ```
+
+5. Open [http://localhost:3000](http://localhost:3000).
+
+This frontend consumes:
+
+- `GET /api/sources`
+- `POST /api/chat`
+
+and renders sources, tool activity, and reasoning as separate UI elements rather than a single markdown block.
+
 ### Gradio API
 
 The chat endpoint is exposed as `chat`, so the API flow is:

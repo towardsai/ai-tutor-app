@@ -14,7 +14,7 @@ except Exception:
 VECTOR_DB_DIR = "data/chroma-db-all_sources"
 VECTOR_COLLECTION_NAME = "chroma-db-all_sources"
 DOCUMENT_DICT_PATH = f"{VECTOR_DB_DIR}/document_dict_all_sources.pkl"
-DEFAULT_MODEL_NAME = "google-genai:gemini-flash-latest"
+DEFAULT_MODEL_NAME = "google-genai:gemini-3-flash-preview"
 
 AVAILABLE_SOURCES_UI = [
     "Transformers Docs",
@@ -23,7 +23,6 @@ AVAILABLE_SOURCES_UI = [
     "LlamaIndex Docs",
     "LangChain Docs",
     "OpenAI Cookbooks",
-    "Towards AI Blog",
     "8 Hour Primer",
     "Advanced LLM Developer",
     "Python Primer",
@@ -37,7 +36,6 @@ DEFAULT_SELECTED_SOURCES_UI = [
     "Advanced LLM Developer",
     "8 Hour Primer",
     "Python Primer",
-    "Towards AI Blog",
     "Transformers Docs",
     "PEFT Docs",
     "TRL Docs",
@@ -53,7 +51,6 @@ AVAILABLE_SOURCES = [
     "llama_index",
     "langchain",
     "openai_cookbooks",
-    "tai_blog",
     "8-hour_primer",
     "llm_developer",
     "python_primer",
@@ -68,13 +65,22 @@ SOURCE_UI_TO_KEY = {
     "LlamaIndex Docs": "llama_index",
     "LangChain Docs": "langchain",
     "OpenAI Cookbooks": "openai_cookbooks",
-    "Towards AI Blog": "tai_blog",
     "8 Hour Primer": "8-hour_primer",
     "Advanced LLM Developer": "llm_developer",
     "Python Primer": "python_primer",
     "Master AI For Work": "master_ai_for_work",
     "Agentic AI Engineering": "agentic_ai_engineering",
 }
+
+COURSE_SOURCE_KEYS = frozenset(
+    {
+        "8-hour_primer",
+        "llm_developer",
+        "python_primer",
+        "master_ai_for_work",
+        "agentic_ai_engineering",
+    }
+)
 
 SOURCE_KEY_TO_LABEL = {value: key for key, value in SOURCE_UI_TO_KEY.items()}
 DEFAULT_SELECTED_SOURCE_KEYS = tuple(
@@ -110,6 +116,7 @@ mongo_db = (
 __all__ = [
     "AVAILABLE_SOURCES",
     "AVAILABLE_SOURCES_UI",
+    "COURSE_SOURCE_KEYS",
     "DEFAULT_SELECTED_SOURCE_KEYS",
     "DEFAULT_SELECTED_SOURCES_UI",
     "CONCURRENCY_COUNT",

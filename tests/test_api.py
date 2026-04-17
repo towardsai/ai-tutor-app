@@ -26,15 +26,39 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
 
-    def test_list_sources(self) -> None:
+    def test_list_tools(self) -> None:
         with TestClient(app) as client:
-            response = client.get("/api/sources")
+            response = client.get("/api/tools")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertIn("sources", body)
-        self.assertTrue(body["sources"])
-        self.assertTrue(any(item["selectedByDefault"] for item in body["sources"]))
+        self.assertIn("tools", body)
+        tools = body["tools"]
+        retrieval = next(tool for tool in tools if tool["key"] == "retrieval")
+        self.assertEqual(retrieval["kind"], "configurable")
+        self.assertTrue(retrieval["sources"])
+        self.assertTrue(
+            any(source["selectedByDefault"] for source in retrieval["sources"])
+        )
+        self.assertTrue(
+            all(source["group"] in {"courses", "docs"} for source in retrieval["sources"])
+        )
+        # Gemini is the default model, so web search + url reading are present.
+        tool_keys = {tool["key"] for tool in tools}
+        self.assertIn("web_search", tool_keys)
+        self.assertIn("url_context", tool_keys)
+
+    def test_list_tools_for_non_gemini_model(self) -> None:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/tools", params={"model": "anthropic:claude-sonnet-4-6"}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        tool_keys = {tool["key"] for tool in response.json()["tools"]}
+        self.assertIn("retrieval", tool_keys)
+        self.assertNotIn("web_search", tool_keys)
+        self.assertNotIn("url_context", tool_keys)
 
     def test_chat_stream_returns_ai_sdk_parts(self) -> None:
         async def fake_stream_chat(request):
@@ -155,6 +179,52 @@ class ApiTestCase(unittest.TestCase):
         parts = [json.loads(item) for item in payloads[:-1]]
         self.assertEqual(parts[0]["type"], "error")
         self.assertEqual(parts[0]["errorText"], "backend failed")
+
+    def test_chat_stream_restarts_reasoning_after_tool_activity(self) -> None:
+        async def fake_stream_chat(_request):
+            yield ChatEvent("message_started", {"message_id": "message_1"})
+            yield ChatEvent("reasoning_delta", {"message_id": "message_1", "text": "First thought"})
+            yield ChatEvent(
+                "tool_call_started",
+                {
+                    "message_id": "message_1",
+                    "call_id": "call_1",
+                    "tool_name": "retrieve_tutor_context",
+                    "args": {"query": "What is RAG?"},
+                    "args_text": "What is RAG?",
+                },
+            )
+            yield ChatEvent(
+                "tool_call_completed",
+                {
+                    "message_id": "message_1",
+                    "call_id": "call_1",
+                    "output_text": "payload",
+                },
+            )
+            yield ChatEvent("reasoning_delta", {"message_id": "message_1", "text": "Second thought"})
+            yield ChatEvent("text_delta", {"message_id": "message_1", "text": "Final answer"})
+            yield ChatEvent(
+                "message_completed",
+                {
+                    "message_id": "message_1",
+                    "answer": "Final answer",
+                },
+            )
+
+        with patch("scripts.api.stream_chat", fake_stream_chat):
+            with TestClient(app) as client:
+                with client.stream("POST", "/api/chat", json={"query": "Hello"}) as response:
+                    body = "".join(response.iter_text())
+
+        self.assertEqual(response.status_code, 200)
+        payloads = parse_sse_payloads(body)
+        parts = [json.loads(item) for item in payloads[:-1]]
+        part_types = [part["type"] for part in parts]
+
+        self.assertEqual(part_types.count("reasoning-start"), 2)
+        self.assertEqual(part_types.count("reasoning-end"), 2)
+        self.assertLess(part_types.index("tool-input-start"), part_types.index("text-start"))
 
 
 if __name__ == "__main__":

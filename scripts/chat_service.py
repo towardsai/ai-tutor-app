@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import logfire
 from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
 from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 from langchain_openai import ChatOpenAI
@@ -53,7 +54,21 @@ def get_retriever() -> LocalChromaRetriever:
     )
 
 
-@tool
+RETRIEVE_TUTOR_CONTEXT_SCHEMA = {
+    "title": "retrieve_tutor_context",
+    "description": "Retrieve relevant course and documentation context for an AI tutor question.",
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "The question or topic to search for in the course and documentation corpus.",
+        },
+    },
+    "required": ["query"],
+}
+
+
+@tool(args_schema=RETRIEVE_TUTOR_CONTEXT_SCHEMA)
 def retrieve_tutor_context(query: str, runtime: ToolRuntime[AppContext]) -> str:
     """Retrieve relevant course and documentation context for an AI tutor question."""
     results = get_retriever().search(
@@ -202,18 +217,15 @@ def sync_thread_with_history(
         state.values.get("messages", [])
     )
 
+    if checkpoint_history == history:
+        return thread_id
+
     if not checkpoint_history:
         restored_messages = history_to_langgraph_messages(history)
         if restored_messages:
             agent.update_state(
                 thread_config(thread_id), {"messages": restored_messages}
             )
-        return thread_id
-
-    if not history:
-        return thread_id
-
-    if checkpoint_history == history:
         return thread_id
 
     branched_thread_id = new_thread_id()
@@ -336,16 +348,111 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
     )
 
 
+class GeminiServerSideToolsMiddleware(AgentMiddleware):
+    """Enable server-side tool invocation for Gemini 3 tool combinations.
+
+    Combining built-in tools (e.g. `google_search`, `url_context`) with
+    user-defined function declarations requires
+    `include_server_side_tool_invocations=True` on Gemini's `ToolConfig`.
+    We inject it via `model_settings` so it flows through LangChain's
+    `bind_tools(..., tool_config=...)` path.
+    """
+
+    def _inject(self, request):
+        existing = request.model_settings.get("tool_config") or {}
+        if isinstance(existing, dict):
+            next_tool_config: Any = {
+                **existing,
+                "include_server_side_tool_invocations": True,
+            }
+        else:
+            next_tool_config = existing
+        new_settings = {**request.model_settings, "tool_config": next_tool_config}
+        return request.override(model_settings=new_settings)
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._inject(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._inject(request))
+
+
 @lru_cache(maxsize=8)
 def build_agent(model_name: str, include_thoughts: bool = False):
     model = build_chat_model(model_name, include_thoughts=include_thoughts)
+    tools: list[Any] = [retrieve_tutor_context]
+    middleware: list[AgentMiddleware] = []
+    if is_google_genai_model(model_name):
+        tools.append({"google_search": {}})
+        tools.append({"url_context": {}})
+        middleware.append(GeminiServerSideToolsMiddleware())
     return create_agent(
         model=model,
-        tools=[retrieve_tutor_context],
+        tools=tools,
         system_prompt=system_message_openai_agent,
         context_schema=AppContext,
         checkpointer=CHECKPOINTER,
+        middleware=middleware,
     )
+
+
+def extract_web_search_queries(response_metadata: Any) -> list[str]:
+    """Pull the queries Gemini ran against google_search from grounding metadata."""
+    if not isinstance(response_metadata, dict):
+        return []
+    grounding = response_metadata.get("grounding_metadata") or {}
+    queries = grounding.get("web_search_queries") or []
+    return [str(q).strip() for q in queries if isinstance(q, str) and str(q).strip()]
+
+
+def extract_grounding_source_matches(
+    response_metadata: Any,
+    matches_by_doc_id: dict[str, SourceMatch],
+) -> list[SourceMatch]:
+    """Turn Gemini grounding metadata into source matches (deduped by URI)."""
+    if not isinstance(response_metadata, dict):
+        return []
+    grounding = response_metadata.get("grounding_metadata") or {}
+    chunks = grounding.get("grounding_chunks") or []
+    if not chunks:
+        return []
+
+    confidence_by_index: dict[int, float] = {}
+    for support in grounding.get("grounding_supports") or []:
+        indices = support.get("grounding_chunk_indices") or []
+        scores = support.get("confidence_scores") or []
+        for idx, score in zip(indices, scores):
+            if not isinstance(idx, int):
+                continue
+            numeric = float(score) if isinstance(score, (int, float)) else 0.0
+            if numeric > confidence_by_index.get(idx, 0.0):
+                confidence_by_index[idx] = numeric
+
+    updated: list[SourceMatch] = []
+    for idx, chunk in enumerate(chunks):
+        web = (chunk or {}).get("web") or {}
+        uri = str(web.get("uri") or "").strip()
+        if not uri:
+            continue
+        title = str(web.get("title") or uri).strip()
+        doc_id = f"google_search::{uri}"
+        if doc_id in matches_by_doc_id:
+            continue
+        score = confidence_by_index.get(idx, 1.0)
+        source_match = SourceMatch(
+            doc_id=doc_id,
+            title=title,
+            url=uri,
+            source_key="google_search",
+            source_label="Web",
+            score=score,
+        )
+        matches_by_doc_id[doc_id] = source_match
+        updated.append(source_match)
+    return updated
+
+
+GOOGLE_SEARCH_TOOL_NAME = "google_search"
 
 
 async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
@@ -358,6 +465,9 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     include_reasoning = bool(request.include_reasoning) and is_google_genai_model(
         request.model_name
     )
+    google_search_call_id = ""
+    google_search_queries: list[str] = []
+    google_search_match_count = 0
 
     logfire.info("Running query", query=request.query)
     agent = build_agent(request.model_name, include_thoughts=include_reasoning)
@@ -427,6 +537,46 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                         "text": text_delta,
                     },
                 )
+
+            token_metadata = getattr(token, "response_metadata", None)
+            new_queries = [
+                q
+                for q in extract_web_search_queries(token_metadata)
+                if q not in google_search_queries
+            ]
+            new_grounding = extract_grounding_source_matches(
+                token_metadata,
+                matches_by_doc_id,
+            )
+            if (new_queries or new_grounding) and not google_search_call_id:
+                google_search_call_id = uuid4().hex
+                yield ChatEvent(
+                    "tool_call_started",
+                    {
+                        "message_id": message_id,
+                        "call_id": google_search_call_id,
+                        "tool_name": GOOGLE_SEARCH_TOOL_NAME,
+                        "args": {"query": "; ".join(new_queries) if new_queries else ""},
+                        "args_text": "; ".join(new_queries),
+                    },
+                )
+            if new_queries:
+                google_search_queries.extend(new_queries)
+            for source_match in new_grounding:
+                google_search_match_count += 1
+                yield ChatEvent(
+                    "source_match",
+                    {
+                        "message_id": message_id,
+                        "doc_id": source_match.doc_id,
+                        "title": source_match.title,
+                        "url": source_match.url,
+                        "source_key": source_match.source_key,
+                        "source_label": source_match.source_label,
+                        "score": source_match.score,
+                        "call_id": google_search_call_id,
+                    },
+                )
             continue
 
         if chunk["type"] != "updates":
@@ -478,9 +628,71 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
 
             if step != "model" or getattr(message, "type", None) != "ai":
                 continue
+
+            message_metadata = getattr(message, "response_metadata", None)
+            new_queries = [
+                q
+                for q in extract_web_search_queries(message_metadata)
+                if q not in google_search_queries
+            ]
+            new_grounding = extract_grounding_source_matches(
+                message_metadata,
+                matches_by_doc_id,
+            )
+            if (new_queries or new_grounding) and not google_search_call_id:
+                google_search_call_id = uuid4().hex
+                yield ChatEvent(
+                    "tool_call_started",
+                    {
+                        "message_id": message_id,
+                        "call_id": google_search_call_id,
+                        "tool_name": GOOGLE_SEARCH_TOOL_NAME,
+                        "args": {"query": "; ".join(new_queries) if new_queries else ""},
+                        "args_text": "; ".join(new_queries),
+                    },
+                )
+            if new_queries:
+                google_search_queries.extend(new_queries)
+            for source_match in new_grounding:
+                google_search_match_count += 1
+                yield ChatEvent(
+                    "source_match",
+                    {
+                        "message_id": message_id,
+                        "doc_id": source_match.doc_id,
+                        "title": source_match.title,
+                        "url": source_match.url,
+                        "source_key": source_match.source_key,
+                        "source_label": source_match.source_label,
+                        "score": source_match.score,
+                        "call_id": google_search_call_id,
+                    },
+                )
+
             if getattr(message, "tool_calls", None):
                 continue
             completed_answer = message_content_to_text(message.content)
+
+    if google_search_call_id:
+        joined_queries = "; ".join(google_search_queries)
+        if google_search_match_count == 0:
+            output_text = "Google search ran but returned no grounding results."
+        else:
+            plural = "" if google_search_match_count == 1 else "s"
+            output_text = (
+                f"Google search returned {google_search_match_count} web result{plural}."
+            )
+        yield ChatEvent(
+            "tool_call_completed",
+            {
+                "message_id": message_id,
+                "call_id": google_search_call_id,
+                "tool_name": GOOGLE_SEARCH_TOOL_NAME,
+                "args": {"query": joined_queries},
+                "args_text": joined_queries,
+                "output_text": output_text,
+            },
+        )
 
     answer = "".join(answer_chunks).strip() or completed_answer.strip()
     yield ChatEvent(

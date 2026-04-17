@@ -2,19 +2,28 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 from uuid import uuid4
 
+import logfire
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .chat_service import message_content_to_text, stream_chat
+from .chat_service import (
+    get_retriever,
+    is_google_genai_model,
+    message_content_to_text,
+    stream_chat,
+)
 from .chat_types import ChatEvent, ChatRequest, ChatTurn
 from .setup import (
+    AVAILABLE_SOURCES,
     AVAILABLE_SOURCES_UI,
+    COURSE_SOURCE_KEYS,
     DEFAULT_MODEL_NAME,
     DEFAULT_SELECTED_SOURCE_KEYS,
     DEFAULT_SELECTED_SOURCES_UI,
@@ -42,7 +51,40 @@ def parse_cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()] or ["*"]
 
 
-app = FastAPI(title="AI Tutor API")
+def parse_bind_port() -> int:
+    raw = os.getenv("AI_TUTOR_API_PORT") or os.getenv("PORT") or "8000"
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid API port: {raw!r}") from exc
+
+
+def parse_bind_host() -> str:
+    return (os.getenv("AI_TUTOR_API_HOST") or os.getenv("HOST") or "0.0.0.0").strip()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Warm up the Chroma retriever before serving any requests.
+
+    LangGraph's ToolNode runs sync tools in a threadpool, and parallel
+    `retrieve_tutor_context` calls can race into `PersistentClient(...)`
+    at the same time on the first turn. That race occasionally surfaces
+    `Could not connect to tenant default_tenant`. Touching the retriever
+    at startup forces single-threaded tenant init.
+    """
+    if os.environ.get("COHERE_API_KEY"):
+        try:
+            get_retriever()
+        except Exception as exc:  # pragma: no cover - diagnostic logging only
+            logfire.warn(
+                "Retriever warm-up failed; first retrieval call may retry.",
+                error=str(exc),
+            )
+    yield
+
+
+app = FastAPI(title="AI Tutor API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=parse_cors_origins(),
@@ -94,7 +136,13 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
     if not query:
         raise HTTPException(status_code=422, detail="query is required")
 
-    source_keys = tuple(payload.sourceKeys or DEFAULT_SELECTED_SOURCE_KEYS)
+    allowed_source_keys = set(AVAILABLE_SOURCES)
+    requested_source_keys = payload.sourceKeys or list(DEFAULT_SELECTED_SOURCE_KEYS)
+    source_keys = tuple(
+        dict.fromkeys(
+            key for key in requested_source_keys if key in allowed_source_keys
+        )
+    ) or DEFAULT_SELECTED_SOURCE_KEYS
     return ChatRequest(
         query=query,
         history=history,
@@ -109,9 +157,17 @@ class UIMessageStreamEncoder:
     def __init__(self) -> None:
         self.message_id = ""
         self.text_block_id = ""
-        self.reasoning_block_ids: dict[str, str] = {}
+        self.active_reasoning_id = ""
         self.source_matches_by_call_id: dict[str, list[dict[str, Any]]] = {}
         self.closed = False
+
+    def close_reasoning_block(self) -> list[dict[str, Any]]:
+        if not self.active_reasoning_id:
+            return []
+
+        parts = [{"type": "reasoning-end", "id": self.active_reasoning_id}]
+        self.active_reasoning_id = ""
+        return parts
 
     def encode(self, event: ChatEvent) -> list[dict[str, Any]]:
         parts: list[dict[str, Any]] = []
@@ -127,11 +183,13 @@ class UIMessageStreamEncoder:
 
         if event.type == "message_started":
             self.message_id = str(event.data.get("message_id", uuid4().hex))
+            self.active_reasoning_id = ""
             parts.append({"type": "start", "messageId": self.message_id})
             parts.append({"type": "start-step"})
             return parts
 
         if event.type == "text_delta":
+            parts.extend(self.close_reasoning_block())
             if not self.text_block_id:
                 self.text_block_id = f"text_{self.message_id or uuid4().hex}"
                 parts.append({"type": "text-start", "id": self.text_block_id})
@@ -145,22 +203,20 @@ class UIMessageStreamEncoder:
             return parts
 
         if event.type == "reasoning_delta":
-            step = str(event.data.get("step", "")) or "default"
-            reasoning_id = self.reasoning_block_ids.get(step)
-            if reasoning_id is None:
-                reasoning_id = f"reasoning_{step}_{uuid4().hex[:8]}"
-                self.reasoning_block_ids[step] = reasoning_id
-                parts.append({"type": "reasoning-start", "id": reasoning_id})
+            if not self.active_reasoning_id:
+                self.active_reasoning_id = f"reasoning_{uuid4().hex[:8]}"
+                parts.append({"type": "reasoning-start", "id": self.active_reasoning_id})
             parts.append(
                 {
                     "type": "reasoning-delta",
-                    "id": reasoning_id,
+                    "id": self.active_reasoning_id,
                     "delta": str(event.data.get("text", "")),
                 }
             )
             return parts
 
         if event.type == "tool_call_started":
+            parts.extend(self.close_reasoning_block())
             call_id = str(event.data.get("call_id", uuid4().hex))
             tool_name = str(event.data.get("tool_name", "tool"))
             parts.append(
@@ -223,6 +279,7 @@ class UIMessageStreamEncoder:
             return parts
 
         if event.type == "tool_call_completed":
+            parts.extend(self.close_reasoning_block())
             call_id = str(event.data.get("call_id", uuid4().hex))
             output = {
                 "text": str(event.data.get("output_text", "")),
@@ -238,6 +295,7 @@ class UIMessageStreamEncoder:
             return parts
 
         if event.type == "message_completed":
+            parts.extend(self.close_reasoning_block())
             answer = str(event.data.get("answer", "")).strip()
             if answer and not self.text_block_id:
                 self.text_block_id = f"text_{self.message_id or uuid4().hex}"
@@ -248,11 +306,9 @@ class UIMessageStreamEncoder:
                         "id": self.text_block_id,
                         "delta": answer,
                     }
-                )
+            )
             if self.text_block_id:
                 parts.append({"type": "text-end", "id": self.text_block_id})
-            for reasoning_id in self.reasoning_block_ids.values():
-                parts.append({"type": "reasoning-end", "id": reasoning_id})
             parts.append({"type": "finish-step"})
             parts.append({"type": "finish"})
             self.closed = True
@@ -263,10 +319,9 @@ class UIMessageStreamEncoder:
     def finish_error(self, error_text: str) -> list[dict[str, Any]]:
         parts: list[dict[str, Any]] = [{"type": "error", "errorText": error_text}]
         if not self.closed:
+            parts.extend(self.close_reasoning_block())
             if self.text_block_id:
                 parts.append({"type": "text-end", "id": self.text_block_id})
-            for reasoning_id in self.reasoning_block_ids.values():
-                parts.append({"type": "reasoning-end", "id": reasoning_id})
             if self.message_id:
                 parts.append({"type": "finish-step"})
                 parts.append({"type": "finish"})
@@ -279,19 +334,55 @@ def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/sources")
-def list_sources() -> dict[str, Any]:
+def _source_entries() -> list[dict[str, Any]]:
     defaults = set(DEFAULT_SELECTED_SOURCES_UI)
-    return {
-        "sources": [
+    entries: list[dict[str, Any]] = []
+    for label in AVAILABLE_SOURCES_UI:
+        key = SOURCE_UI_TO_KEY[label]
+        entries.append(
             {
                 "label": label,
-                "key": SOURCE_UI_TO_KEY[label],
+                "key": key,
+                "group": "courses" if key in COURSE_SOURCE_KEYS else "docs",
                 "selectedByDefault": label in defaults,
             }
-            for label in AVAILABLE_SOURCES_UI
-        ]
+        )
+    return entries
+
+
+def _tool_catalog(model_name: str) -> list[dict[str, Any]]:
+    retrieval_tool: dict[str, Any] = {
+        "key": "retrieval",
+        "label": "Retrieval",
+        "kind": "configurable",
+        "active": True,
+        "sources": _source_entries(),
     }
+    tools: list[dict[str, Any]] = [retrieval_tool]
+    if is_google_genai_model(model_name):
+        tools.append(
+            {
+                "key": "web_search",
+                "label": "Web search",
+                "kind": "toggle",
+                "active": True,
+            }
+        )
+        tools.append(
+            {
+                "key": "url_context",
+                "label": "URL reading",
+                "kind": "toggle",
+                "active": True,
+            }
+        )
+    return tools
+
+
+@app.get("/api/tools")
+def list_tools(model: str | None = None) -> dict[str, Any]:
+    model_name = (model or DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
+    return {"model": model_name, "tools": _tool_catalog(model_name)}
 
 
 @app.post("/api/chat")
@@ -327,4 +418,9 @@ async def chat(payload: ApiChatRequest) -> StreamingResponse:
 
 
 if __name__ == "__main__":
-    uvicorn.run("scripts.api:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(
+        "scripts.api:app",
+        host=parse_bind_host(),
+        port=parse_bind_port(),
+        reload=False,
+    )

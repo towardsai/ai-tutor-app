@@ -164,6 +164,11 @@ cython_debug/
 .vscode/
 data/chroma-db**/
 evaluation_data/chroma-db**/
+node_modules/
+.next/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
 
 .huggingface
 
