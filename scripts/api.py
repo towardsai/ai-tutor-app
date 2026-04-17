@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
@@ -336,19 +337,40 @@ def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
 
 
+SOURCE_VERSIONS_PATH = Path("data/source_versions.json")
+
+
+def _load_source_versions() -> dict[str, dict[str, Any]]:
+    if not SOURCE_VERSIONS_PATH.exists():
+        return {}
+    try:
+        with SOURCE_VERSIONS_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+_SOURCE_VERSIONS: dict[str, dict[str, Any]] = _load_source_versions()
+
+
 def _source_entries() -> list[dict[str, Any]]:
     defaults = set(DEFAULT_SELECTED_SOURCES_UI)
     entries: list[dict[str, Any]] = []
     for label in AVAILABLE_SOURCES_UI:
         key = SOURCE_UI_TO_KEY[label]
-        entries.append(
-            {
-                "label": label,
-                "key": key,
-                "group": "courses" if key in COURSE_SOURCE_KEYS else "docs",
-                "selectedByDefault": label in defaults,
-            }
-        )
+        group = "courses" if key in COURSE_SOURCE_KEYS else "docs"
+        entry: dict[str, Any] = {
+            "label": label,
+            "key": key,
+            "group": group,
+            "selectedByDefault": label in defaults,
+        }
+        if group == "docs":
+            version_info = _SOURCE_VERSIONS.get(key, {})
+            entry["version"] = version_info.get("version")
+            entry["indexedAt"] = version_info.get("indexedAt")
+        entries.append(entry)
     return entries
 
 

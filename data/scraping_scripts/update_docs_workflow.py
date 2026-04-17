@@ -179,6 +179,20 @@ def download_from_github(sources: List[str]) -> None:
         logger.info(f"Successfully downloaded {source} documentation")
 
 
+def capture_source_versions(sources: List[str]) -> None:
+    """Record latest release tag + SHA + indexed date per source."""
+    logger.info(f"Capturing source versions for: {sources}")
+    result = run_module(
+        "data.scraping_scripts.capture_source_versions", "--sources", *sources
+    )
+    if result.returncode != 0:
+        logger.warning(
+            "Version capture finished with non-zero exit; continuing workflow."
+        )
+    else:
+        logger.info("Source versions captured successfully")
+
+
 def process_markdown_files(sources: List[str]) -> None:
     """Process markdown files for specific sources."""
     logger.info(f"Processing markdown files for sources: {sources}")
@@ -396,6 +410,7 @@ def main():
     # Execute the workflow steps
     if not args.skip_download:
         download_from_github(args.sources)
+        capture_source_versions(args.sources)
 
     if not args.skip_process:
         process_markdown_files(args.sources)

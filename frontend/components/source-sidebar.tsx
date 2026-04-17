@@ -22,6 +22,7 @@ import {
 } from "react";
 import type { TutorSource, TutorTool } from "@/lib/api";
 import { COURSE_METADATA } from "@/lib/course-metadata";
+import { DOC_METADATA } from "@/lib/doc-metadata";
 
 type SourceSidebarProps = {
   onNewChat: () => void;
@@ -272,6 +273,43 @@ function SourceGroup({
   );
 }
 
+type PopoverInfo = {
+  description: string;
+  linkUrl: string;
+  linkLabel: string;
+  meta?: string;
+};
+
+function formatIndexedMonth(isoDate: string | null | undefined): string | null {
+  if (!isoDate) return null;
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString("en-US", { month: "short", year: "numeric" });
+}
+
+function getPopoverInfo(source: TutorSource): PopoverInfo | undefined {
+  if (source.group === "courses") {
+    const meta = COURSE_METADATA[source.key];
+    if (!meta) return undefined;
+    return {
+      description: meta.description,
+      linkUrl: meta.academyUrl,
+      linkLabel: "View on Academy",
+    };
+  }
+  const meta = DOC_METADATA[source.key];
+  if (!meta) return undefined;
+  const indexedMonth = formatIndexedMonth(source.indexedAt);
+  const metaParts = [source.version, indexedMonth ? `indexed ${indexedMonth}` : null]
+    .filter((part): part is string => Boolean(part));
+  return {
+    description: meta.description,
+    linkUrl: meta.docsUrl,
+    linkLabel: "View docs",
+    meta: metaParts.length > 0 ? metaParts.join(" · ") : undefined,
+  };
+}
+
 function SourceRow({
   source,
   selected,
@@ -286,7 +324,7 @@ function SourceRow({
   onPopoverToggle: () => void;
 }) {
   const isCourse = source.group === "courses";
-  const metadata = isCourse ? COURSE_METADATA[source.key] : undefined;
+  const popover = getPopoverInfo(source);
 
   return (
     <div className="relative">
@@ -321,7 +359,7 @@ function SourceRow({
             {formatSourceLabel(source.label)}
           </span>
         </button>
-        {metadata ? (
+        {popover ? (
           <button
             type="button"
             onClick={onPopoverToggle}
@@ -330,7 +368,9 @@ function SourceRow({
             className={clsx(
               "flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition",
               selected
-                ? "text-white/80 hover:bg-white/15 hover:text-white"
+                ? isCourse
+                  ? "text-white/80 hover:bg-white/15 hover:text-white"
+                  : "text-[var(--accent)] hover:bg-[var(--accent-soft)]"
                 : "text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]",
             )}
           >
@@ -340,21 +380,26 @@ function SourceRow({
           <span className="h-5 w-5 shrink-0" aria-hidden />
         )}
       </div>
-      {metadata && popoverOpen ? (
+      {popover && popoverOpen ? (
         <div
           role="dialog"
           className="absolute left-0 right-0 top-full z-20 mt-1 rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
         >
           <p className="text-[12px] leading-[1.45] text-[var(--ink)]">
-            {metadata.description}
+            {popover.description}
           </p>
+          {popover.meta ? (
+            <p className="mt-1.5 text-[11px] font-medium tracking-[-0.005em] text-[var(--muted)]">
+              {popover.meta}
+            </p>
+          ) : null}
           <a
-            href={metadata.academyUrl}
+            href={popover.linkUrl}
             target="_blank"
             rel="noreferrer"
             className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-semibold text-[var(--accent)] hover:underline"
           >
-            View on Academy
+            {popover.linkLabel}
             <ExternalLink className="h-3 w-3" />
           </a>
         </div>
