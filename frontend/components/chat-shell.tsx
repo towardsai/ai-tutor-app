@@ -754,12 +754,12 @@ const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
   {
     title: "LLM crash course",
     prompt:
-      "I'm new to LLMs — what are the core concepts I need to understand before I start building anything?",
+      "I'm new to LLMs. What are the core concepts I need to understand before I start building anything?",
   },
   {
     title: "Python for AI",
     prompt:
-      "I'm new to Python — what's the minimum I need to know to start building AI apps?",
+      "I'm new to Python. What's the minimum I need to know to start building AI apps?",
   },
   {
     title: "First OpenAI API call",
@@ -786,7 +786,7 @@ const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
   {
     title: "ChatGPT vs Claude vs Gemini",
     prompt:
-      "I'm not technical — how do I pick between ChatGPT, Claude, and Gemini for my work?",
+      "I'm not technical. How do I pick between ChatGPT, Claude, and Gemini for my work?",
   },
   {
     title: "Spot AI use cases",
