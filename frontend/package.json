@@ -13,11 +13,13 @@
     "@ai-sdk/react": "^3.0.164",
     "ai": "^6.0.162",
     "clsx": "^2.1.1",
+    "highlight.js": "^11.11.1",
     "lucide-react": "^0.511.0",
     "next": "^16.2.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "highlight.js/styles/atom-one-dark.css";
 
 :root {
   --font-sans:
@@ -365,6 +366,11 @@ textarea {
   background: transparent;
   padding: 0;
   color: inherit;
+}
+
+.markdown-block pre code.hljs {
+  background: transparent;
+  padding: 0;
 }
 
 .markdown-block blockquote {

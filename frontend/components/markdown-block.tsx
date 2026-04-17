@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
 type MarkdownBlockProps = {
@@ -14,6 +15,7 @@ export function MarkdownBlock({
     <div className={`markdown-block ${className}`.trim()}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
         components={{
           a: ({ ...props }) => (
             <a
