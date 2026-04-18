@@ -45,6 +45,7 @@ class ApiChatRequest(BaseModel):
     history: list[ApiChatTurn] = Field(default_factory=list)
     messages: list[dict[str, Any]] | None = None
     sourceKeys: list[str] | None = None
+    enabledTools: list[str] | None = None
     model: str | None = None
     includeReasoning: bool = True
     threadId: str = ""
@@ -147,13 +148,32 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
             key for key in requested_source_keys if key in allowed_source_keys
         )
     ) or DEFAULT_SELECTED_SOURCE_KEYS
+    model_name = (payload.model or DEFAULT_MODEL_NAME).strip()
+    if payload.enabledTools is None:
+        enabled_tools = tuple(
+            tool["key"]
+            for tool in _tool_catalog(model_name)
+            if tool["kind"] == "toggle"
+        )
+    else:
+        allowed_tool_keys = {
+            tool["key"]
+            for tool in _tool_catalog(model_name)
+            if tool["kind"] == "toggle"
+        }
+        enabled_tools = tuple(
+            dict.fromkeys(
+                key for key in payload.enabledTools if key in allowed_tool_keys
+            )
+        )
     return ChatRequest(
         query=query,
         history=history,
         source_keys=source_keys,
-        model_name=(payload.model or DEFAULT_MODEL_NAME).strip(),
+        model_name=model_name,
         include_reasoning=bool(payload.includeReasoning),
         thread_id=(payload.threadId or "").strip(),
+        enabled_tools=enabled_tools,
     )
 
 
@@ -378,7 +398,7 @@ def _source_entries() -> list[dict[str, Any]]:
 def _tool_catalog(model_name: str) -> list[dict[str, Any]]:
     retrieval_tool: dict[str, Any] = {
         "key": "retrieval",
-        "label": "Retrieval",
+        "label": "Knowledge base",
         "kind": "configurable",
         "active": True,
         "sources": _source_entries(),

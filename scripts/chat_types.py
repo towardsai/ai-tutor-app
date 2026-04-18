@@ -28,6 +28,7 @@ class ChatRequest:
     model_name: str = ""
     include_reasoning: bool = False
     thread_id: str = ""
+    enabled_tools: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

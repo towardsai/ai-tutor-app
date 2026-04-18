@@ -40,6 +40,7 @@ export function ChatShell() {
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [selectedSourceKeys, setSelectedSourceKeys] = useState<string[]>([]);
+  const [enabledToolKeys, setEnabledToolKeys] = useState<string[]>([]);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [threadId, setThreadId] = useState("");
@@ -99,6 +100,11 @@ export function ChatShell() {
               .map((source) => source.key),
           );
         }
+        setEnabledToolKeys(
+          loadedTools
+            .filter((tool) => tool.kind === "toggle" && tool.active)
+            .map((tool) => tool.key),
+        );
         setSourceError(null);
       } catch (loadError) {
         if (controller.signal.aborted) {
@@ -133,6 +139,11 @@ export function ChatShell() {
           await fetchTools(controller.signal, selectedModel);
         setTools(loadedTools);
         setAvailableModels(models ?? []);
+        setEnabledToolKeys(
+          loadedTools
+            .filter((tool) => tool.kind === "toggle" && tool.active)
+            .map((tool) => tool.key),
+        );
       } catch (loadError) {
         if (controller.signal.aborted) {
           return;
@@ -254,6 +265,7 @@ export function ChatShell() {
       {
         body: {
           sourceKeys: selectedSourceKeys,
+          enabledTools: enabledToolKeys,
           includeReasoning: true,
           threadId,
           model: selectedModel,
@@ -331,6 +343,7 @@ export function ChatShell() {
       {
         body: {
           sourceKeys: selectedSourceKeys,
+          enabledTools: enabledToolKeys,
           includeReasoning: true,
           threadId,
           model: selectedModel,
@@ -360,13 +373,23 @@ export function ChatShell() {
     );
   }
 
+  function toggleTool(toolKey: string) {
+    setEnabledToolKeys((current) =>
+      current.includes(toolKey)
+        ? current.filter((key) => key !== toolKey)
+        : [...current, toolKey],
+    );
+  }
+
   return (
     <main className="min-h-screen p-2 lg:h-screen lg:overflow-hidden">
       <div className="flex min-h-[calc(100vh-1rem)] w-full flex-col gap-2 lg:h-[calc(100vh-1rem)] lg:min-h-0 lg:grid lg:grid-cols-[248px_minmax(0,1fr)]">
         <SourceSidebar
           onNewChat={handleNewChat}
           onToggleSource={toggleSource}
+          onToggleTool={toggleTool}
           selectedSourceKeys={selectedSourceKeys}
+          enabledToolKeys={enabledToolKeys}
           sourceError={sourceError}
           tools={tools}
         />

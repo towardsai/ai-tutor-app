@@ -17,7 +17,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from .chat_types import ChatEvent, ChatRequest, ChatTurn, SourceMatch
 from .chroma_rag import LocalChromaRetriever, format_tool_payload, parse_tool_payload
-from .prompts import system_message_openai_agent
+from .prompts import build_system_prompt
 from .setup import (
     DOCUMENT_DICT_PATH,
     SOURCE_KEY_TO_LABEL,
@@ -383,34 +383,44 @@ class GeminiServerSideToolsMiddleware(AgentMiddleware):
         return await handler(self._inject(request))
 
 
-@lru_cache(maxsize=8)
-def build_agent(model_name: str, include_thoughts: bool = False):
+@lru_cache(maxsize=32)
+def build_agent(
+    model_name: str,
+    enabled_tools: tuple[str, ...] = (),
+    include_thoughts: bool = False,
+):
     model = build_chat_model(model_name, include_thoughts=include_thoughts)
     tools: list[Any] = [retrieve_tutor_context]
     middleware: list[AgentMiddleware] = []
+    enabled = set(enabled_tools)
     if is_google_genai_model(model_name):
-        tools.append({"google_search": {}})
-        tools.append({"url_context": {}})
-        middleware.append(GeminiServerSideToolsMiddleware())
+        if "web_search" in enabled:
+            tools.append({"google_search": {}})
+        if "url_context" in enabled:
+            tools.append({"url_context": {}})
+        if enabled & {"web_search", "url_context"}:
+            middleware.append(GeminiServerSideToolsMiddleware())
     elif is_anthropic_model(model_name):
-        tools.append(
-            {
-                "type": "web_search_20250305",
-                "name": "web_search",
-                "allowed_callers": ["direct"],
-            }
-        )
-        tools.append(
-            {
-                "type": "web_fetch_20260209",
-                "name": "web_fetch",
-                "allowed_callers": ["direct"],
-            }
-        )
+        if "web_search" in enabled:
+            tools.append(
+                {
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                    "allowed_callers": ["direct"],
+                }
+            )
+        if "web_fetch" in enabled:
+            tools.append(
+                {
+                    "type": "web_fetch_20260209",
+                    "name": "web_fetch",
+                    "allowed_callers": ["direct"],
+                }
+            )
     return create_agent(
         model=model,
         tools=tools,
-        system_prompt=system_message_openai_agent,
+        system_prompt=build_system_prompt(model_name, enabled_tools),
         context_schema=AppContext,
         checkpointer=CHECKPOINTER,
         middleware=middleware,
@@ -604,7 +614,11 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     google_search_match_count = 0
 
     logfire.info("Running query", query=request.query)
-    agent = build_agent(request.model_name, include_thoughts=include_reasoning)
+    agent = build_agent(
+        request.model_name,
+        enabled_tools=tuple(request.enabled_tools),
+        include_thoughts=include_reasoning,
+    )
     active_thread_id = sync_thread_with_history(
         agent,
         request.thread_id.strip() or new_thread_id(),

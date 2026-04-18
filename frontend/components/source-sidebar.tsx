@@ -15,11 +15,13 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ComponentType,
   type SVGProps,
 } from "react";
+import { createPortal } from "react-dom";
 import type { TutorSource, TutorTool } from "@/lib/api";
 import { COURSE_METADATA } from "@/lib/course-metadata";
 import { DOC_METADATA } from "@/lib/doc-metadata";
@@ -27,25 +29,42 @@ import { DOC_METADATA } from "@/lib/doc-metadata";
 type SourceSidebarProps = {
   onNewChat: () => void;
   onToggleSource: (sourceKey: string) => void;
+  onToggleTool: (toolKey: string) => void;
   selectedSourceKeys: string[];
+  enabledToolKeys: string[];
   sourceError: string | null;
   tools: TutorTool[];
 };
 
 type ToggleToolMeta = {
   icon: ComponentType<SVGProps<SVGSVGElement>>;
+  description?: string;
 };
 
 const TOGGLE_TOOL_META: Record<string, ToggleToolMeta> = {
-  web_search: { icon: Globe },
-  url_context: { icon: LinkIcon },
-  web_fetch: { icon: LinkIcon },
+  web_search: {
+    icon: Globe,
+    description:
+      "Live web search for recent events or facts outside the course corpus.",
+  },
+  url_context: {
+    icon: LinkIcon,
+    description:
+      "Reads a specific URL you paste in the chat so the tutor can answer from its content.",
+  },
+  web_fetch: {
+    icon: LinkIcon,
+    description:
+      "Reads a specific URL you paste in the chat so the tutor can answer from its content.",
+  },
 };
 
 export function SourceSidebar({
   onNewChat,
   onToggleSource,
+  onToggleTool,
   selectedSourceKeys,
+  enabledToolKeys,
   sourceError,
   tools,
 }: SourceSidebarProps) {
@@ -59,8 +78,31 @@ export function SourceSidebar({
   );
   const activeCount =
     (retrievalTool && selectedSourceKeys.length > 0 ? 1 : 0) +
-    toggleTools.filter((tool) => tool.active).length;
+    toggleTools.filter((tool) => enabledToolKeys.includes(tool.key)).length;
   const totalCount = (retrievalTool ? 1 : 0) + toggleTools.length;
+  const [openToolInfoKey, setOpenToolInfoKey] = useState<string | null>(null);
+  const toggleToolsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (openToolInfoKey === null) return;
+    function onDocMouseDown(event: MouseEvent) {
+      if (
+        toggleToolsRef.current &&
+        !toggleToolsRef.current.contains(event.target as Node)
+      ) {
+        setOpenToolInfoKey(null);
+      }
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpenToolInfoKey(null);
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [openToolInfoKey]);
 
   return (
     <aside className="glass-panel relative overflow-hidden rounded-[1.5rem] p-2.5 lg:flex lg:min-h-0 lg:max-h-[calc(100vh-1rem)] lg:min-h-[calc(100vh-1rem)] lg:flex-col">
@@ -106,7 +148,7 @@ export function SourceSidebar({
             </span>
           </div>
           <p className="text-[11px] leading-[1.4] text-[var(--muted)]">
-            Choose which sources the tutor searches.
+            Toggle tools, pick sources.
           </p>
         </div>
 
@@ -118,8 +160,21 @@ export function SourceSidebar({
               onToggleSource={onToggleSource}
             />
           ) : null}
+        </div>
+        <div ref={toggleToolsRef} className="relative z-10 space-y-2 pr-0.5">
           {toggleTools.map((tool) => (
-            <ToggleToolRow key={tool.key} tool={tool} />
+            <ToggleToolRow
+              key={tool.key}
+              tool={tool}
+              enabled={enabledToolKeys.includes(tool.key)}
+              onToggle={() => onToggleTool(tool.key)}
+              infoOpen={openToolInfoKey === tool.key}
+              onInfoToggle={() =>
+                setOpenToolInfoKey((current) =>
+                  current === tool.key ? null : tool.key,
+                )
+              }
+            />
           ))}
         </div>
 
@@ -160,6 +215,7 @@ function RetrievalTool({
   const [isOpen, setIsOpen] = useState(true);
   const courseSources = tool.sources.filter((source) => source.group === "courses");
   const docSources = tool.sources.filter((source) => source.group === "docs");
+  const enabled = selectedSourceKeys.length > 0;
 
   return (
     <section className="space-y-1">
@@ -167,11 +223,33 @@ function RetrievalTool({
         type="button"
         onClick={() => setIsOpen((current) => !current)}
         aria-expanded={isOpen}
-        className="flex w-full items-center gap-2 rounded-[0.75rem] px-2 py-1.5 text-left transition hover:bg-[var(--surface-soft)]"
+        title="Expand to pick sources. On when at least one source is selected."
+        className={clsx(
+          "flex w-full items-center gap-2 rounded-[0.9rem] border px-2 py-2 text-left transition",
+          enabled
+            ? "border-[var(--line-strong)] bg-[var(--accent-faint)] hover:border-[var(--accent)]"
+            : "border-[var(--line)] bg-[var(--surface-subtle)] hover:border-[var(--line-strong)]",
+        )}
       >
-        <Library className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold tracking-[-0.01em] text-[var(--ink)]">
+        <Library
+          className={clsx(
+            "h-3.5 w-3.5 shrink-0",
+            enabled ? "text-[var(--accent)]" : "text-[var(--muted)]",
+          )}
+        />
+        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium tracking-[-0.01em] text-[var(--ink)]">
           {tool.label}
+        </span>
+        <span
+          aria-hidden
+          className={clsx(
+            "inline-flex items-center rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em]",
+            enabled
+              ? "bg-[var(--accent-faint)] text-[var(--accent)]"
+              : "bg-[var(--muted)]/15 text-[var(--muted)]",
+          )}
+        >
+          {enabled ? "on" : "off"}
         </span>
         <ChevronDown
           className={clsx(
@@ -226,10 +304,13 @@ function SourceGroup({
   useEffect(() => {
     if (openPopoverKey === null) return;
     function onDocMouseDown(event: MouseEvent) {
-      if (
-        groupRef.current &&
-        !groupRef.current.contains(event.target as Node)
-      ) {
+      const target = event.target as Node | null;
+      const insideGroup = !!groupRef.current && !!target && groupRef.current.contains(target);
+      const insidePortaledDialog =
+        !!target &&
+        target instanceof Element &&
+        !!target.closest('[data-source-popover="true"]');
+      if (!insideGroup && !insidePortaledDialog) {
         setOpenPopoverKey(null);
       }
     }
@@ -325,9 +406,35 @@ function SourceRow({
 }) {
   const isCourse = source.group === "courses";
   const popover = getPopoverInfo(source);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [dialogPos, setDialogPos] = useState<
+    { top: number; left: number; width: number } | null
+  >(null);
+
+  useLayoutEffect(() => {
+    if (!popoverOpen || !rowRef.current) {
+      setDialogPos(null);
+      return;
+    }
+    function recompute() {
+      if (!rowRef.current) return;
+      const row = rowRef.current.getBoundingClientRect();
+      const estimatedHeight = 140;
+      const spaceBelow = window.innerHeight - row.bottom;
+      const openAbove = spaceBelow < estimatedHeight + 16 && row.top > spaceBelow;
+      setDialogPos({
+        top: openAbove ? row.top - estimatedHeight - 4 : row.bottom + 4,
+        left: row.left,
+        width: row.width,
+      });
+    }
+    recompute();
+    window.addEventListener("resize", recompute);
+    return () => window.removeEventListener("resize", recompute);
+  }, [popoverOpen]);
 
   return (
-    <div className="relative">
+    <div ref={rowRef} className="relative">
       <div
         className={clsx(
           "flex items-center gap-1 rounded-[0.75rem] border py-1.5 pl-2 pr-1 transition",
@@ -380,61 +487,128 @@ function SourceRow({
           <span className="h-5 w-5 shrink-0" aria-hidden />
         )}
       </div>
-      {popover && popoverOpen ? (
-        <div
-          role="dialog"
-          className="absolute left-0 right-0 top-full z-20 mt-1 rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
-        >
-          <p className="text-[12px] leading-[1.45] text-[var(--ink)]">
-            {popover.description}
-          </p>
-          {popover.meta ? (
-            <p className="mt-1.5 text-[11px] font-medium tracking-[-0.005em] text-[var(--muted)]">
-              {popover.meta}
-            </p>
-          ) : null}
-          <a
-            href={popover.linkUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-semibold text-[var(--accent)] hover:underline"
-          >
-            {popover.linkLabel}
-            <ExternalLink className="h-3 w-3" />
-          </a>
-        </div>
-      ) : null}
+      {popover && popoverOpen && dialogPos && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              role="dialog"
+              data-source-popover="true"
+              style={{
+                position: "fixed",
+                top: dialogPos.top,
+                left: dialogPos.left,
+                width: dialogPos.width,
+                zIndex: 50,
+              }}
+              className="rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
+            >
+              <p className="text-[12px] leading-[1.45] text-[var(--ink)]">
+                {popover.description}
+              </p>
+              {popover.meta ? (
+                <p className="mt-1.5 text-[11px] font-medium tracking-[-0.005em] text-[var(--muted)]">
+                  {popover.meta}
+                </p>
+              ) : null}
+              <a
+                href={popover.linkUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-semibold text-[var(--accent)] hover:underline"
+              >
+                {popover.linkLabel}
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
 
 function ToggleToolRow({
   tool,
+  enabled,
+  onToggle,
+  infoOpen,
+  onInfoToggle,
 }: {
   tool: Extract<TutorTool, { kind: "toggle" }>;
+  enabled: boolean;
+  onToggle: () => void;
+  infoOpen: boolean;
+  onInfoToggle: () => void;
 }) {
   const meta = TOGGLE_TOOL_META[tool.key];
   const Icon = meta?.icon ?? Globe;
+  const description = meta?.description;
   return (
-    <div
-      className="flex items-center gap-2 rounded-[0.9rem] border border-[var(--line)] bg-[var(--surface-subtle)] px-2 py-2"
-      title={tool.active ? "Always on for this model" : "Unavailable"}
-    >
-      <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium tracking-[-0.01em] text-[var(--ink)]">
-        {tool.label}
-      </span>
-      <span
-        aria-label={tool.active ? "on" : "off"}
+    <div className="relative">
+      <div
         className={clsx(
-          "inline-flex items-center rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em]",
-          tool.active
-            ? "bg-[var(--accent-faint)] text-[var(--accent)]"
-            : "bg-[var(--muted)]/15 text-[var(--muted)]",
+          "flex items-center gap-1 rounded-[0.9rem] border pl-2 pr-1 py-2 transition",
+          enabled
+            ? "border-[var(--line-strong)] bg-[var(--accent-faint)]"
+            : "border-[var(--line)] bg-[var(--surface-subtle)]",
         )}
       >
-        {tool.active ? "on" : "off"}
-      </span>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-pressed={enabled}
+          title={enabled ? "Click to disable" : "Click to enable"}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <Icon
+            className={clsx(
+              "h-3.5 w-3.5 shrink-0",
+              enabled ? "text-[var(--accent)]" : "text-[var(--muted)]",
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium tracking-[-0.01em] text-[var(--ink)]">
+            {tool.label}
+          </span>
+          <span
+            aria-hidden
+            className={clsx(
+              "inline-flex items-center rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em]",
+              enabled
+                ? "bg-[var(--accent-faint)] text-[var(--accent)]"
+                : "bg-[var(--muted)]/15 text-[var(--muted)]",
+            )}
+          >
+            {enabled ? "on" : "off"}
+          </span>
+        </button>
+        {description ? (
+          <button
+            type="button"
+            onClick={onInfoToggle}
+            aria-label={`About ${tool.label}`}
+            aria-expanded={infoOpen}
+            className={clsx(
+              "flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition",
+              enabled
+                ? "text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                : "text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]",
+            )}
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+        ) : (
+          <span className="h-5 w-5 shrink-0" aria-hidden />
+        )}
+      </div>
+      {description && infoOpen ? (
+        <div
+          role="dialog"
+          className="absolute left-0 right-0 bottom-full z-20 mb-1 rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
+        >
+          <p className="text-[12px] leading-[1.45] text-[var(--ink)]">
+            {description}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

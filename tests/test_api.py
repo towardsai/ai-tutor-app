@@ -48,7 +48,7 @@ class ApiTestCase(unittest.TestCase):
         self.assertIn("web_search", tool_keys)
         self.assertIn("url_context", tool_keys)
 
-    def test_list_tools_for_non_gemini_model(self) -> None:
+    def test_list_tools_for_anthropic_model(self) -> None:
         with TestClient(app) as client:
             response = client.get(
                 "/api/tools", params={"model": "anthropic:claude-sonnet-4-6"}
@@ -57,7 +57,8 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         tool_keys = {tool["key"] for tool in response.json()["tools"]}
         self.assertIn("retrieval", tool_keys)
-        self.assertNotIn("web_search", tool_keys)
+        self.assertIn("web_search", tool_keys)
+        self.assertIn("web_fetch", tool_keys)
         self.assertNotIn("url_context", tool_keys)
 
     def test_chat_stream_returns_ai_sdk_parts(self) -> None:
@@ -66,6 +67,7 @@ class ApiTestCase(unittest.TestCase):
             self.assertEqual(request.history[0].role, "assistant")
             self.assertEqual(request.history[0].content, "Previous answer")
             self.assertEqual(request.source_keys, ("langchain", "transformers"))
+            self.assertEqual(request.enabled_tools, ("web_search",))
             self.assertEqual(request.thread_id, "thread_0")
             yield ChatEvent("thread_started", {"thread_id": "thread_1"})
             yield ChatEvent("message_started", {"message_id": "message_1"})
@@ -127,6 +129,7 @@ class ApiTestCase(unittest.TestCase):
                 },
             ],
             "sourceKeys": ["langchain", "transformers"],
+            "enabledTools": ["web_search", "not_a_real_tool"],
             "threadId": "thread_0",
         }
 
