@@ -32,6 +32,31 @@ type ThreadDataPart = {
   };
 };
 
+const STREAMING_WORDS = [
+  "Tutoring",
+  "Pondering",
+  "Scribbling",
+  "Annotating",
+  "Consulting",
+  "Mulling",
+  "Dissertating",
+  "Leafing",
+  "Researching",
+  "Outlining",
+  "Skimming",
+  "Unpacking",
+  "Diagramming",
+  "Curating",
+  "Deliberating",
+  "Summarizing",
+  "Highlighting",
+  "Chalkboarding",
+];
+
+function pickStreamingWord() {
+  return STREAMING_WORDS[Math.floor(Math.random() * STREAMING_WORDS.length)];
+}
+
 export function ChatShell() {
   const [transport] = useState(
     () => new DefaultChatTransport({ api: `${getApiBaseUrl()}/api/chat` }),
@@ -52,6 +77,8 @@ export function ChatShell() {
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const pendingScrollRef = useRef(false);
   const [spacerHeight, setSpacerHeight] = useState(0);
+  const [streamingWord, setStreamingWord] = useState(STREAMING_WORDS[0]);
+  const wasStreamingRef = useRef(false);
 
   const {
     messages,
@@ -162,6 +189,13 @@ export function ChatShell() {
 
   const isStreaming = status === "submitted" || status === "streaming";
   const isReady = status === "ready";
+
+  useEffect(() => {
+    if (isStreaming && !wasStreamingRef.current) {
+      setStreamingWord(pickStreamingWord());
+    }
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming]);
   const typedMessages = messages as TutorMessage[];
   const latestMessage = typedMessages[typedMessages.length - 1];
   const streamingAssistantId =
@@ -458,7 +492,7 @@ export function ChatShell() {
                       void handleSubmit();
                     }
                   }}
-                  placeholder="Ask about RAG, LangGraph, PEFT, or any of your selected sources…"
+                  placeholder="Ask about AI agents, AI at work, Claude Code, or any selected source…"
                   className="max-h-44 min-h-10 w-full resize-none overflow-y-auto bg-transparent px-0.5 py-2 text-[15px] leading-[1.6] tracking-[-0.012em] text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
                 />
 
@@ -472,6 +506,7 @@ export function ChatShell() {
                   <ComposerActionButton
                     disabled={!isStreaming && (!input.trim() || !isReady)}
                     isStreaming={isStreaming}
+                    streamingLabel={streamingWord}
                     onClick={
                       isStreaming ? () => stop() : () => void handleSubmit()
                     }
@@ -645,10 +680,12 @@ function ModelPicker({
 function ComposerActionButton({
   disabled,
   isStreaming,
+  streamingLabel,
   onClick,
 }: {
   disabled: boolean;
   isStreaming: boolean;
+  streamingLabel: string;
   onClick: () => void;
 }) {
   return (
@@ -680,7 +717,7 @@ function ComposerActionButton({
               aria-hidden="true"
               className="processing-button__pulse h-2.5 w-2.5 rounded-full"
             />
-            <span>Streaming</span>
+            <span>{streamingLabel}</span>
             <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white/92 text-[var(--accent)] shadow-[0_6px_16px_rgba(11,136,238,0.18)]">
               <Square className="h-3 w-3 fill-current" />
             </span>
