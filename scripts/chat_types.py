@@ -18,6 +18,7 @@ class SourceMatch:
     source_key: str
     source_label: str
     score: float
+    group: str = ""
 
 
 @dataclass(frozen=True, slots=True)

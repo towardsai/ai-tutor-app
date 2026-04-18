@@ -145,20 +145,11 @@ export function getLastAssistantMessage(messages: TutorMessage[]) {
   return undefined;
 }
 
-const WEB_SOURCE_KEYS = new Set(["google_search", "url_context"]);
-const COURSE_SOURCE_KEYS = new Set([
-  "8-hour_primer",
-  "llm_developer",
-  "python_primer",
-  "master_ai_for_work",
-  "agentic_ai_engineering",
-]);
-
-function classifySource(sourceKey: string): CitationKind {
-  if (WEB_SOURCE_KEYS.has(sourceKey)) {
+function classifySource(group: string): CitationKind {
+  if (group === "web") {
     return "web";
   }
-  if (COURSE_SOURCE_KEYS.has(sourceKey)) {
+  if (group === "courses") {
     return "course";
   }
   return "doc";
@@ -173,7 +164,7 @@ export function getMessageCitations(message: TutorMessage): MessageCitation[] {
     if (!url) {
       continue;
     }
-    const kind = classifySource(source.sourceKey);
+    const kind = classifySource(source.group);
     const title = cleanTitle(source.title);
     const label = (
       kind === "web"

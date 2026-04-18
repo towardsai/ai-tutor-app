@@ -42,6 +42,7 @@ export type SourcePartData = {
   sourceKey: string;
   sourceLabel: string;
   score: number;
+  group: string;
 };
 
 const FALLBACK_API_BASE_URL = "http://127.0.0.1:8000";

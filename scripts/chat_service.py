@@ -19,6 +19,7 @@ from .chat_types import ChatEvent, ChatRequest, ChatTurn, SourceMatch
 from .chroma_rag import LocalChromaRetriever, format_tool_payload, parse_tool_payload
 from .prompts import build_system_prompt
 from .setup import (
+    COURSE_SOURCE_KEYS,
     DOCUMENT_DICT_PATH,
     SOURCE_KEY_TO_LABEL,
     VECTOR_COLLECTION_NAME,
@@ -251,6 +252,7 @@ def collect_updated_source_matches(
             source_key=match.source,
             source_label=SOURCE_KEY_TO_LABEL.get(match.source, match.source),
             score=match.score,
+            group="courses" if match.source in COURSE_SOURCE_KEYS else "docs",
         )
         existing = matches_by_doc_id.get(match.doc_id)
         if existing and existing.score >= source_match.score:
@@ -477,6 +479,7 @@ def extract_grounding_source_matches(
             source_key="google_search",
             source_label="Web",
             score=score,
+            group="web",
         )
         matches_by_doc_id[doc_id] = source_match
         updated.append(source_match)
@@ -569,6 +572,7 @@ def extract_anthropic_source_matches(
                     source_key=source_key,
                     source_label=source_label,
                     score=1.0,
+                    group="web",
                 )
                 matches_by_doc_id[doc_id] = source_match
                 updates.setdefault(tool_use_id, []).append(source_match)
@@ -592,6 +596,7 @@ def extract_anthropic_source_matches(
                     source_key="web_search",
                     source_label="Web",
                     score=1.0,
+                    group="web",
                 )
                 matches_by_doc_id[doc_id] = source_match
                 updates.setdefault("", []).append(source_match)
@@ -722,6 +727,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                         "source_key": source_match.source_key,
                         "source_label": source_match.source_label,
                         "score": source_match.score,
+                        "group": source_match.group,
                         "call_id": google_search_call_id,
                     },
                 )
@@ -752,6 +758,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                             "source_key": source_match.source_key,
                             "source_label": source_match.source_label,
                             "score": source_match.score,
+                            "group": source_match.group,
                             "call_id": tool_call_id,
                         },
                     )
@@ -813,6 +820,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                         "source_key": source_match.source_key,
                         "source_label": source_match.source_label,
                         "score": source_match.score,
+                        "group": source_match.group,
                         "call_id": google_search_call_id,
                     },
                 )
@@ -848,6 +856,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                                 "source_key": source_match.source_key,
                                 "source_label": source_match.source_label,
                                 "score": source_match.score,
+                                "group": source_match.group,
                                 "call_id": tool_use_id,
                             },
                         )

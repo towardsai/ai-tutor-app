@@ -281,6 +281,7 @@ class UIMessageStreamEncoder:
                 "sourceKey": str(event.data.get("source_key", "")),
                 "sourceLabel": str(event.data.get("source_label", "")),
                 "score": float(event.data.get("score", 0.0)),
+                "group": str(event.data.get("group", "")),
             }
             if call_id:
                 self.source_matches_by_call_id.setdefault(call_id, []).append(source_data)
