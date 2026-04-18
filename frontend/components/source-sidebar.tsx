@@ -45,7 +45,7 @@ const TOGGLE_TOOL_META: Record<string, ToggleToolMeta> = {
   web_search: {
     icon: Globe,
     description:
-      "Live web search for recent events or facts outside the course corpus.",
+      "Live web search for recent events or facts outside the knowledge base.",
   },
   url_context: {
     icon: LinkIcon,
@@ -222,48 +222,150 @@ function RetrievalTool({
   const courseSources = tool.sources.filter((source) => source.group === "courses");
   const docSources = tool.sources.filter((source) => source.group === "docs");
   const enabled = selectedSourceKeys.length > 0;
+  const [infoOpen, setInfoOpen] = useState(false);
+  const infoRef = useRef<HTMLDivElement>(null);
+  const [dialogPos, setDialogPos] = useState<
+    { top: number; left: number; width: number } | null
+  >(null);
+
+  useEffect(() => {
+    if (!infoOpen) return;
+    function onDocMouseDown(event: MouseEvent) {
+      const target = event.target as Node | null;
+      const insideTrigger = !!infoRef.current && !!target && infoRef.current.contains(target);
+      const insidePortaledDialog =
+        !!target &&
+        target instanceof Element &&
+        !!target.closest('[data-knowledge-base-popover="true"]');
+      if (
+        !insideTrigger &&
+        !insidePortaledDialog
+      ) {
+        setInfoOpen(false);
+      }
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setInfoOpen(false);
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [infoOpen]);
+
+  useLayoutEffect(() => {
+    if (!infoOpen || !infoRef.current) {
+      return;
+    }
+
+    function recompute() {
+      if (!infoRef.current) return;
+      const trigger = infoRef.current.getBoundingClientRect();
+      const width = 224;
+      const estimatedHeight = 96;
+      const spaceBelow = window.innerHeight - trigger.bottom;
+      const openAbove = spaceBelow < estimatedHeight + 16 && trigger.top > spaceBelow;
+      setDialogPos({
+        top: openAbove ? trigger.top - estimatedHeight - 8 : trigger.bottom + 8,
+        left: Math.max(12, trigger.right - width),
+        width,
+      });
+    }
+
+    recompute();
+    window.addEventListener("resize", recompute);
+    window.addEventListener("scroll", recompute, true);
+    return () => {
+      window.removeEventListener("resize", recompute);
+      window.removeEventListener("scroll", recompute, true);
+    };
+  }, [infoOpen]);
 
   return (
     <section className="space-y-1">
-      <button
-        type="button"
-        onClick={() => onOpenChange(!isOpen)}
-        aria-expanded={isOpen}
-        title="Expand to pick sources. On when at least one source is selected."
+      <div
         className={clsx(
-          "flex w-full items-center gap-2 rounded-[0.9rem] border px-2 py-2 text-left transition",
+          "relative flex w-full items-center gap-1 rounded-[0.9rem] border px-1.5 py-2 transition",
           enabled
             ? "border-[var(--line-strong)] bg-[var(--accent-faint)] hover:border-[var(--accent)]"
             : "border-[var(--line)] bg-[var(--surface-subtle)] hover:border-[var(--line-strong)]",
         )}
       >
-        <Library
-          className={clsx(
-            "h-3.5 w-3.5 shrink-0",
-            enabled ? "text-[var(--accent)]" : "text-[var(--muted)]",
-          )}
-        />
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium tracking-[-0.01em] text-[var(--ink)]">
-          {tool.label}
-        </span>
-        <span
-          aria-hidden
-          className={clsx(
-            "inline-flex items-center rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em]",
-            enabled
-              ? "bg-[var(--accent-faint)] text-[var(--accent)]"
-              : "bg-[var(--muted)]/15 text-[var(--muted)]",
-          )}
+        <button
+          type="button"
+          onClick={() => onOpenChange(!isOpen)}
+          aria-expanded={isOpen}
+          title="Expand to pick sources. On when at least one source is selected."
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
-          {enabled ? "on" : "off"}
-        </span>
-        <ChevronDown
-          className={clsx(
-            "h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform",
-            isOpen && "rotate-180",
-          )}
-        />
-      </button>
+          <Library
+            className={clsx(
+              "h-3.5 w-3.5 shrink-0",
+              enabled ? "text-[var(--accent)]" : "text-[var(--muted)]",
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium tracking-[-0.01em] text-[var(--ink)]">
+            {tool.label}
+          </span>
+          <span
+            aria-hidden
+            className={clsx(
+              "inline-flex items-center rounded-full px-1.25 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em]",
+              enabled
+                ? "bg-[var(--accent-faint)] text-[var(--accent)]"
+                : "bg-[var(--muted)]/15 text-[var(--muted)]",
+            )}
+          >
+            {enabled ? "on" : "off"}
+          </span>
+          <ChevronDown
+            className={clsx(
+              "h-3.25 w-3.25 shrink-0 text-[var(--muted)] transition-transform",
+              isOpen && "rotate-180",
+            )}
+          />
+        </button>
+        <div ref={infoRef} className="relative shrink-0">
+          <button
+            type="button"
+            onClick={() => setInfoOpen((current) => !current)}
+            aria-label={`About ${tool.label}`}
+            aria-expanded={infoOpen}
+            className={clsx(
+              "flex h-5 w-5 items-center justify-center rounded-full transition",
+              enabled
+                ? "text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                : "text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]",
+            )}
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+      {infoOpen && dialogPos && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              role="dialog"
+              data-knowledge-base-popover="true"
+              style={{
+                position: "fixed",
+                top: dialogPos.top,
+                left: dialogPos.left,
+                width: dialogPos.width,
+                zIndex: 50,
+              }}
+              className="rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
+            >
+              <p className="text-[12px] leading-[1.45] text-[var(--ink)]">
+                Searches the selected knowledge base semantically to find relevant
+                course and docs passages before answering.
+              </p>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {isOpen ? (
         <div className="ml-[11px] space-y-2.5 border-l border-[var(--line-strong)] pl-3">
