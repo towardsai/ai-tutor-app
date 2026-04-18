@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AI Tutor Agent",
+  title: "AI Tutor",
   description:
     "A modern chat workspace for the AI Tutor retrieval app, powered by FastAPI and LangGraph.",
 };
