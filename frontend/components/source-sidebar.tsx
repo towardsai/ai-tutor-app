@@ -81,6 +81,7 @@ export function SourceSidebar({
     toggleTools.filter((tool) => enabledToolKeys.includes(tool.key)).length;
   const totalCount = (retrievalTool ? 1 : 0) + toggleTools.length;
   const [openToolInfoKey, setOpenToolInfoKey] = useState<string | null>(null);
+  const [isRetrievalOpen, setIsRetrievalOpen] = useState(true);
   const toggleToolsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -156,26 +157,28 @@ export function SourceSidebar({
           {retrievalTool ? (
             <RetrievalTool
               tool={retrievalTool}
+              isOpen={isRetrievalOpen}
+              onOpenChange={setIsRetrievalOpen}
               selectedSourceKeys={selectedSourceKeys}
               onToggleSource={onToggleSource}
             />
           ) : null}
-        </div>
-        <div ref={toggleToolsRef} className="relative z-10 space-y-2 pr-0.5">
-          {toggleTools.map((tool) => (
-            <ToggleToolRow
-              key={tool.key}
-              tool={tool}
-              enabled={enabledToolKeys.includes(tool.key)}
-              onToggle={() => onToggleTool(tool.key)}
-              infoOpen={openToolInfoKey === tool.key}
-              onInfoToggle={() =>
-                setOpenToolInfoKey((current) =>
-                  current === tool.key ? null : tool.key,
-                )
-              }
-            />
-          ))}
+          <div ref={toggleToolsRef} className="relative z-10 space-y-2">
+            {toggleTools.map((tool) => (
+              <ToggleToolRow
+                key={tool.key}
+                tool={tool}
+                enabled={enabledToolKeys.includes(tool.key)}
+                onToggle={() => onToggleTool(tool.key)}
+                infoOpen={openToolInfoKey === tool.key}
+                onInfoToggle={() =>
+                  setOpenToolInfoKey((current) =>
+                    current === tool.key ? null : tool.key,
+                  )
+                }
+              />
+            ))}
+          </div>
         </div>
 
         {sourceError ? (
@@ -188,7 +191,7 @@ export function SourceSidebar({
           href="https://academy.towardsai.net/"
           target="_blank"
           rel="noreferrer"
-          className="group inline-flex items-center justify-between gap-2 border-t border-[var(--line)] px-1 pt-2 text-[10.5px] text-[var(--muted)] transition hover:text-[var(--accent)]"
+          className="group mt-auto inline-flex items-center justify-between gap-2 border-t border-[var(--line)] px-1 pt-2 text-[10.5px] text-[var(--muted)] transition hover:text-[var(--accent)]"
         >
           <span className="tracking-[-0.005em]">
             Powered by{" "}
@@ -204,15 +207,18 @@ export function SourceSidebar({
 }
 
 function RetrievalTool({
+  isOpen,
+  onOpenChange,
   tool,
   selectedSourceKeys,
   onToggleSource,
 }: {
+  isOpen: boolean;
+  onOpenChange: (next: boolean) => void;
   tool: Extract<TutorTool, { kind: "configurable" }>;
   selectedSourceKeys: string[];
   onToggleSource: (sourceKey: string) => void;
 }) {
-  const [isOpen, setIsOpen] = useState(true);
   const courseSources = tool.sources.filter((source) => source.group === "courses");
   const docSources = tool.sources.filter((source) => source.group === "docs");
   const enabled = selectedSourceKeys.length > 0;
@@ -221,7 +227,7 @@ function RetrievalTool({
     <section className="space-y-1">
       <button
         type="button"
-        onClick={() => setIsOpen((current) => !current)}
+        onClick={() => onOpenChange(!isOpen)}
         aria-expanded={isOpen}
         title="Expand to pick sources. On when at least one source is selected."
         className={clsx(
@@ -413,7 +419,6 @@ function SourceRow({
 
   useLayoutEffect(() => {
     if (!popoverOpen || !rowRef.current) {
-      setDialogPos(null);
       return;
     }
     function recompute() {

@@ -53,8 +53,12 @@ const STREAMING_WORDS = [
   "Chalkboarding",
 ];
 
-function pickStreamingWord() {
-  return STREAMING_WORDS[Math.floor(Math.random() * STREAMING_WORDS.length)];
+function pickStreamingWordForKey(key: string) {
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = (hash * 31 + key.charCodeAt(index)) | 0;
+  }
+  return STREAMING_WORDS[Math.abs(hash) % STREAMING_WORDS.length];
 }
 
 export function ChatShell() {
@@ -76,9 +80,7 @@ export function ChatShell() {
   const threadViewportRef = useRef<HTMLDivElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const pendingScrollRef = useRef(false);
-  const [spacerHeight, setSpacerHeight] = useState(0);
-  const [streamingWord, setStreamingWord] = useState(STREAMING_WORDS[0]);
-  const wasStreamingRef = useRef(false);
+  const spacerRef = useRef<HTMLDivElement>(null);
 
   const {
     messages,
@@ -189,19 +191,15 @@ export function ChatShell() {
 
   const isStreaming = status === "submitted" || status === "streaming";
   const isReady = status === "ready";
-
-  useEffect(() => {
-    if (isStreaming && !wasStreamingRef.current) {
-      setStreamingWord(pickStreamingWord());
-    }
-    wasStreamingRef.current = isStreaming;
-  }, [isStreaming]);
   const typedMessages = messages as TutorMessage[];
   const latestMessage = typedMessages[typedMessages.length - 1];
   const streamingAssistantId =
     isStreaming && latestMessage?.role === "assistant"
       ? latestMessage.id
       : null;
+  const streamingWord = streamingAssistantId
+    ? pickStreamingWordForKey(streamingAssistantId)
+    : STREAMING_WORDS[0];
   const visibleMessages = typedMessages.filter((message) => {
     if (message.id !== streamingAssistantId) {
       return true;
@@ -211,9 +209,10 @@ export function ChatShell() {
   const chatColumnClass =
     "mx-auto w-full max-w-[1040px] px-3 sm:px-5 lg:px-8 xl:px-10";
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const viewport = threadViewportRef.current;
-    if (!viewport) {
+    const spacer = spacerRef.current;
+    if (!viewport || !spacer) {
       return;
     }
 
@@ -242,23 +241,13 @@ export function ChatShell() {
       }
     }
 
-    setSpacerHeight(needed);
-  }, [messages, isStreaming]);
+    spacer.style.height = `${needed}px`;
 
-  useLayoutEffect(() => {
     if (!pendingScrollRef.current) {
-      return;
-    }
-    const viewport = threadViewportRef.current;
-    if (!viewport) {
       return;
     }
     pendingScrollRef.current = false;
 
-    const users = viewport.querySelectorAll<HTMLElement>(
-      '[data-role="user"]',
-    );
-    const lastUserEl = users[users.length - 1];
     if (!lastUserEl) {
       return;
     }
@@ -270,7 +259,7 @@ export function ChatShell() {
       top: Math.max(0, viewport.scrollTop + delta - 24),
       behavior: "instant",
     });
-  }, [spacerHeight]);
+  }, [messages, isStreaming]);
 
   useEffect(() => {
     const textarea = composerInputRef.current;
@@ -462,10 +451,11 @@ export function ChatShell() {
                   />
                 ))}
                 <div
+                  ref={spacerRef}
                   aria-hidden
                   data-spacer="true"
                   className="shrink-0"
-                  style={{ height: spacerHeight }}
+                  style={{ height: 0 }}
                 />
               </div>
             )}
@@ -940,15 +930,17 @@ const INITIAL_SUGGESTION_COUNT = 4;
 
 function shuffle<T>(items: ReadonlyArray<T>): T[] {
   const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
   }
   return copy;
 }
 
 function pickRandomSuggestions(count: number): Suggestion[] {
-  if (count < 2) return shuffle(SUGGESTION_POOL).slice(0, count);
+  if (count < 2) {
+    return shuffle(SUGGESTION_POOL).slice(0, count);
+  }
 
   const technical = shuffle(
     SUGGESTION_POOL.filter((item) => item.kind === "technical"),
@@ -980,6 +972,7 @@ function EmptyConversation({
   );
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional client-only enhancement after hydration
     setSuggestions(pickRandomSuggestions(INITIAL_SUGGESTION_COUNT));
   }, []);
 
