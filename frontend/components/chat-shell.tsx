@@ -688,20 +688,57 @@ function ComposerActionButton({
   streamingLabel: string;
   onClick: () => void;
 }) {
+  const highlightRef = useRef<HTMLSpanElement>(null);
+
+  function handlePointerMove(event: React.PointerEvent<HTMLButtonElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * 100;
+    const y = ((event.clientY - rect.top) / rect.height) * 100;
+    event.currentTarget.style.setProperty("--glass-x", `${x}%`);
+    event.currentTarget.style.setProperty("--glass-y", `${y}%`);
+  }
+
+  function handlePointerEnter() {
+    if (highlightRef.current) highlightRef.current.style.opacity = "1";
+  }
+
+  function handlePointerLeave() {
+    if (highlightRef.current) highlightRef.current.style.opacity = "0";
+  }
+
   return (
     <button
       type="button"
       onClick={onClick}
+      onPointerMove={handlePointerMove}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
       disabled={disabled}
       aria-label={isStreaming ? "Stop generating" : "Send message"}
       title={isStreaming ? "Stop generating" : "Send message"}
+      style={{ "--glass-x": "50%", "--glass-y": "50%" } as React.CSSProperties}
       className={clsx(
-        "relative inline-flex h-10 min-w-[8.75rem] items-center justify-center overflow-hidden rounded-full px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50",
+        "relative inline-flex h-10 min-w-[8.75rem] items-center justify-center overflow-hidden rounded-full px-4 text-sm font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.28),inset_0_-1px_0_rgba(0,0,0,0.08)] transition disabled:cursor-not-allowed disabled:opacity-50",
         isStreaming
-          ? "border border-[var(--line-strong)] bg-[rgba(11,136,238,0.12)] text-[var(--accent)] shadow-[0_12px_30px_rgba(11,136,238,0.14)] hover:border-[var(--accent)] hover:bg-[rgba(11,136,238,0.15)]"
+          ? "border border-[var(--line-strong)] bg-[rgba(11,136,238,0.12)] text-[var(--accent)] hover:border-[var(--accent)] hover:bg-[rgba(11,136,238,0.15)]"
           : "bg-[var(--accent)] text-white hover:brightness-110",
       )}
     >
+      {!disabled ? (
+        <span
+          ref={highlightRef}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 rounded-full"
+          style={{
+            opacity: 0,
+            transition: "opacity 220ms ease",
+            mixBlendMode: "screen",
+            background:
+              "radial-gradient(200px 130px at var(--glass-x) var(--glass-y), rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.18) 28%, rgba(255,255,255,0) 60%)",
+            zIndex: 1,
+          }}
+        />
+      ) : null}
       {isStreaming ? (
         <>
           <span
@@ -733,7 +770,11 @@ function ComposerActionButton({
   );
 }
 
-type Suggestion = { title: string; prompt: string };
+type Suggestion = {
+  title: string;
+  prompt: string;
+  kind: "technical" | "accessible";
+};
 
 const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
   // Core technical — covered by courses and/or open-source docs
@@ -741,41 +782,49 @@ const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
     title: "RAG vs fine-tuning",
     prompt:
       "When should I use retrieval-augmented generation instead of fine-tuning a model?",
+    kind: "technical",
   },
   {
     title: "Evaluate a RAG pipeline",
     prompt:
       "What are practical ways to evaluate the quality of a RAG pipeline?",
+    kind: "technical",
   },
   {
     title: "LangGraph tool-calling",
     prompt:
       "How do I build a tool-calling agent with LangGraph, step by step?",
+    kind: "technical",
   },
   {
     title: "LoRA with PEFT",
     prompt:
       "Walk me through fine-tuning a model with LoRA using the PEFT library.",
+    kind: "technical",
   },
   {
     title: "DPO with TRL",
     prompt:
       "How do I run Direct Preference Optimization (DPO) on a model using TRL?",
+    kind: "technical",
   },
   {
     title: "Run a model locally",
     prompt:
       "Show me how to load and run a Hugging Face transformer model locally.",
+    kind: "technical",
   },
   {
     title: "Query your own docs",
     prompt:
       "How do I build a query engine over my own documents with LlamaIndex?",
+    kind: "technical",
   },
   {
     title: "Structured JSON output",
     prompt:
       "What's the most reliable way to get structured JSON output from the OpenAI API?",
+    kind: "technical",
   },
 
   // Trending topics
@@ -783,31 +832,37 @@ const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
     title: "What is Claude Code?",
     prompt:
       "What is Claude Code and how does it compare to Cursor or Codex for daily coding work?",
+    kind: "technical",
   },
   {
     title: "Long-term agent memory",
     prompt:
       "How do I give an AI agent long-term memory that persists across sessions?",
+    kind: "technical",
   },
   {
     title: "Agent harnesses today",
     prompt:
       "What are the main AI agent harnesses in use today and how do they differ in practice?",
+    kind: "technical",
   },
   {
     title: "Build an MCP server",
     prompt:
       "How do I build a Model Context Protocol (MCP) server to expose an internal tool to an agent?",
+    kind: "technical",
   },
   {
     title: "Designing LLM evals",
     prompt:
       "How should I design evals for my LLM app before shipping it to real users?",
+    kind: "technical",
   },
   {
     title: "Context engineering",
     prompt:
       "What is context engineering, and how is it different from prompt engineering?",
+    kind: "technical",
   },
 
   // Beginner / getting started
@@ -815,16 +870,25 @@ const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
     title: "LLM crash course",
     prompt:
       "I'm new to LLMs. What are the core concepts I need to understand before I start building anything?",
+    kind: "accessible",
   },
   {
     title: "Python for AI",
     prompt:
       "I'm new to Python. What's the minimum I need to know to start building AI apps?",
+    kind: "accessible",
   },
   {
     title: "First OpenAI API call",
     prompt:
       "Walk me through making my first call to the OpenAI API in Python.",
+    kind: "accessible",
+  },
+  {
+    title: "AI basics in plain English",
+    prompt:
+      "Can you explain in plain English what LLMs, chatbots, and AI agents actually are?",
+    kind: "accessible",
   },
 
   // Non-technical (Master AI for Work)
@@ -832,38 +896,78 @@ const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
     title: "AI for daily work",
     prompt:
       "What's a realistic way to use ChatGPT to speed up my weekly reports and emails?",
+    kind: "accessible",
   },
   {
     title: "Prompt like a pro",
     prompt:
       "What separates a good prompt from a great one for everyday work tasks?",
+    kind: "accessible",
   },
   {
     title: "Roll out AI at work",
     prompt:
       "How can a team start using AI tools together without creating chaos?",
+    kind: "accessible",
   },
   {
     title: "ChatGPT vs Claude vs Gemini",
     prompt:
       "I'm not technical. How do I pick between ChatGPT, Claude, and Gemini for my work?",
+    kind: "accessible",
   },
   {
     title: "Spot AI use cases",
     prompt:
       "How do I identify which parts of my job AI can realistically help with?",
+    kind: "accessible",
+  },
+  {
+    title: "Fact-check AI output",
+    prompt:
+      "How do I tell if an AI's answer is actually correct and trustworthy?",
+    kind: "accessible",
+  },
+  {
+    title: "AI for meetings",
+    prompt:
+      "How can I use AI to turn meeting notes into clear next steps?",
+    kind: "accessible",
   },
 ];
 
 const INITIAL_SUGGESTION_COUNT = 4;
 
-function pickRandomSuggestions(count: number): Suggestion[] {
-  const shuffled = [...SUGGESTION_POOL];
-  for (let i = shuffled.length - 1; i > 0; i--) {
+function shuffle<T>(items: ReadonlyArray<T>): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    [copy[i], copy[j]] = [copy[j], copy[i]];
   }
-  return shuffled.slice(0, count);
+  return copy;
+}
+
+function pickRandomSuggestions(count: number): Suggestion[] {
+  if (count < 2) return shuffle(SUGGESTION_POOL).slice(0, count);
+
+  const technical = shuffle(
+    SUGGESTION_POOL.filter((item) => item.kind === "technical"),
+  );
+  const accessible = shuffle(
+    SUGGESTION_POOL.filter((item) => item.kind === "accessible"),
+  );
+
+  const picked: Suggestion[] = [];
+  if (technical[0]) picked.push(technical[0]);
+  if (accessible[0]) picked.push(accessible[0]);
+
+  const pickedTitles = new Set(picked.map((item) => item.title));
+  const remaining = shuffle(
+    SUGGESTION_POOL.filter((item) => !pickedTitles.has(item.title)),
+  );
+  picked.push(...remaining.slice(0, count - picked.length));
+
+  return shuffle(picked).slice(0, count);
 }
 
 function EmptyConversation({
@@ -897,7 +1001,7 @@ function EmptyConversation({
         >
           Towards AI Academy
         </a>{" "}
-        courses. Answers are grounded in the sources you select — try one of
+        courses. Answers are grounded in the sources you select. Try one of
         these to start:
       </p>
       <div className="mt-6 grid w-full max-w-[640px] grid-cols-1 gap-2 sm:grid-cols-2">

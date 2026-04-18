@@ -272,7 +272,7 @@ function RetrievalTool({
           ) : null}
           {docSources.length > 0 ? (
             <SourceGroup
-              label="Open-source docs"
+              label="Docs & references"
               icon={BookOpen}
               sources={docSources}
               selectedSourceKeys={selectedSourceKeys}
