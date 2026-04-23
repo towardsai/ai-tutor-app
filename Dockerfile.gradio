@@ -1,0 +1,22 @@
+FROM python:3.13
+
+# Install uv into /usr/local/bin (on PATH for every user, including HF's uid 1000).
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/ \
+    && rm -rf /root/.local /root/.cache
+
+RUN useradd -m -u 1000 user
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked
+
+COPY . .
+
+ENV HOME=/home/user \
+    PORT=7860
+RUN chown -R user:user /app
+USER user
+
+EXPOSE 7860
+CMD ["uv", "run", "-m", "scripts.main"]

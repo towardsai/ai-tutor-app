@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import gradio as gr
 
-from .chat_service import ChatRequest, is_google_genai_model, normalize_history, stream_chat
+from .chat_service import ChatRequest, normalize_history, stream_chat
 from .gradio_presenter import GradioPresenterState
 from .setup import (
     AVAILABLE_SOURCES_UI,
@@ -17,9 +17,15 @@ async def generate_completion(
     history,
     sources,
     model,
-    show_gemini_thoughts,
     thread_id,
+    enable_web_search,
+    enable_url_read,
 ):
+    enabled_tools: list[str] = []
+    if enable_web_search:
+        enabled_tools.append("web_search")
+    if enable_url_read:
+        enabled_tools.extend(["url_context", "web_fetch"])
     request = ChatRequest(
         query=query,
         history=normalize_history(history),
@@ -27,12 +33,11 @@ async def generate_completion(
             SOURCE_UI_TO_KEY[source] for source in sources if source in SOURCE_UI_TO_KEY
         ),
         model_name=model,
-        include_reasoning=bool(show_gemini_thoughts),
+        include_reasoning=True,
         thread_id=thread_id,
+        enabled_tools=tuple(enabled_tools),
     )
-    presenter = GradioPresenterState(
-        show_activity=bool(show_gemini_thoughts) and is_google_genai_model(model)
-    )
+    presenter = GradioPresenterState(show_activity=True)
     last_emitted = ""
 
     async for event in stream_chat(request):
@@ -60,10 +65,15 @@ model = gr.Textbox(
     interactive=False,
     placeholder="openai:gpt-5.4-mini | anthropic:claude-opus-4-6 | google-genai:gemini-3.1-pro-preview",
 )
-show_gemini_thoughts = gr.Checkbox(
-    label="Show Gemini thinking and tool timeline",
+enable_web_search = gr.Checkbox(
+    label="Web search",
     value=True,
-    info="Uses Gemini include_thoughts and shows tool activity when supported.",
+    info="Let the model use its built-in web search (Gemini google_search / Claude web_search).",
+)
+enable_url_read = gr.Checkbox(
+    label="URL read",
+    value=True,
+    info="Let the model fetch URLs (Gemini url_context / Claude web_fetch).",
 )
 thread_id = gr.Textbox(
     label="Thread ID",
@@ -118,7 +128,7 @@ with gr.Blocks(
     gr.ChatInterface(
         fn=generate_completion,
         chatbot=chatbot,
-        additional_inputs=[sources, model, show_gemini_thoughts, thread_id],
+        additional_inputs=[sources, model, thread_id, enable_web_search, enable_url_read],
         additional_outputs=[thread_id],
         additional_inputs_accordion=accordion,
         api_name="chat",

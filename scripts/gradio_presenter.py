@@ -69,19 +69,28 @@ def upsert_activity_event(
 
 
 def format_tool_args(args: Any, args_text: str = "") -> str:
+    query = ""
+    url = ""
     if isinstance(args, dict):
         query = str(args.get("query", "")).strip()
-        if query:
-            trimmed = query[:157] + "..." if len(query) > 160 else query
-            return f'Query: "{trimmed}"'
-        if args:
-            serialized = json.dumps(args, ensure_ascii=False, sort_keys=True)
-            trimmed = serialized[:197] + "..." if len(serialized) > 200 else serialized
-            return f"Args: `{trimmed}`"
-        return ""
-    if args_text.strip():
-        trimmed = args_text[:197] + "..." if len(args_text) > 200 else args_text
+        url = str(args.get("url", "")).strip()
+
+    if not query and args_text.strip():
+        query = args_text.strip()
+
+    if query:
+        trimmed = query[:157] + "..." if len(query) > 160 else query
+        return f'Query: "{trimmed}"'
+
+    if url:
+        trimmed = url[:157] + "..." if len(url) > 160 else url
+        return f"URL: `{trimmed}`"
+
+    if isinstance(args, dict) and args:
+        serialized = json.dumps(args, ensure_ascii=False, sort_keys=True)
+        trimmed = serialized[:197] + "..." if len(serialized) > 200 else serialized
         return f"Args: `{trimmed}`"
+
     if args is None:
         return ""
     serialized = str(args).strip()
@@ -101,26 +110,42 @@ def summarize_activity_sources(sources: list[str], *, max_items: int = 3) -> str
 
 
 def summarize_tool_result(event: ChatEvent) -> str:
-    if event.data.get("tool_name") != "retrieve_tutor_context":
-        return "_Tool completed._"
-
+    tool_name = str(event.data.get("tool_name", ""))
     matches = event.data.get("matches", [])
-    if not matches:
-        return "_No matching sources found in the selected sources._"
-
-    ordered_sources: list[str] = []
-    seen_sources: set[str] = set()
-    for match in matches:
-        source_label = str(match.get("source_label", match.get("source_key", "unknown")))
-        if source_label in seen_sources:
-            continue
-        seen_sources.add(source_label)
-        ordered_sources.append(source_label)
-
-    source_summary = summarize_activity_sources(ordered_sources)
     match_count = len(matches)
-    match_label = "match" if match_count == 1 else "matches"
-    return f"_Found {match_count} {match_label} from {source_summary}._"
+
+    if tool_name == "retrieve_tutor_context":
+        if not matches:
+            return "_No matching sources found in the selected sources._"
+        ordered_sources: list[str] = []
+        seen_sources: set[str] = set()
+        for match in matches:
+            source_label = str(match.get("source_label", match.get("source_key", "unknown")))
+            if source_label in seen_sources:
+                continue
+            seen_sources.add(source_label)
+            ordered_sources.append(source_label)
+        source_summary = summarize_activity_sources(ordered_sources)
+        match_label = "match" if match_count == 1 else "matches"
+        return f"_Found {match_count} {match_label} from {source_summary}._"
+
+    output_text = str(event.data.get("output_text", "")).strip()
+    if output_text:
+        return f"_{output_text}_"
+
+    if tool_name in ("google_search", "web_search"):
+        if match_count == 0:
+            return "_Search ran but returned no results._"
+        label = "result" if match_count == 1 else "results"
+        return f"_Searched the web — {match_count} {label} used as sources._"
+
+    if tool_name in ("url_context", "web_fetch"):
+        if match_count == 0:
+            return "_URL fetched._"
+        label = "page" if match_count == 1 else "pages"
+        return f"_Fetched {match_count} {label}._"
+
+    return "_Tool completed._"
 
 
 def format_tool_event(
