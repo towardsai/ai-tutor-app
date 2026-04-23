@@ -32,7 +32,6 @@ AVAILABLE_SOURCES_UI = [
     "Master AI For Work",
     "Full Stack AI Engineering",
     "Beginner Python for AI Engineering",
-    "8 Hour Primer",
 ]
 
 DEFAULT_SELECTED_SOURCES_UI = [
@@ -40,7 +39,6 @@ DEFAULT_SELECTED_SOURCES_UI = [
     "Master AI For Work",
     "Full Stack AI Engineering",
     "Beginner Python for AI Engineering",
-    "8 Hour Primer",
     "Transformers Docs",
     "PEFT Docs",
     "TRL Docs",
@@ -56,7 +54,6 @@ AVAILABLE_SOURCES = [
     "llama_index",
     "langchain",
     "openai_cookbooks",
-    "8-hour_primer",
     "full_stack_ai_engineering",
     "beginner_python_for_ai_engineering",
     "master_ai_for_work",
@@ -70,7 +67,6 @@ SOURCE_UI_TO_KEY = {
     "LlamaIndex Docs": "llama_index",
     "LangChain Docs": "langchain",
     "OpenAI Cookbooks": "openai_cookbooks",
-    "8 Hour Primer": "8-hour_primer",
     "Full Stack AI Engineering": "full_stack_ai_engineering",
     "Beginner Python for AI Engineering": "beginner_python_for_ai_engineering",
     "Python Primer": "python_primer",
@@ -80,7 +76,6 @@ SOURCE_UI_TO_KEY = {
 
 COURSE_SOURCE_KEYS = frozenset(
     {
-        "8-hour_primer",
         "full_stack_ai_engineering",
         "beginner_python_for_ai_engineering",
         "master_ai_for_work",

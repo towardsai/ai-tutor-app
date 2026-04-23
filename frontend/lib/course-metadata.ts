@@ -4,11 +4,6 @@ export type CourseMetadata = {
 };
 
 export const COURSE_METADATA: Record<string, CourseMetadata> = {
-  "8-hour_primer": {
-    description:
-      "Crash course on LLM fundamentals: prompting, APIs, and shipping simple production apps. Good starting point for beginners deciding if LLM dev is for them.",
-    academyUrl: "https://academy.towardsai.net/courses/8-hour-genai-primer",
-  },
   full_stack_ai_engineering: {
     description:
       "Full-stack LLM engineering, covering RAG, fine-tuning, evaluation, and deploying production systems end-to-end. The deepest technical course.",
