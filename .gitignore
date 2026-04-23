@@ -191,3 +191,5 @@ frontend/out/
 !frontend/app/icon.png
 !frontend/app/apple-icon.png
 !data/source_versions.json
+
+.claude/
