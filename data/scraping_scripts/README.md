@@ -156,6 +156,34 @@ If you need to run specific steps individually:
 - **Create Vector Stores**: `create_vector_stores.py`
 - **Upload to Chroma Vector Store to HuggingFace**: `upload_dbs_to_hf.py`
 - **Upload JSONL files to HuggingFace**: `upload_data_to_hf.py`
+- **Retire a source from data and Chroma**: `retire_source_workflow.py`
+
+## Retiring a Course or Documentation Source
+
+Use the retirement workflow when a source should be removed from retrieval and
+from the Hugging Face data repositories:
+
+```bash
+uv run -m data.scraping_scripts.retire_source_workflow --sources 8-hour_primer --yes
+```
+
+The workflow:
+
+1. Downloads `all_sources_data.jsonl` and `all_sources_contextual_nodes.pkl` if
+   they are missing locally.
+2. Removes rows/chunks whose `source` matches the retired source key.
+3. Rebuilds `data/chroma-db-all_sources`.
+4. Uploads the rebuilt vector DB and updated aggregate data files.
+5. Deletes the retired per-source JSONL from `towardsai-tutors/ai-tutor-data`.
+
+Run with `--dry-run` first to preview counts without changing files:
+
+```bash
+uv run -m data.scraping_scripts.retire_source_workflow --sources 8-hour_primer --dry-run
+```
+
+After retiring a source, remove its entry from `SOURCE_CONFIGS` and from the
+workflow download/upload lists so future merges cannot reintroduce it.
 
 ## Tips for New Team Members
 

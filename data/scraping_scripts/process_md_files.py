@@ -145,18 +145,6 @@ SOURCE_CONFIGS = {
         "included_root_files": [],
         "url_extension": "",
     },
-    "8-hour_primer": {
-        "base_url": "",
-        "input_directory": "data/8-hour_primer",  # Path to the directory that contains the Markdown files
-        "output_file": "data/8-hour_primer_data.jsonl",  # 8-hour Generative AI Primer
-        "source_name": "8-hour_primer",
-        "use_include_list": False,
-        "included_dirs": [],
-        "excluded_dirs": [],
-        "excluded_root_files": [],
-        "included_root_files": [],
-        "url_extension": "",
-    },
     "full_stack_ai_engineering": {
         "base_url": "",
         "input_directory": "data/full_stack_ai_engineering",  # Path to the directory that contains the Markdown files

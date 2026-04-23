@@ -44,7 +44,6 @@ def upload_files_to_huggingface(repo_id="towardsai-tutors/ai-tutor-data"):
         "data/openai_cookbooks_data.jsonl",
         # Course files
         "data/tai_blog_data.jsonl",
-        "data/8-hour_primer_data.jsonl",
         "data/master_ai_for_work_data.jsonl",
         "data/agentic_ai_engineering_data.jsonl",
         "data/full_stack_ai_engineering_data.jsonl",

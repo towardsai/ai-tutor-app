@@ -78,7 +78,6 @@ def ensure_required_files_exist():
         "data/openai_cookbooks_data.jsonl": "openai_cookbooks_data.jsonl",
         # Course files
         "data/tai_blog_data.jsonl": "tai_blog_data.jsonl",
-        "data/8-hour_primer_data.jsonl": "8-hour_primer_data.jsonl",
         "data/master_ai_for_work_data.jsonl": "master_ai_for_work_data.jsonl",
         "data/agentic_ai_engineering_data.jsonl": "agentic_ai_engineering_data.jsonl",
         "data/full_stack_ai_engineering_data.jsonl": "full_stack_ai_engineering_data.jsonl",

@@ -1,24 +1,9 @@
-"""
-Hugging Face Data Upload Script
+"""Upload the Chroma vector database to a Hugging Face dataset repository."""
 
-Purpose:
-This script uploads a local folder to a Hugging Face dataset repository. It's designed to
-update or create a dataset on the Hugging Face Hub by uploading the contents of a specified
-local folder.
-
-Usage:
-- Run the script: python data/scraping_scripts/upload_dbs_to_hf.py
-
-The script will:
-- Upload the contents of the 'data' folder to the specified Hugging Face dataset repository.
-- https://huggingface.co/datasets/towardsai-buster/ai-tutor-vector-db
-
-Configuration:
-- The script is set to upload to the "towardsai-buster/test-data" dataset repository. 
-- It deletes all existing files in the repository before uploading (due to delete_patterns=["*"]).
-"""
+import argparse
 
 from dotenv import load_dotenv
+
 try:
     from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
 except ModuleNotFoundError:
@@ -26,16 +11,19 @@ except ModuleNotFoundError:
 
 load_dotenv()
 
-def main() -> None:
+DEFAULT_REPO_ID = "towardsai-tutors/ai-tutor-vector-db"
+
+
+def upload_vector_db(repo_id: str = DEFAULT_REPO_ID) -> None:
     try:
-        api = validate_hf_access(repo_id="towardsai-tutors/ai-tutor-vector-db")
+        api = validate_hf_access(repo_id=repo_id)
     except HuggingFaceAuthError as exc:
         print(exc)
         raise SystemExit(1) from exc
 
     api.upload_folder(
         folder_path="data",
-        repo_id="towardsai-tutors/ai-tutor-vector-db",
+        repo_id=repo_id,
         repo_type="dataset",
         # multi_commits=True,
         # multi_commits_verbose=True,
@@ -46,6 +34,19 @@ def main() -> None:
         ],
         ignore_patterns=["*.jsonl", "*.py", "*.txt", "*.ipynb", "*.md", "*.pyc", "*.mdx"],
     )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Upload the Chroma vector database to Hugging Face."
+    )
+    parser.add_argument(
+        "--repo",
+        default=DEFAULT_REPO_ID,
+        help=f"Hugging Face dataset repo. Default: {DEFAULT_REPO_ID}",
+    )
+    args = parser.parse_args()
+    upload_vector_db(args.repo)
 
 
 if __name__ == "__main__":

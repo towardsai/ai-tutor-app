@@ -69,7 +69,6 @@ SOURCE_UI_TO_KEY = {
     "OpenAI Cookbooks": "openai_cookbooks",
     "Full Stack AI Engineering": "full_stack_ai_engineering",
     "Beginner Python for AI Engineering": "beginner_python_for_ai_engineering",
-    "Python Primer": "python_primer",
     "Master AI For Work": "master_ai_for_work",
     "Agentic AI Engineering": "agentic_ai_engineering",
 }
