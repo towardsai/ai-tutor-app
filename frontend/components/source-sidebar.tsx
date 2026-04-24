@@ -41,6 +41,8 @@ type ToggleToolMeta = {
   description?: string;
 };
 
+const POPOVER_GAP = 6;
+
 const TOGGLE_TOOL_META: Record<string, ToggleToolMeta> = {
   web_search: {
     icon: Globe,
@@ -225,7 +227,7 @@ function RetrievalTool({
   const [infoOpen, setInfoOpen] = useState(false);
   const infoRef = useRef<HTMLDivElement>(null);
   const [dialogPos, setDialogPos] = useState<
-    { top: number; left: number; width: number } | null
+    { top: number; left: number; width: number; placement: "above" | "below" } | null
   >(null);
 
   useEffect(() => {
@@ -268,9 +270,10 @@ function RetrievalTool({
       const spaceBelow = window.innerHeight - trigger.bottom;
       const openAbove = spaceBelow < estimatedHeight + 16 && trigger.top > spaceBelow;
       setDialogPos({
-        top: openAbove ? trigger.top - estimatedHeight - 8 : trigger.bottom + 8,
+        top: openAbove ? trigger.top : trigger.bottom + POPOVER_GAP,
         left: Math.max(12, trigger.right - width),
         width,
+        placement: openAbove ? "above" : "below",
       });
     }
 
@@ -354,6 +357,10 @@ function RetrievalTool({
                 top: dialogPos.top,
                 left: dialogPos.left,
                 width: dialogPos.width,
+                transform:
+                  dialogPos.placement === "above"
+                    ? `translateY(calc(-100% - ${POPOVER_GAP}px))`
+                    : undefined,
                 zIndex: 50,
               }}
               className="rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
@@ -516,7 +523,7 @@ function SourceRow({
   const popover = getPopoverInfo(source);
   const rowRef = useRef<HTMLDivElement>(null);
   const [dialogPos, setDialogPos] = useState<
-    { top: number; left: number; width: number } | null
+    { top: number; left: number; width: number; placement: "above" | "below" } | null
   >(null);
 
   useLayoutEffect(() => {
@@ -530,9 +537,10 @@ function SourceRow({
       const spaceBelow = window.innerHeight - row.bottom;
       const openAbove = spaceBelow < estimatedHeight + 16 && row.top > spaceBelow;
       setDialogPos({
-        top: openAbove ? row.top - estimatedHeight - 4 : row.bottom + 4,
+        top: openAbove ? row.top : row.bottom + POPOVER_GAP,
         left: row.left,
         width: row.width,
+        placement: openAbove ? "above" : "below",
       });
     }
     recompute();
@@ -604,6 +612,10 @@ function SourceRow({
                 top: dialogPos.top,
                 left: dialogPos.left,
                 width: dialogPos.width,
+                transform:
+                  dialogPos.placement === "above"
+                    ? `translateY(calc(-100% - ${POPOVER_GAP}px))`
+                    : undefined,
                 zIndex: 50,
               }}
               className="rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
@@ -649,8 +661,41 @@ function ToggleToolRow({
   const meta = TOGGLE_TOOL_META[tool.key];
   const Icon = meta?.icon ?? Globe;
   const description = meta?.description;
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [dialogPos, setDialogPos] = useState<
+    { top: number; left: number; width: number; placement: "above" | "below" } | null
+  >(null);
+
+  useLayoutEffect(() => {
+    if (!infoOpen || !rowRef.current) {
+      return;
+    }
+
+    function recompute() {
+      if (!rowRef.current) return;
+      const row = rowRef.current.getBoundingClientRect();
+      const estimatedHeight = 92;
+      const spaceAbove = row.top;
+      const openAbove = spaceAbove > estimatedHeight + 12;
+      setDialogPos({
+        top: openAbove ? row.top : row.bottom + POPOVER_GAP,
+        left: row.left,
+        width: row.width,
+        placement: openAbove ? "above" : "below",
+      });
+    }
+
+    recompute();
+    window.addEventListener("resize", recompute);
+    window.addEventListener("scroll", recompute, true);
+    return () => {
+      window.removeEventListener("resize", recompute);
+      window.removeEventListener("scroll", recompute, true);
+    };
+  }, [infoOpen]);
+
   return (
-    <div className="relative">
+    <div ref={rowRef} className="relative">
       <div
         className={clsx(
           "flex items-center gap-1 rounded-[0.9rem] border pl-2 pr-1 py-2 transition",
@@ -706,16 +751,31 @@ function ToggleToolRow({
           <span className="h-5 w-5 shrink-0" aria-hidden />
         )}
       </div>
-      {description && infoOpen ? (
-        <div
-          role="dialog"
-          className="absolute left-0 right-0 bottom-full z-20 mb-1 rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
-        >
-          <p className="text-[12px] leading-[1.45] text-[var(--ink)]">
-            {description}
-          </p>
-        </div>
-      ) : null}
+      {description && infoOpen && dialogPos && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              role="dialog"
+              data-toggle-tool-popover="true"
+              style={{
+                position: "fixed",
+                top: dialogPos.top,
+                left: dialogPos.left,
+                width: dialogPos.width,
+                transform:
+                  dialogPos.placement === "above"
+                    ? `translateY(calc(-100% - ${POPOVER_GAP}px))`
+                    : undefined,
+                zIndex: 80,
+              }}
+              className="rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
+            >
+              <p className="text-[12px] leading-[1.45] text-[var(--ink)]">
+                {description}
+              </p>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
