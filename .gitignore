@@ -164,6 +164,16 @@ cython_debug/
 .vscode/
 data/chroma-db**/
 evaluation_data/chroma-db**/
+data/*_md_files/
+data/full_stack_ai_engineering/
+data/beginner_python_for_ai_engineering/
+data/master_ai_for_work/
+data/agentic_ai_engineering/
+data/*_data.jsonl
+data/all_sources_data.jsonl
+data/all_sources_contextual_nodes.pkl
+data/new_docs_temp.jsonl
+data/.cache/
 node_modules/
 .next/
 frontend/node_modules/
@@ -190,6 +200,5 @@ frontend/out/
 !frontend/public/towardsai-logo.png
 !frontend/app/icon.png
 !frontend/app/apple-icon.png
-!data/source_versions.json
 
 .claude/
