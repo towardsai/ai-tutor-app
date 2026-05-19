@@ -42,6 +42,11 @@ import requests
 from dotenv import load_dotenv
 from nbconvert import MarkdownExporter
 
+try:
+    from data.scraping_scripts.source_registry import GITHUB_SOURCE_KEYS
+except ModuleNotFoundError:
+    from source_registry import GITHUB_SOURCE_KEYS
+
 load_dotenv()
 
 # Configuration for different sources
@@ -113,6 +118,23 @@ SOURCE_CONFIGS = {
         ],
         "local_dir": "data/langchain_md_files",
     },
+    "langgraph": {
+        "owner": "langchain-ai",
+        "repo": "docs",
+        "path": "src/oss/langgraph",
+        "local_dir": "data/langgraph_md_files",
+    },
+    "deep_agents": {
+        "owner": "langchain-ai",
+        "repo": "docs",
+        "path": "src/oss/deepagents",
+        "local_dir": "data/deep_agents_md_files",
+    },
+}
+SOURCE_CONFIGS = {
+    source: config
+    for source, config in SOURCE_CONFIGS.items()
+    if source in GITHUB_SOURCE_KEYS
 }
 
 # GitHub Personal Access Token (replace with your own token)
@@ -125,6 +147,7 @@ if GITHUB_TOKEN:
 
 # Maximum number of retries
 MAX_RETRIES = 5
+SOURCE_EXTENSIONS_FILENAME = "_source_extensions.json"
 
 
 class GitHubAPIError(RuntimeError):
@@ -242,11 +265,22 @@ def download_file(file_url: str, file_path: str, retries: int = 0):
     #         f.write(markdown)
 
 
+def strip_notebook_outputs(notebook: nbformat.NotebookNode) -> nbformat.NotebookNode:
+    for cell in notebook.cells:
+        if cell.get("cell_type") == "code":
+            cell["outputs"] = []
+            cell["execution_count"] = None
+        if "attachments" in cell:
+            cell["attachments"] = {}
+    return notebook
+
+
 def convert_ipynb_to_md(ipynb_path: str, md_path: str):
     try:
         with open(ipynb_path, "r", encoding="utf-8") as f:
             notebook = nbformat.read(f, as_version=4)
 
+        notebook = strip_notebook_outputs(notebook)
         exporter = MarkdownExporter()
         markdown, _ = exporter.from_notebook_node(notebook)
 
@@ -260,7 +294,23 @@ def convert_ipynb_to_md(ipynb_path: str, md_path: str):
         print("Skipping this file and continuing with others...")
 
 
-def fetch_files(api_url: str, local_dir: str):
+def manifest_path(file_path: str, root_dir: str) -> str:
+    return os.path.relpath(file_path, root_dir).replace(os.sep, "/")
+
+
+def save_source_extension_manifest(local_dir: str, manifest: dict[str, str]) -> None:
+    path = os.path.join(local_dir, SOURCE_EXTENSIONS_FILENAME)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(dict(sorted(manifest.items())), f, indent=2)
+        f.write("\n")
+
+
+def fetch_files(
+    api_url: str,
+    local_dir: str,
+    source_extensions: dict[str, str],
+    root_dir: str,
+):
     files = get_files_in_directory(api_url)
     if isinstance(files, dict):
         files = [files]
@@ -278,10 +328,14 @@ def fetch_files(api_url: str, local_dir: str):
                 print(f"Converting {file_name} to markdown...")
                 convert_ipynb_to_md(file_path, md_file_path)
                 os.remove(file_path)  # Remove the .ipynb file after conversion
+                source_extensions[manifest_path(md_file_path, root_dir)] = ".ipynb"
+            else:
+                _, extension = os.path.splitext(file_name)
+                source_extensions[manifest_path(file_path, root_dir)] = extension
         elif file["type"] == "dir":
             subdir = os.path.join(local_dir, file["name"])
             os.makedirs(subdir, exist_ok=True)
-            fetch_files(file["url"], subdir)
+            fetch_files(file["url"], subdir, source_extensions, root_dir)
 
 
 def process_source(source: str):
@@ -295,6 +349,7 @@ def process_source(source: str):
     local_dir = config.get("local_dir", f"data/{config['repo']}_md_files")
     shutil.rmtree(local_dir, ignore_errors=True)
     os.makedirs(local_dir, exist_ok=True)
+    source_extensions: dict[str, str] = {}
 
     print(f"Processing source: {source}")
 
@@ -306,13 +361,14 @@ def process_source(source: str):
             )
             target_dir = os.path.join(local_dir, path_config.get("local_subdir", ""))
             os.makedirs(target_dir, exist_ok=True)
-            fetch_files(api_url, target_dir)
+            fetch_files(api_url, target_dir, source_extensions, local_dir)
     else:
         api_url = (
             f"https://api.github.com/repos/{config['owner']}/{config['repo']}/contents/{config['path']}"
         )
-        fetch_files(api_url, local_dir)
+        fetch_files(api_url, local_dir, source_extensions, local_dir)
 
+    save_source_extension_manifest(local_dir, source_extensions)
     print(f"Finished processing {source}")
 
 

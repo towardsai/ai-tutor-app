@@ -29,9 +29,29 @@ export const DOC_METADATA: Record<string, DocMetadata> = {
       "Framework for building LLM apps: chains, agents, tool-calling, and production observability.",
     docsUrl: "https://docs.langchain.com/oss/python/langchain/overview",
   },
+  langgraph: {
+    description:
+      "Graph-based runtime for reliable, stateful AI agents with persistence, streaming, human review, and deployment patterns.",
+    docsUrl: "https://docs.langchain.com/oss/python/langgraph/overview",
+  },
+  deep_agents: {
+    description:
+      "LangChain's deep agent harness for planning, delegation, filesystem context, and longer-running agent workflows.",
+    docsUrl: "https://docs.langchain.com/oss/python/deepagents/overview",
+  },
   openai_cookbooks: {
     description:
       "Example notebooks and recipes from OpenAI covering practical patterns for using their APIs.",
     docsUrl: "https://cookbook.openai.com",
+  },
+  openai_docs: {
+    description:
+      "Official OpenAI API, Agents SDK, and Codex documentation from the developer docs Markdown index.",
+    docsUrl: "https://developers.openai.com",
+  },
+  claude_code_docs: {
+    description:
+      "Official Claude Code and Claude Agent SDK documentation from Anthropic's Markdown index.",
+    docsUrl: "https://code.claude.com/docs/en/overview",
   },
 };

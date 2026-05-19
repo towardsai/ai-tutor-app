@@ -1,5 +1,5 @@
 """
-Capture the latest release tag + commit SHA for each documentation source and
+Capture the latest release tag + commit SHA or docs timestamp for each source and
 write them to `data/source_versions.json`, so the frontend can surface which
 library version is represented in the knowledge base (and how fresh it is).
 
@@ -7,8 +7,8 @@ Usage:
     uv run -m data.scraping_scripts.capture_source_versions
     uv run -m data.scraping_scripts.capture_source_versions --sources langchain peft
 
-This is called automatically from `update_docs_workflow.py` after the GitHub
-download step, but can also be run standalone to refresh the JSON.
+This is called automatically from `update_docs_workflow.py` after the download
+step, but can also be run standalone to refresh the JSON.
 
 Output shape (per source):
     {
@@ -31,6 +31,11 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv
 
+try:
+    from data.scraping_scripts.source_registry import DOC_SOURCE_KEYS, SOURCE_CONFIGS
+except ModuleNotFoundError:
+    from source_registry import DOC_SOURCE_KEYS, SOURCE_CONFIGS
+
 load_dotenv()
 
 OUTPUT_PATH = Path("data/source_versions.json")
@@ -43,6 +48,8 @@ VERSION_REPOS: dict[str, tuple[str, str]] = {
     "trl": ("huggingface", "trl"),
     "llama_index": ("run-llama", "llama_index"),
     "langchain": ("langchain-ai", "langchain"),
+    "langgraph": ("langchain-ai", "langgraph"),
+    "deep_agents": ("langchain-ai", "deepagents"),
     "openai_cookbooks": ("openai", "openai-cookbook"),
 }
 
@@ -91,7 +98,22 @@ def fetch_default_branch_sha(owner: str, repo: str) -> Optional[str]:
     return sha[:7] if isinstance(sha, str) else None
 
 
-def capture_for_source(source: str) -> dict:
+def fetch_last_modified(url: str) -> Optional[str]:
+    try:
+        response = requests.head(url, timeout=30, allow_redirects=True)
+    except requests.RequestException as exc:
+        print(f"  ! network error: {exc}", file=sys.stderr)
+        return None
+    if not response.ok:
+        print(
+            f"  ! HTTP {response.status_code} for {url}: {response.text[:160]}",
+            file=sys.stderr,
+        )
+        return None
+    return response.headers.get("Last-Modified")
+
+
+def capture_github_source(source: str) -> dict:
     owner, repo = VERSION_REPOS[source]
     print(f"- {source}: querying {owner}/{repo}")
     return {
@@ -99,6 +121,25 @@ def capture_for_source(source: str) -> dict:
         "sha": fetch_default_branch_sha(owner, repo),
         "indexedAt": datetime.now(timezone.utc).date().isoformat(),
     }
+
+
+def capture_llms_txt_source(source: str) -> dict:
+    config = SOURCE_CONFIGS[source]
+    urls = [str(url) for url in config.get("llms_txt_urls", [])]
+    print(f"- {source}: querying llms.txt metadata")
+    return {
+        "version": fetch_last_modified(urls[0]) if urls else None,
+        "sha": None,
+        "indexedAt": datetime.now(timezone.utc).date().isoformat(),
+    }
+
+
+def capture_for_source(source: str) -> dict | None:
+    if source in VERSION_REPOS:
+        return capture_github_source(source)
+    if SOURCE_CONFIGS.get(source, {}).get("llms_txt_urls"):
+        return capture_llms_txt_source(source)
+    return None
 
 
 def load_existing() -> dict:
@@ -115,10 +156,11 @@ def load_existing() -> dict:
 def capture(sources: list[str]) -> dict:
     versions = load_existing()
     for source in sources:
-        if source not in VERSION_REPOS:
+        metadata = capture_for_source(source)
+        if metadata is None:
             print(f"  ! skipping unknown source: {source}", file=sys.stderr)
             continue
-        versions[source] = capture_for_source(source)
+        versions[source] = metadata
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT_PATH.open("w", encoding="utf-8") as f:
@@ -133,8 +175,8 @@ def main() -> None:
     parser.add_argument(
         "--sources",
         nargs="+",
-        choices=list(VERSION_REPOS.keys()),
-        default=list(VERSION_REPOS.keys()),
+        choices=list(DOC_SOURCE_KEYS),
+        default=list(DOC_SOURCE_KEYS),
         help="Subset of sources to refresh (default: all).",
     )
     args = parser.parse_args()

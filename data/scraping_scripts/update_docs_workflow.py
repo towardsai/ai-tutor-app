@@ -2,14 +2,14 @@
 """
 AI Tutor App - Documentation Update Workflow
 
-This script automates the process of updating documentation from GitHub repositories:
-1. Download documentation from GitHub using the API
+This script automates the process of updating documentation sources:
+1. Download documentation from GitHub or official llms.txt indexes
 2. Process markdown files to create JSONL data
 3. Add contextual information to document nodes
 4. Create vector stores
 5. Upload databases to HuggingFace
 
-This workflow is specific to updating library documentation (Transformers, PEFT, LlamaIndex, etc.).
+This workflow is specific to updating library documentation (Transformers, PEFT, LlamaIndex, OpenAI docs, etc.).
 For adding courses, use the add_course_workflow.py script instead.
 
 Usage:
@@ -36,7 +36,17 @@ from typing import Dict, List, Set
 from dotenv import load_dotenv
 from huggingface_hub import hf_hub_download
 
+from data.scraping_scripts.contextual_node_pruning import (
+    prune_contextual_nodes_to_active_sources,
+)
 from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
+from data.scraping_scripts.source_registry import (
+    DOC_SOURCE_KEYS,
+    GITHUB_SOURCE_KEYS,
+    LLMS_TXT_SOURCE_KEYS,
+    required_data_files,
+    source_output_files,
+)
 from scripts.chroma_rag import get_chunk_record_doc_id
 
 # Load environment variables from .env file
@@ -62,27 +72,10 @@ def ensure_hf_access() -> None:
         sys.exit(1)
 
 
-def ensure_required_files_exist():
+def ensure_required_files_exist(sources_to_regenerate: List[str] | None = None):
     """Download required data files from HuggingFace if they don't exist locally."""
-    # List of files to check and download
-    required_files = {
-        # Critical files
-        "data/all_sources_data.jsonl": "all_sources_data.jsonl",
-        "data/all_sources_contextual_nodes.pkl": "all_sources_contextual_nodes.pkl",
-        # Documentation source files
-        "data/transformers_data.jsonl": "transformers_data.jsonl",
-        "data/peft_data.jsonl": "peft_data.jsonl",
-        "data/trl_data.jsonl": "trl_data.jsonl",
-        "data/llama_index_data.jsonl": "llama_index_data.jsonl",
-        "data/langchain_data.jsonl": "langchain_data.jsonl",
-        "data/openai_cookbooks_data.jsonl": "openai_cookbooks_data.jsonl",
-        # Course files
-        "data/tai_blog_data.jsonl": "tai_blog_data.jsonl",
-        "data/master_ai_for_work_data.jsonl": "master_ai_for_work_data.jsonl",
-        "data/agentic_ai_engineering_data.jsonl": "agentic_ai_engineering_data.jsonl",
-        "data/full_stack_ai_engineering_data.jsonl": "full_stack_ai_engineering_data.jsonl",
-        "data/beginner_python_for_ai_engineering_data.jsonl": "beginner_python_for_ai_engineering_data.jsonl",
-    }
+    required_files = required_data_files()
+    regenerated_source_files = source_output_files(sources_to_regenerate or [])
 
     # Critical files that must be downloaded
     critical_files = [
@@ -92,6 +85,14 @@ def ensure_required_files_exist():
 
     # Check and download each file
     for local_path, remote_filename in required_files.items():
+        if local_path in regenerated_source_files:
+            if not os.path.exists(local_path):
+                logger.info(
+                    "%s will be regenerated for this run; skipping HuggingFace download",
+                    remote_filename,
+                )
+            continue
+
         if not os.path.exists(local_path):
             logger.info(
                 f"{remote_filename} not found. Attempting to download from HuggingFace..."
@@ -129,15 +130,10 @@ def ensure_required_files_exist():
                         )
 
 
-# Documentation sources that can be updated via GitHub API
-GITHUB_SOURCES = [
-    "transformers",
-    "peft",
-    "trl",
-    "llama_index",
-    "openai_cookbooks",
-    "langchain",
-]
+# Documentation sources that can be updated automatically
+DOC_SOURCES = list(DOC_SOURCE_KEYS)
+GITHUB_SOURCES = list(GITHUB_SOURCE_KEYS)
+LLMS_TXT_SOURCES = list(LLMS_TXT_SOURCE_KEYS)
 
 
 def load_jsonl(file_path: str) -> List[Dict]:
@@ -178,6 +174,46 @@ def download_from_github(sources: List[str]) -> None:
         logger.info(f"Successfully downloaded {source} documentation")
 
 
+def download_from_llms_txt(sources: List[str]) -> None:
+    """Download documentation from llms.txt indexes."""
+    logger.info(
+        f"Downloading documentation from llms.txt indexes for sources: {sources}"
+    )
+
+    for source in sources:
+        if source not in LLMS_TXT_SOURCES:
+            logger.warning(
+                f"Source {source} is not an llms.txt source, skipping download"
+            )
+            continue
+
+        logger.info(f"Downloading {source} documentation")
+        result = run_module("data.scraping_scripts.llms_txt_to_markdown_docs", source)
+
+        if result.returncode != 0:
+            logger.error(
+                f"Error downloading {source} documentation. Stopping workflow to avoid overwriting source JSONL files with incomplete data."
+            )
+            sys.exit(1)
+
+        logger.info(f"Successfully downloaded {source} documentation")
+
+
+def download_documentation(sources: List[str]) -> None:
+    """Download docs with the right source-specific downloader."""
+    github_sources = [source for source in sources if source in GITHUB_SOURCES]
+    llms_txt_sources = [source for source in sources if source in LLMS_TXT_SOURCES]
+
+    if github_sources:
+        download_from_github(github_sources)
+    if llms_txt_sources:
+        download_from_llms_txt(llms_txt_sources)
+
+    unsupported = sorted(set(sources) - set(github_sources) - set(llms_txt_sources))
+    for source in unsupported:
+        logger.warning(f"Source {source} is not a downloadable docs source, skipping")
+
+
 def capture_source_versions(sources: List[str]) -> None:
     """Record latest release tag + SHA + indexed date per source."""
     logger.info(f"Capturing source versions for: {sources}")
@@ -201,6 +237,12 @@ def process_markdown_files(sources: List[str]) -> None:
     if result.returncode != 0:
         logger.error("Error processing markdown files - check output above")
         sys.exit(1)
+
+    if len(sources) == 1:
+        from data.scraping_scripts.process_md_files import combine_all_sources
+
+        logger.info("Rebuilding all_sources_data.jsonl after single-source update")
+        combine_all_sources(sources)
 
     logger.info("Successfully processed markdown files")
 
@@ -367,12 +409,12 @@ def main():
     parser.add_argument(
         "--sources",
         nargs="+",
-        choices=GITHUB_SOURCES,
-        default=GITHUB_SOURCES,
-        help="GitHub documentation sources to update",
+        choices=DOC_SOURCES,
+        default=DOC_SOURCES,
+        help="Documentation sources to update",
     )
     parser.add_argument(
-        "--skip-download", action="store_true", help="Skip downloading from GitHub"
+        "--skip-download", action="store_true", help="Skip downloading source docs"
     )
     parser.add_argument(
         "--skip-process", action="store_true", help="Skip processing markdown files"
@@ -403,12 +445,14 @@ def main():
 
     ensure_hf_access()
 
-    # Ensure required data files exist before proceeding
-    ensure_required_files_exist()
+    # Keep untouched source JSONLs by downloading them when needed, but don't
+    # require first-time sources that this run is about to regenerate.
+    sources_to_regenerate = [] if args.skip_process else args.sources
+    ensure_required_files_exist(sources_to_regenerate=sources_to_regenerate)
 
     # Execute the workflow steps
     if not args.skip_download:
-        download_from_github(args.sources)
+        download_documentation(args.sources)
         capture_source_versions(args.sources)
 
     if not args.skip_process:
@@ -416,6 +460,8 @@ def main():
 
     if not args.skip_context:
         add_context_to_nodes(not args.process_all_context)
+
+    prune_contextual_nodes_to_active_sources()
 
     if not args.skip_vectors:
         create_vector_stores()

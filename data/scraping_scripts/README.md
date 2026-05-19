@@ -4,10 +4,17 @@
 
 Make sure you have the required environment variables set:
 
-- `OPENAI_API_KEY` for the LLM
+- `GEMINI_API_KEY` or `GOOGLE_API_KEY` for context generation with Gemini
 - `COHERE_API_KEY` for embeddings
 - `HF_TOKEN` for HuggingFace uploads and downloads - [access to the private HuggingFace dataset repo](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-data/tree/main)
 - `GITHUB_TOKEN` for accessing files via the GitHub API
+
+Optional Gemini context-generation tuning:
+
+- `GEMINI_CONTEXT_TPM_LIMIT` - input token-per-minute quota to throttle against (defaults to `30000000`)
+- `GEMINI_CONTEXT_TPM_SAFETY_MARGIN` - fraction of that quota to use before pausing (defaults to `0.8`)
+- `GEMINI_CONTEXT_CONCURRENCY` - max concurrent context requests (defaults to `50`)
+- `GEMINI_CONTEXT_RETRY_ATTEMPTS` - max tenacity attempts for transient Gemini API errors (defaults to `8`)
 
 ## 1. Prepare the course data
 
@@ -40,9 +47,10 @@ Make sure you have the required environment variables set:
 7. Rename the folder to the course name.
    - e.g. `master_ai_for_work`
 
-8. Open the `data/scraping_scripts/process_md_files.py` python file and locate the `SOURCE_CONFIGS` dictionary.
+8. Open `data/scraping_scripts/source_registry.py`.
 
-9. Add the new course to the `SOURCE_CONFIGS` dictionary.
+9. Add the new course to the `SOURCE_CONFIGS` dictionary. Sources listed in
+   this registry are active in the knowledge base.
 
    example:
 
@@ -70,13 +78,13 @@ Make sure you have the required environment variables set:
 ## 2. Run the add_course_workflow.py script
 
 ```bash
-uv run -m data.scraping_scripts.add_course_workflow --course [COURSE_NAME]
+uv run -m data.scraping_scripts.add_course_workflow --courses [COURSE_NAME]
 ```
 
 example:
 
 ```bash
-uv run -m data.scraping_scripts.add_course_workflow --course master_ai_for_work
+uv run -m data.scraping_scripts.add_course_workflow --courses master_ai_for_work
 ```
 
 This script will guide you through the complete process, it will:
@@ -88,7 +96,7 @@ This script will guide you through the complete process, it will:
    5. Add contextual information to document chunks before embedding
    6. Create vector stores
    7. Upload databases to HuggingFace
-   8. Update UI configuration
+   8. Confirm the course is configured in the central source registry
 
 ## 3. Add URLs to the course content + Manual Dataset Cleaning (Most important step)
 
@@ -109,7 +117,7 @@ example: "Course Admin and Syllabus", "Course Structure/Overview", "Course Outli
 ## 4. Once done, run the script again and answer "yes" to the question "Have you added all the URLs?"
 
 ```bash
-uv run -m data.scraping_scripts.add_course_workflow --course master_ai_for_work
+uv run -m data.scraping_scripts.add_course_workflow --courses master_ai_for_work
 ```
 
 ## 5. Its done
@@ -172,9 +180,11 @@ The workflow:
 1. Downloads `all_sources_data.jsonl` and `all_sources_contextual_nodes.pkl` if
    they are missing locally.
 2. Removes rows/chunks whose `source` matches the retired source key.
-3. Rebuilds `data/chroma-db-all_sources`.
-4. Uploads the rebuilt vector DB and updated aggregate data files.
-5. Deletes the retired per-source JSONL from `towardsai-tutors/ai-tutor-data`.
+3. Removes the retired source from `source_registry.py`, so it is no longer
+   active in future workflow runs or the UI source picker.
+4. Rebuilds `data/chroma-db-all_sources`.
+5. Uploads the rebuilt vector DB and updated aggregate data files.
+6. Deletes the retired per-source JSONL from `towardsai-tutors/ai-tutor-data`.
 
 Run with `--dry-run` first to preview counts without changing files:
 
@@ -182,8 +192,8 @@ Run with `--dry-run` first to preview counts without changing files:
 uv run -m data.scraping_scripts.retire_source_workflow --sources 8-hour_primer --dry-run
 ```
 
-After retiring a source, remove its entry from `SOURCE_CONFIGS` and from the
-workflow download/upload lists so future merges cannot reintroduce it.
+Use `--keep-source-registry` only if you want to remove existing chunks while
+leaving the source configured as active for a future rebuild.
 
 ## Tips for New Team Members
 
@@ -200,9 +210,9 @@ workflow download/upload lists so future merges cannot reintroduce it.
 3. By default, only new content will have context added to save time and resources. Use `--process-all-context` only if you need to regenerate context for all documents. Use `--skip-data-upload` if you don't want to upload data files to the private HuggingFace repo (they're uploaded by default).
 
 4. When adding a new course, verify that it appears in the Gradio UI:
-   - The workflow automatically updates `scripts/setup.py` to include the new source and `scripts/main.py` to preselect it by default
+   - Add the source label and default-selection metadata in `source_registry.py`
    - Check that the new source appears in the dropdown menu in the UI
-   - Make sure it's properly included in the default selected sources
+   - Make sure it's properly included in the default selected sources if desired
    - Restart the Gradio app to see the changes
 
 5. First time setup or missing files:

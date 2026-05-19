@@ -18,14 +18,15 @@ Key features:
 Usage:
     python process_md_files.py <source1> <source2> ...
 
-Where <source1>, <source2>, etc. are one or more of the predefined sources in SOURCE_CONFIGS
+Where <source1>, <source2>, etc. are one or more of the active sources in
+source_registry.py
 (e.g., 'transformers', 'llama_index', 'openai_cookbooks').
 
 The script processes all Markdown files in the specified input directories (and their subdirectories),
 applies the configured filters, and saves the results in JSONL files. Each line in the output
 files represents a single document with metadata and content.
 
-To add or modify sources, update the SOURCE_CONFIGS dictionary at the top of the script.
+To add, modify, or retire sources, update data/scraping_scripts/source_registry.py.
 """
 
 import argparse
@@ -38,170 +39,90 @@ from typing import Dict, List
 
 import tiktoken
 
+try:
+    from data.scraping_scripts.source_registry import SOURCE_CONFIGS
+except ModuleNotFoundError:
+    from source_registry import SOURCE_CONFIGS
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configuration for different sources
-SOURCE_CONFIGS = {
-    "transformers": {
-        "base_url": "https://huggingface.co/docs/transformers/",
-        "input_directory": "data/transformers_md_files",
-        "output_file": "data/transformers_data.jsonl",
-        "source_name": "transformers",
-        "use_include_list": False,
-        "included_dirs": [],
-        "excluded_dirs": ["internal", "main_classes"],
-        "excluded_root_files": [],
-        "included_root_files": [],
-        "url_extension": "",
-    },
-    "peft": {
-        "base_url": "https://huggingface.co/docs/peft/",
-        "input_directory": "data/peft_md_files",
-        "output_file": "data/peft_data.jsonl",
-        "source_name": "peft",
-        "use_include_list": False,
-        "included_dirs": [],
-        "excluded_dirs": [],
-        "excluded_root_files": [],
-        "included_root_files": [],
-        "url_extension": "",
-    },
-    "trl": {
-        "base_url": "https://huggingface.co/docs/trl/",
-        "input_directory": "data/trl_md_files",
-        "output_file": "data/trl_data.jsonl",
-        "source_name": "trl",
-        "use_include_list": False,
-        "included_dirs": [],
-        "excluded_dirs": [],
-        "excluded_root_files": [],
-        "included_root_files": [],
-        "url_extension": "",
-    },
-    "llama_index": {
-        "base_url": "https://docs.llamaindex.ai/en/stable/",
-        "input_directory": "data/llama_index_md_files",
-        "output_file": "data/llama_index_data.jsonl",
-        "source_name": "llama_index",
-        "use_include_list": True,
-        "included_dirs": [
-            "src/content/docs/framework/index.md",
-            "src/content/docs/framework/getting_started",
-            "src/content/docs/framework/understanding",
-            "src/content/docs/framework/use_cases",
-            "src/content/docs/framework/module_guides",
-            "src/content/docs/framework/optimizing",
-            "examples",
-        ],
-        "excluded_dirs": [],
-        "excluded_root_files": [],
-        "included_root_files": [],
-        "url_extension": "",
-    },
-    "openai_cookbooks": {
-        "base_url": "https://github.com/openai/openai-cookbook/blob/main/examples/",
-        "input_directory": "data/openai-cookbook_md_files",
-        "output_file": "data/openai_cookbooks_data.jsonl",
-        "source_name": "openai_cookbooks",
-        "use_include_list": False,
-        "included_dirs": [],
-        "excluded_dirs": [],
-        "excluded_root_files": [],
-        "included_root_files": [],
-        "url_extension": ".ipynb",
-    },
-    "langchain": {
-        "base_url": "https://docs.langchain.com/oss/python/",
-        "input_directory": "data/langchain_md_files",
-        "output_file": "data/langchain_data.jsonl",
-        "source_name": "langchain",
-        "use_include_list": True,
-        "included_dirs": [
-            "concepts",
-            "langchain",
-            "python/integrations",
-            "python/migrate",
-            "python/releases",
-        ],
-        "excluded_dirs": [],
-        "excluded_root_files": [],
-        "included_root_files": [
-            "security-policy.mdx",
-            "release-policy.mdx",
-            "versioning.mdx",
-        ],
-        "url_extension": "",
-    },
-    "tai_blog": {
-        "base_url": "",
-        "input_directory": "",
-        "output_file": "data/tai_blog_data.jsonl",
-        "source_name": "tai_blog",
-        "use_include_list": False,
-        "included_dirs": [],
-        "excluded_dirs": [],
-        "excluded_root_files": [],
-        "included_root_files": [],
-        "url_extension": "",
-    },
-    "full_stack_ai_engineering": {
-        "base_url": "",
-        "input_directory": "data/full_stack_ai_engineering",  # Path to the directory that contains the Markdown files
-        "output_file": "data/full_stack_ai_engineering_data.jsonl",
-        "source_name": "full_stack_ai_engineering",
-        "use_include_list": False,
-        "included_dirs": [],
-        "excluded_dirs": [],
-        "excluded_root_files": [],
-        "included_root_files": [],
-        "url_extension": "",
-    },
-    "beginner_python_for_ai_engineering": {
-        "base_url": "",
-        "input_directory": "data/beginner_python_for_ai_engineering",  # Path to the directory that contains the Markdown files
-        "output_file": "data/beginner_python_for_ai_engineering_data.jsonl",
-        "source_name": "beginner_python_for_ai_engineering",
-        "use_include_list": False,
-        "included_dirs": [],
-        "excluded_dirs": [],
-        "excluded_root_files": [],
-        "included_root_files": [],
-        "url_extension": "",
-    },
-    "master_ai_for_work": {
-        "base_url": "",
-        "input_directory": "data/master_ai_for_work",  # Path to the directory that contains the Markdown files
-        "output_file": "data/master_ai_for_work_data.jsonl",
-        "source_name": "master_ai_for_work",
-        "use_include_list": False,
-        "included_dirs": [],
-        "excluded_dirs": [],
-        "excluded_root_files": [],
-        "included_root_files": [],
-        "url_extension": "",
-    },
-    "agentic_ai_engineering": {
-        "base_url": "",
-        "input_directory": "data/agentic_ai_engineering",  # Path to the directory that contains the Markdown files
-        "output_file": "data/agentic_ai_engineering_data.jsonl",  # Agentic AI Engineering
-        "source_name": "agentic_ai_engineering",
-        "use_include_list": False,
-        "included_dirs": [],
-        "excluded_dirs": [],
-        "excluded_root_files": [],
-        "included_root_files": [],
-        "url_extension": "",
-    },
-}
+
+def split_frontmatter(content: str) -> tuple[str | None, str]:
+    lines = content.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None, content
+
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() in {"---", "..."}:
+            frontmatter = "\n".join(lines[1:index])
+            body = "\n".join(lines[index + 1 :])
+            return frontmatter, body
+
+    return None, content
+
+
+def clean_frontmatter_scalar(value: str) -> str | None:
+    value = value.strip()
+    if not value or value in {"|", ">"}:
+        return None
+
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        quote = value[0]
+        value = value[1:-1]
+        if quote == '"':
+            value = value.replace(r"\"", '"').replace(r"\\", "\\")
+        else:
+            value = value.replace("''", "'")
+
+    value = value.strip()
+    return value or None
+
+
+def extract_frontmatter_title(frontmatter: str) -> str | None:
+    for key in ("title", "sidebarTitle"):
+        title_match = re.search(rf"(?m)^\s*{key}\s*:\s*(.+?)\s*$", frontmatter)
+        if title_match:
+            title = clean_frontmatter_scalar(title_match.group(1))
+            if title:
+                return title
+
+    return None
+
+
+def iter_markdown_lines_outside_code_fences(content: str):
+    in_code_fence = False
+    fence_char = None
+
+    for line in content.splitlines():
+        fence_match = re.match(r"^\s{0,3}(```+|~~~+)", line)
+        if fence_match:
+            current_fence_char = fence_match.group(1)[0]
+            if not in_code_fence:
+                in_code_fence = True
+                fence_char = current_fence_char
+            elif current_fence_char == fence_char:
+                in_code_fence = False
+                fence_char = None
+            continue
+
+        if not in_code_fence:
+            yield line
 
 
 def extract_title(content: str):
-    title_match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
-    if title_match:
-        return title_match.group(1).strip()
+    frontmatter, body = split_frontmatter(content)
+    if frontmatter:
+        title = extract_frontmatter_title(frontmatter)
+        if title:
+            return title
 
-    lines = content.split("\n")
+    for line in iter_markdown_lines_outside_code_fences(body):
+        title_match = re.match(r"^\s{0,3}#\s+(.+)$", line)
+        if title_match:
+            return title_match.group(1).strip()
+
+    lines = body.split("\n")
     for line in lines:
         if line.strip():
             return line.strip()
@@ -209,16 +130,70 @@ def extract_title(content: str):
     return None
 
 
-def generate_url(file_path: str, config: Dict) -> str:
+def load_source_extension_manifest(directory: str) -> Dict[str, str]:
+    manifest_path = os.path.join(directory, "_source_extensions.json")
+    if not os.path.exists(manifest_path):
+        return {}
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Could not load source extension manifest: %s", manifest_path)
+        return {}
+
+    return {
+        str(path): str(extension)
+        for path, extension in manifest.items()
+        if isinstance(path, str) and isinstance(extension, str)
+    }
+
+
+def load_source_url_manifest(directory: str) -> Dict[str, str]:
+    manifest_path = os.path.join(directory, "_source_urls.json")
+    if not os.path.exists(manifest_path):
+        return {}
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Could not load source URL manifest: %s", manifest_path)
+        return {}
+
+    return {
+        str(path): str(url)
+        for path, url in manifest.items()
+        if isinstance(path, str) and isinstance(url, str)
+    }
+
+
+def generate_url(
+    file_path: str,
+    config: Dict,
+    source_extension: str | None = None,
+    source_url: str | None = None,
+) -> str:
     """
     Return an empty string if base_url is empty;
     otherwise return the constructed URL as before.
     """
+    if source_url:
+        return source_url
+
     if not config["base_url"]:
         return ""
 
-    path_without_extension = os.path.splitext(file_path)[0]
     source_name = config["source_name"]
+    path_with_forward_slashes = file_path.replace("\\", "/")
+
+    if config.get("preserve_file_extension_in_url"):
+        if source_extension:
+            path_without_extension = os.path.splitext(path_with_forward_slashes)[0]
+            return config["base_url"] + path_without_extension + source_extension
+        return config["base_url"] + path_with_forward_slashes
+
+    path_without_extension = os.path.splitext(file_path)[0]
 
     if source_name == "llama_index":
         framework_prefix = "src/content/docs/framework/"
@@ -261,8 +236,36 @@ def remove_copyright_header(content: str) -> str:
     return cleaned_content.strip()
 
 
+def remove_inline_base64_images(content: str) -> str:
+    content = re.sub(
+        r"!\[[^\]]*\]\(\s*data:image/[^,\s)]+;base64,[A-Za-z0-9+/=]+(?:\s+\"[^\"]*\")?\s*\)",
+        "[inline image omitted]",
+        content,
+    )
+    content = re.sub(
+        r"<img\b[^>]*\bsrc=[\"']data:image/[^,\s\"']+;base64,[A-Za-z0-9+/=]+[\"'][^>]*>",
+        "[inline image omitted]",
+        content,
+        flags=re.IGNORECASE,
+    )
+    content = re.sub(
+        r"data:image/[^,\s)\"']+;base64,[A-Za-z0-9+/=]+",
+        "[inline image omitted]",
+        content,
+    )
+    return content
+
+
+def clean_document_content(content: str) -> str:
+    content = remove_copyright_header(content)
+    content = remove_inline_base64_images(content)
+    return content.strip()
+
+
 def process_md_files(directory: str, config: Dict) -> List[Dict]:
     jsonl_data = []
+    source_extension_manifest = load_source_extension_manifest(directory)
+    source_url_manifest = load_source_url_manifest(directory)
 
     for root, _, files in os.walk(directory):
         for file in files:
@@ -274,8 +277,9 @@ def process_md_files(directory: str, config: Dict) -> List[Dict]:
                     with open(file_path, "r", encoding="utf-8") as f:
                         content = f.read()
 
-                    title = extract_title(content)
-                    token_count = num_tokens_from_string(content, "cl100k_base")
+                    cleaned_content = clean_document_content(content)
+                    title = extract_title(cleaned_content)
+                    token_count = num_tokens_from_string(cleaned_content, "cl100k_base")
 
                     # Skip very small or extremely large files
                     if token_count < 100 or token_count > 200_000:
@@ -284,13 +288,18 @@ def process_md_files(directory: str, config: Dict) -> List[Dict]:
                         )
                         continue
 
-                    cleaned_content = remove_copyright_header(content)
-
                     json_object = {
                         "tokens": token_count,
                         "doc_id": str(uuid.uuid4()),
                         "name": (title if title else file),
-                        "url": generate_url(relative_path, config),
+                        "url": generate_url(
+                            relative_path,
+                            config,
+                            source_extension_manifest.get(
+                                relative_path.replace("\\", "/")
+                            ),
+                            source_url_manifest.get(relative_path.replace("\\", "/")),
+                        ),
                         "retrieve_doc": (token_count <= 8000),
                         "source": config["source_name"],
                         "content": cleaned_content,

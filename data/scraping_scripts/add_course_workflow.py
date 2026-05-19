@@ -6,8 +6,8 @@ This script guides you through adding or updating one or more courses in the AI 
 
 1. Process course markdown files to create per-course JSONL data
 2. MANDATORY MANUAL STEP: Add URLs to each course JSONL
-3. Rebuild all_sources_data.jsonl from the per-source JSONLs listed in SOURCE_CONFIGS
-   (this naturally drops any retired sources no longer in SOURCE_CONFIGS)
+3. Rebuild all_sources_data.jsonl from active sources in source_registry.py
+   (this naturally drops any retired sources no longer in the registry)
 4. Optionally purge retired sources from the contextual-nodes PKL
 5. Add contextual information to document nodes (only new docs by default)
 6. Create vector stores
@@ -37,13 +37,21 @@ import os
 import pickle
 import subprocess
 import sys
-from pathlib import Path
 from typing import Dict, List, Set
 
 from dotenv import load_dotenv
 from huggingface_hub import hf_hub_download
 
+from data.scraping_scripts.contextual_node_pruning import (
+    prune_contextual_nodes_to_active_sources,
+)
 from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
+from data.scraping_scripts.source_registry import (
+    SOURCE_CONFIGS,
+    SOURCE_KEY_TO_LABEL,
+    required_data_files,
+    source_output_files,
+)
 from scripts.chroma_rag import get_chunk_record_doc_id
 
 # Load environment variables from .env file
@@ -69,27 +77,10 @@ def ensure_hf_access() -> None:
         sys.exit(1)
 
 
-def ensure_required_files_exist():
+def ensure_required_files_exist(sources_to_regenerate: List[str] | None = None):
     """Download required data files from HuggingFace if they don't exist locally."""
-    # List of files to check and download
-    required_files = {
-        # Critical files
-        "data/all_sources_data.jsonl": "all_sources_data.jsonl",
-        "data/all_sources_contextual_nodes.pkl": "all_sources_contextual_nodes.pkl",
-        # Documentation source files
-        "data/transformers_data.jsonl": "transformers_data.jsonl",
-        "data/peft_data.jsonl": "peft_data.jsonl",
-        "data/trl_data.jsonl": "trl_data.jsonl",
-        "data/llama_index_data.jsonl": "llama_index_data.jsonl",
-        "data/langchain_data.jsonl": "langchain_data.jsonl",
-        "data/openai_cookbooks_data.jsonl": "openai_cookbooks_data.jsonl",
-        # Course files
-        "data/tai_blog_data.jsonl": "tai_blog_data.jsonl",
-        "data/master_ai_for_work_data.jsonl": "master_ai_for_work_data.jsonl",
-        "data/agentic_ai_engineering_data.jsonl": "agentic_ai_engineering_data.jsonl",
-        "data/full_stack_ai_engineering_data.jsonl": "full_stack_ai_engineering_data.jsonl",
-        "data/beginner_python_for_ai_engineering_data.jsonl": "beginner_python_for_ai_engineering_data.jsonl",
-    }
+    required_files = required_data_files()
+    regenerated_source_files = source_output_files(sources_to_regenerate or [])
 
     # Critical files that must be downloaded
     critical_files = [
@@ -99,6 +90,14 @@ def ensure_required_files_exist():
 
     # Check and download each file
     for local_path, remote_filename in required_files.items():
+        if local_path in regenerated_source_files:
+            if not os.path.exists(local_path):
+                logger.info(
+                    "%s will be regenerated for this run; skipping HuggingFace download",
+                    remote_filename,
+                )
+            continue
+
         if not os.path.exists(local_path):
             logger.info(
                 f"{remote_filename} not found. Attempting to download from HuggingFace..."
@@ -164,9 +163,6 @@ def process_markdown_files(course_name: str) -> str:
 
     logger.info(f"Successfully processed markdown files for {course_name}")
 
-    # Determine the output file path from process_md_files.py
-    from data.scraping_scripts.process_md_files import SOURCE_CONFIGS
-
     if course_name not in SOURCE_CONFIGS:
         logger.error(f"Course {course_name} not found in SOURCE_CONFIGS")
         sys.exit(1)
@@ -206,12 +202,11 @@ def manual_url_addition(jsonl_path: str) -> None:
 
 
 def rebuild_all_sources(courses: List[str]) -> None:
-    """Rebuild all_sources_data.jsonl from the per-source JSONLs in SOURCE_CONFIGS.
+    """Rebuild all_sources_data.jsonl from active source JSONLs.
 
     Unlike the previous append-style merge, this drops any source whose entry
-    has been removed from SOURCE_CONFIGS (e.g. retired/renamed courses) and
-    reloads every other source from its own JSONL. Safe against stale rows
-    for sources like llm_developper / python_primer that were renamed.
+    has been removed from source_registry.py and reloads every other active
+    source from its own JSONL.
     """
     from data.scraping_scripts.process_md_files import combine_all_sources
 
@@ -415,85 +410,19 @@ def upload_to_huggingface(upload_jsonl: bool = False) -> None:
 
 
 def update_ui_files(course_name: str) -> None:
-    """Update setup.py and the default selected UI sources for the new course."""
-    logger.info(f"Updating UI files with new course: {course_name}")
-
-    # Get the source configuration for display name
-    from data.scraping_scripts.process_md_files import SOURCE_CONFIGS
-
-    if course_name not in SOURCE_CONFIGS:
-        logger.error(f"Course {course_name} not found in SOURCE_CONFIGS")
+    """Confirm the course is represented in the central source registry."""
+    if course_name not in SOURCE_KEY_TO_LABEL:
+        logger.warning(
+            "%s is not in source_registry.py UI metadata. Add it there if it "
+            "should appear in the app source picker.",
+            course_name,
+        )
         return
 
-    # Get a readable display name for the UI
-    display_name = course_name.replace("_", " ").title()
-
-    # Update setup.py - add to AVAILABLE_SOURCES, AVAILABLE_SOURCES_UI, and SOURCE_UI_TO_KEY
-    setup_path = Path("scripts/setup.py")
-    if setup_path.exists():
-        setup_content = setup_path.read_text()
-
-        # Check if already added
-        if f'"{course_name}"' in setup_content:
-            logger.info(f"Course {course_name} already in setup.py")
-        else:
-            # Add to AVAILABLE_SOURCES_UI
-            ui_list_start = setup_content.find("AVAILABLE_SOURCES_UI = [")
-            ui_list_end = setup_content.find("]", ui_list_start)
-            new_ui_content = (
-                setup_content[:ui_list_end]
-                + f'    "{display_name}",\n'
-                + setup_content[ui_list_end:]
-            )
-
-            # Add to AVAILABLE_SOURCES
-            sources_list_start = new_ui_content.find("AVAILABLE_SOURCES = [")
-            sources_list_end = new_ui_content.find("]", sources_list_start)
-            new_content = (
-                new_ui_content[:sources_list_end]
-                + f'    "{course_name}",\n'
-                + new_ui_content[sources_list_end:]
-            )
-
-            mapping_start = new_content.find("SOURCE_UI_TO_KEY = {")
-            mapping_end = new_content.find("}", mapping_start)
-            if f'"{display_name}": "{course_name}"' not in new_content:
-                new_content = (
-                    new_content[:mapping_end]
-                    + f'    "{display_name}": "{course_name}",\n'
-                    + new_content[mapping_end:]
-                )
-
-            # Write updated content
-            setup_path.write_text(new_content)
-            logger.info(f"Updated setup.py with {course_name}")
-    else:
-        logger.warning(f"setup.py not found at {setup_path}")
-
-    # Update main.py - add to the default selected source list
-    main_path = Path("scripts/main.py")
-    if main_path.exists():
-        main_content = main_path.read_text()
-
-        # Check if already added
-        if f'"{display_name}"' in main_content:
-            logger.info(f"Course {course_name} already in main.py")
-        else:
-            value_start = main_content.find("value=[")
-            value_end = main_content.find("]", value_start)
-            new_main_content = main_content
-            if value_start != -1 and value_end != -1:
-                new_main_content = (
-                    main_content[: value_start + 7]
-                    + f'        "{display_name}",\n'
-                    + main_content[value_start + 7 :]
-                )
-
-            # Write updated content
-            main_path.write_text(new_main_content)
-            logger.info(f"Updated main.py with {course_name}")
-    else:
-        logger.warning(f"main.py not found at {main_path}")
+    logger.info(
+        "%s is configured in source_registry.py; no setup.py/main.py edits needed.",
+        course_name,
+    )
 
 
 def main():
@@ -504,7 +433,7 @@ def main():
         "--courses",
         nargs="+",
         required=True,
-        help="One or more course names to process (must match SOURCE_CONFIGS)",
+        help="One or more course names to process (must match source_registry.py)",
     )
     parser.add_argument(
         "--purge-sources",
@@ -553,18 +482,18 @@ def main():
     args = parser.parse_args()
     courses: List[str] = args.courses
 
-    ensure_hf_access()
-
-    # Ensure required data files exist before proceeding
-    ensure_required_files_exist()
-
-    from data.scraping_scripts.process_md_files import SOURCE_CONFIGS
-
     # Validate every course up front so we fail fast
     for course_name in courses:
         if course_name not in SOURCE_CONFIGS:
             logger.error(f"Course {course_name} not found in SOURCE_CONFIGS")
             sys.exit(1)
+
+    ensure_hf_access()
+
+    # Keep untouched source JSONLs by downloading them when needed, but don't
+    # require first-time courses that this run is about to regenerate.
+    sources_to_regenerate = [] if args.skip_process_md else courses
+    ensure_required_files_exist(sources_to_regenerate=sources_to_regenerate)
 
     # Per-course: process markdown + manual URL addition
     for course_name in courses:
@@ -590,6 +519,8 @@ def main():
 
     if not args.skip_context:
         add_context_to_nodes(not args.process_all_context)
+
+    prune_contextual_nodes_to_active_sources()
 
     if not args.skip_vectors:
         create_vector_stores()

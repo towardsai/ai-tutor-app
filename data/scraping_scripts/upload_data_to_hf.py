@@ -22,33 +22,17 @@ from dotenv import load_dotenv
 
 try:
     from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
+    from data.scraping_scripts.source_registry import upload_data_file_paths
 except ModuleNotFoundError:
     from hf_auth import HuggingFaceAuthError, validate_hf_access
+    from source_registry import upload_data_file_paths
 
 load_dotenv()
 
 
 def upload_files_to_huggingface(repo_id="towardsai-tutors/ai-tutor-data"):
     """Upload data files to a private HuggingFace repository."""
-    # Main files to upload
-    files_to_upload = [
-        # Combined data and vector store
-        "data/all_sources_data.jsonl",
-        "data/all_sources_contextual_nodes.pkl",
-        # Individual source files
-        "data/transformers_data.jsonl",
-        "data/peft_data.jsonl",
-        "data/trl_data.jsonl",
-        "data/llama_index_data.jsonl",
-        "data/langchain_data.jsonl",
-        "data/openai_cookbooks_data.jsonl",
-        # Course files
-        "data/tai_blog_data.jsonl",
-        "data/master_ai_for_work_data.jsonl",
-        "data/agentic_ai_engineering_data.jsonl",
-        "data/full_stack_ai_engineering_data.jsonl",
-        "data/beginner_python_for_ai_engineering_data.jsonl",
-    ]
+    files_to_upload = upload_data_file_paths()
 
     # Filter to only include files that exist
     existing_files = []

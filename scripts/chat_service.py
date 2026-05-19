@@ -19,6 +19,7 @@ from .chat_types import ChatEvent, ChatRequest, ChatTurn, SourceMatch
 from .chroma_rag import LocalChromaRetriever, format_tool_payload, parse_tool_payload
 from .prompts import build_system_prompt
 from .setup import (
+    BM25_INDEX_PATH,
     COURSE_SOURCE_KEYS,
     DOCUMENT_DICT_PATH,
     SOURCE_KEY_TO_LABEL,
@@ -51,6 +52,7 @@ def get_retriever() -> LocalChromaRetriever:
         db_path=VECTOR_DB_DIR,
         collection_name=VECTOR_COLLECTION_NAME,
         document_dict_path=DOCUMENT_DICT_PATH,
+        bm25_index_path=BM25_INDEX_PATH,
         cohere_api_key=cohere_api_key,
     )
 

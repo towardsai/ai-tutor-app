@@ -5,8 +5,9 @@ Retire one or more sources from the AI Tutor data pipeline.
 This removes the source from:
 1. data/all_sources_data.jsonl
 2. data/all_sources_contextual_nodes.pkl
-3. the rebuilt Chroma vector store
-4. the private Hugging Face data repository's per-source JSONL file
+3. data/scraping_scripts/source_registry.py
+4. the rebuilt Chroma vector store
+5. the private Hugging Face data repository's per-source JSONL file
 
 Example:
     uv run -m data.scraping_scripts.retire_source_workflow --sources 8-hour_primer --yes
@@ -15,9 +16,11 @@ Example:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import pickle
+import re
 import shutil
 import subprocess
 import sys
@@ -33,7 +36,7 @@ from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_acce
 from scripts.chroma_rag import get_chunk_record_source
 
 try:
-    from data.scraping_scripts.process_md_files import SOURCE_CONFIGS
+    from data.scraping_scripts.source_registry import SOURCE_CONFIGS
 except Exception:
     SOURCE_CONFIGS = {}
 
@@ -43,6 +46,7 @@ DATA_REPO_ID = "towardsai-tutors/ai-tutor-data"
 VECTOR_REPO_ID = "towardsai-tutors/ai-tutor-vector-db"
 ALL_SOURCES_JSONL = Path("data/all_sources_data.jsonl")
 CONTEXTUAL_NODES = Path("data/all_sources_contextual_nodes.pkl")
+SOURCE_REGISTRY = Path("data/scraping_scripts/source_registry.py")
 
 
 def run_module(module_name: str, *module_args: str) -> subprocess.CompletedProcess:
@@ -168,6 +172,104 @@ def delete_local_source_files(sources: list[str], dry_run: bool) -> None:
         print(f"Deleted local source file {source_path} after backup to {backup_path}")
 
 
+def find_source_config_block(text: str, source: str) -> tuple[int, int] | None:
+    marker = f'    "{source}": {{'
+    start = text.find(marker)
+    if start == -1:
+        return None
+
+    body_start = text.find("{", start)
+    if body_start == -1:
+        return None
+
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for index in range(body_start, len(text)):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+
+        if char in {"'", '"'}:
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                end = index + 1
+                if end < len(text) and text[end] == ",":
+                    end += 1
+                if end < len(text) and text[end] == "\n":
+                    end += 1
+                return start, end
+
+    return None
+
+
+def remove_source_from_registry_text(text: str, source: str) -> tuple[str, bool]:
+    original = text
+    block = find_source_config_block(text, source)
+    if block is not None:
+        start, end = block
+        text = text[:start] + text[end:]
+
+    source_pattern = re.escape(source)
+    text = re.sub(
+        rf'^[ \t]*"{source_pattern}",\n',
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    text = re.sub(
+        rf'^[ \t]*"{source_pattern}":\s*"[^"\n]*",\n',
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    return text, text != original
+
+
+def update_source_registry(sources: list[str], dry_run: bool) -> None:
+    if not SOURCE_REGISTRY.exists():
+        print(f"Warning: {SOURCE_REGISTRY} not found; registry was not updated.")
+        return
+
+    original = SOURCE_REGISTRY.read_text(encoding="utf-8")
+    updated = original
+    changed_sources: list[str] = []
+
+    for source in sources:
+        updated, changed = remove_source_from_registry_text(updated, source)
+        if changed:
+            changed_sources.append(source)
+
+    if not changed_sources:
+        print(f"No retired sources were found in {SOURCE_REGISTRY}.")
+        return
+
+    if dry_run:
+        print(
+            "Would remove from source_registry.py: "
+            + ", ".join(sorted(changed_sources))
+        )
+        return
+
+    ast.parse(updated, filename=str(SOURCE_REGISTRY))
+    backup_path = backup_file(SOURCE_REGISTRY)
+    SOURCE_REGISTRY.write_text(updated, encoding="utf-8")
+    print(
+        f"Removed {', '.join(sorted(changed_sources))} from {SOURCE_REGISTRY} "
+        f"after backup to {backup_path}"
+    )
+
+
 def rebuild_vector_store() -> None:
     if not os.getenv("COHERE_API_KEY"):
         raise SystemExit("COHERE_API_KEY is required to rebuild the Chroma vector store.")
@@ -246,7 +348,7 @@ def main() -> None:
         nargs="*",
         help=(
             "Optional exact per-source JSONL filenames to delete from the data repo. "
-            "Defaults to SOURCE_CONFIGS output files or <source>_data.jsonl."
+            "Defaults to source_registry.py output files or <source>_data.jsonl."
         ),
     )
     parser.add_argument(
@@ -278,6 +380,11 @@ def main() -> None:
         "--delete-local-source-files",
         action="store_true",
         help="Delete matching local per-source JSONL files after backing them up.",
+    )
+    parser.add_argument(
+        "--keep-source-registry",
+        action="store_true",
+        help="Do not remove retired sources from data/scraping_scripts/source_registry.py.",
     )
     parser.add_argument(
         "--dry-run",
@@ -332,6 +439,9 @@ def main() -> None:
 
     if args.delete_local_source_files:
         delete_local_source_files(args.sources, args.dry_run)
+
+    if not args.keep_source_registry:
+        update_source_registry(args.sources, args.dry_run)
 
     if args.dry_run:
         print("Dry run complete. No files were changed.")
