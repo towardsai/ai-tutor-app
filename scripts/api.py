@@ -16,11 +16,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .chat_service import (
-    get_retriever,
     is_anthropic_model,
     is_google_genai_model,
     message_content_to_text,
     stream_chat,
+    warm_up_retriever,
 )
 from .chat_types import ChatEvent, ChatRequest, ChatTurn
 from .setup import (
@@ -78,14 +78,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     `Could not connect to tenant default_tenant`. Touching the retriever
     at startup forces single-threaded tenant init.
     """
-    if os.environ.get("COHERE_API_KEY"):
-        try:
-            get_retriever()
-        except Exception as exc:  # pragma: no cover - diagnostic logging only
-            logfire.warn(
-                "Retriever warm-up failed; first retrieval call may retry.",
-                error=str(exc),
-            )
+    warm_up_retriever()
     yield
 
 

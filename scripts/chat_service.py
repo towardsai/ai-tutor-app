@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from threading import Lock
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
@@ -37,6 +38,7 @@ ANSWER_HEADER = "**Answer**"
 LEGACY_THOUGHTS_DETAILS_OPEN = "<details><summary>Gemini thoughts</summary>"
 LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED = "<details open><summary>Gemini thoughts</summary>"
 CHECKPOINTER = InMemorySaver()
+_RETRIEVER_INIT_LOCK = Lock()
 
 
 @dataclass(frozen=True)
@@ -45,7 +47,7 @@ class AppContext:
 
 
 @lru_cache(maxsize=1)
-def get_retriever() -> LocalChromaRetriever:
+def _build_retriever() -> LocalChromaRetriever:
     ensure_local_vector_db()
     cohere_api_key = os.environ["COHERE_API_KEY"]
     return LocalChromaRetriever(
@@ -55,6 +57,23 @@ def get_retriever() -> LocalChromaRetriever:
         bm25_index_path=BM25_INDEX_PATH,
         cohere_api_key=cohere_api_key,
     )
+
+
+def get_retriever() -> LocalChromaRetriever:
+    with _RETRIEVER_INIT_LOCK:
+        return _build_retriever()
+
+
+def warm_up_retriever() -> None:
+    if not os.environ.get("COHERE_API_KEY"):
+        return
+    try:
+        get_retriever()
+    except Exception as exc:  # pragma: no cover - diagnostic logging only
+        logfire.warn(
+            "Retriever warm-up failed; first retrieval call may retry.",
+            error=str(exc),
+        )
 
 
 RETRIEVE_TUTOR_CONTEXT_SCHEMA = {
@@ -431,6 +450,72 @@ def build_agent(
     )
 
 
+def model_provider_and_name(model_name: str) -> tuple[str, str]:
+    provider_model = normalize_model_name(model_name)
+    provider, _, actual_model = provider_model.partition(":")
+    return provider or "unknown", actual_model or provider_model
+
+
+def effective_tool_names(
+    model_name: str,
+    enabled_tools: tuple[str, ...],
+) -> tuple[str, ...]:
+    names = ["retrieve_tutor_context"]
+    enabled = set(enabled_tools)
+    if is_google_genai_model(model_name):
+        if "web_search" in enabled:
+            names.append("google_search")
+        if "url_context" in enabled:
+            names.append("url_context")
+    elif is_anthropic_model(model_name):
+        if "web_search" in enabled:
+            names.append("web_search")
+        if "web_fetch" in enabled:
+            names.append("web_fetch")
+    return tuple(names)
+
+
+def agent_run_config(
+    request: ChatRequest,
+    active_thread_id: str,
+    message_id: str,
+) -> dict[str, Any]:
+    provider, actual_model = model_provider_and_name(request.model_name)
+    tools = effective_tool_names(request.model_name, request.enabled_tools)
+    source_labels = [
+        SOURCE_KEY_TO_LABEL.get(source_key, source_key)
+        for source_key in request.source_keys
+    ]
+    config = thread_config(active_thread_id)
+    config.update(
+        {
+            "run_name": "ai-tutor-agent-turn",
+            "tags": [
+                "ai-tutor-app",
+                "knowledge-base-chatbot",
+                f"provider:{provider}",
+                f"model:{actual_model}",
+                *(f"tool:{tool_name}" for tool_name in tools),
+            ],
+            "metadata": {
+                "app": "ai-tutor-app",
+                "thread_id": active_thread_id,
+                "conversation_id": active_thread_id,
+                "message_id": message_id,
+                "model_provider": provider,
+                "model_name": actual_model,
+                "requested_model": request.model_name,
+                "available_tools": list(tools),
+                "enabled_tool_toggles": list(request.enabled_tools),
+                "source_keys": list(request.source_keys),
+                "source_labels": source_labels,
+                "include_reasoning": bool(request.include_reasoning),
+            },
+        }
+    )
+    return config
+
+
 def extract_web_search_queries(response_metadata: Any) -> list[str]:
     """Pull the queries Gemini ran against google_search from grounding metadata."""
     if not isinstance(response_metadata, dict):
@@ -643,7 +728,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
 
     async for chunk in agent.astream(
         {"messages": [{"role": "user", "content": request.query}]},
-        thread_config(active_thread_id),
+        agent_run_config(request, active_thread_id, message_id),
         context=AppContext(allowed_sources=request.source_keys),
         stream_mode=["messages", "updates"],
         version="v2",

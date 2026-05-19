@@ -31,6 +31,7 @@ The Gradio demo is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugg
    ```
 
    The chat model is provider-agnostic. Use the UI field in `provider:model` format, for example `openai:gpt-5.4-mini`. Optional provider keys include `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `GOOGLE_API_KEY`. Anthropic support is wired through the `anthropic` SDK, and Gemini support is wired through Google’s `google-genai` SDK.
+   To trace requests in LangSmith, set `LANGSMITH_API_KEY`. The app enables tracing automatically when that key is present unless `LANGSMITH_TRACING=false` is set.
 
 3. Run:
 
@@ -39,6 +40,20 @@ The Gradio demo is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugg
    ```
 
    Starts the Gradio AI Tutor interface.
+
+### LangSmith Agent Tracing
+
+The chatbot is built with `langchain.agents.create_agent()`, so LangSmith can trace the LangGraph/LangChain run tree without extra dependencies. Add these values to `.env`:
+
+```bash
+LANGSMITH_API_KEY=ls_...
+LANGSMITH_TRACING=true
+LANGSMITH_PROJECT=ai-tutor-app
+```
+
+Each chat turn is traced as `ai-tutor-agent-turn` with metadata for the backend thread id, message id, selected sources, requested model, and effective tool list. Child runs capture the model calls and `retrieve_tutor_context` tool executions, including tool inputs and outputs. Provider-side tools such as Gemini `google_search` / `url_context` and Claude `web_search` / `web_fetch` are visible through the model request/response metadata that LangChain receives from those providers.
+
+Tracing sends prompts, retrieved snippets, tool inputs, tool outputs, and model responses to LangSmith. Set `LANGSMITH_TRACING=false` to keep tracing disabled while leaving the key in your environment.
 
 ### Next.js Frontend — Quick Start
 

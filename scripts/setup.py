@@ -12,22 +12,31 @@ from data.scraping_scripts.source_registry import (
     SOURCE_KEY_TO_LABEL,
     SOURCE_UI_TO_KEY,
 )
+
+from .agent_tracing import configure_langsmith_environment, langsmith_tracing_enabled
 from .utils import init_mongo_db
 
 load_dotenv(override=True)
+configure_langsmith_environment()
 try:
     logfire.configure()
 except Exception:
     pass
 
+if langsmith_tracing_enabled():
+    logfire.info(
+        "LangSmith tracing enabled.",
+        project=os.getenv("LANGSMITH_PROJECT", "default"),
+    )
+
 VECTOR_DB_DIR = "data/chroma-db-all_sources"
 VECTOR_COLLECTION_NAME = "chroma-db-all_sources"
 DOCUMENT_DICT_PATH = f"{VECTOR_DB_DIR}/document_dict_all_sources.pkl"
 BM25_INDEX_PATH = f"{VECTOR_DB_DIR}/bm25_index_all_sources.pkl"
-DEFAULT_MODEL_NAME = "google-genai:gemini-3-flash-preview"
+DEFAULT_MODEL_NAME = "google-genai:gemini-3.5-flash"
 
 AVAILABLE_MODELS: tuple[dict[str, str], ...] = (
-    {"id": "google-genai:gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
+    {"id": "google-genai:gemini-3.5-flash", "label": "Gemini 3.5 Flash"},
     {"id": "anthropic:claude-haiku-4-5", "label": "Claude Haiku 4.5"},
 )
 

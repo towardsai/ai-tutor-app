@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import gradio as gr
 
-from .chat_service import ChatRequest, normalize_history, stream_chat
+from .chat_service import (
+    ChatRequest,
+    normalize_history,
+    stream_chat,
+    warm_up_retriever,
+)
 from .gradio_presenter import GradioPresenterState
 from .setup import (
     AVAILABLE_SOURCES_UI,
@@ -63,7 +68,7 @@ model = gr.Textbox(
     label="Model (provider:model)",
     value=DEFAULT_MODEL_NAME,
     interactive=False,
-    placeholder="openai:gpt-5.4-mini | anthropic:claude-opus-4-6 | google-genai:gemini-3.1-pro-preview",
+    placeholder="openai:gpt-5.4-mini | anthropic:claude-opus-4-6 | google-genai:gemini-3.5-flash",
 )
 enable_web_search = gr.Checkbox(
     label="Web search",
@@ -128,7 +133,13 @@ with gr.Blocks(
     gr.ChatInterface(
         fn=generate_completion,
         chatbot=chatbot,
-        additional_inputs=[sources, model, thread_id, enable_web_search, enable_url_read],
+        additional_inputs=[
+            sources,
+            model,
+            thread_id,
+            enable_web_search,
+            enable_url_read,
+        ],
         additional_outputs=[thread_id],
         additional_inputs_accordion=accordion,
         api_name="chat",
@@ -136,4 +147,5 @@ with gr.Blocks(
 
 
 if __name__ == "__main__":
+    warm_up_retriever()
     demo.launch(server_name="0.0.0.0", server_port=7860, debug=False, share=False)
