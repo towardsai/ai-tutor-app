@@ -618,6 +618,13 @@ def build_agent(
                 ClearToolUsesEdit(
                     trigger=5_000,
                     keep=3,
+                    # Preserve retrieval results through the whole turn. They
+                    # are pre-ranked, citation-bearing summaries that the
+                    # model uses to ground the final synthesis. KB shell
+                    # outputs (raw file content) get aggressively cleared
+                    # past the last 3, which is correct because they're
+                    # large and easy to re-fetch with another `cat`.
+                    exclude_tools=("retrieve_tutor_context",),
                     placeholder="[tool output cleared to save context]",
                 )
             ],
@@ -951,6 +958,17 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
             if chunk["type"] == "messages":
                 token, metadata = chunk["data"]
                 if not isinstance(token, AIMessageChunk):
+                    continue
+
+                # SummarizationMiddleware fires its own LLM call to compress
+                # older history. LangChain tags those calls with
+                # `lc_source="summarization"` (see langchain.agents.middleware
+                # SummarizationMiddleware._create_summary). Without this
+                # filter, the structured summary template ("## SESSION INTENT
+                # ...") leaks into the user-facing answer stream. The summary
+                # is supposed to be model-internal — like Codex's compact —
+                # so we drop those chunks here.
+                if metadata.get("lc_source") == "summarization":
                     continue
 
                 step = str(metadata.get("langgraph_step", ""))
