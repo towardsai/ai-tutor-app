@@ -138,6 +138,79 @@ To update library documentation from GitHub repositories:
 uv run -m data.scraping_scripts.update_docs_workflow
 ```
 
+### Rebuilding the KB from scratch
+
+If you've blown away local KB state (e.g. `rm -rf data/kb data/chroma-db-all_sources`)
+and want everything back, **just run the docs workflow** — it now handles
+fresh-build cases automatically.
+
+```bash
+uv run -m data.scraping_scripts.update_docs_workflow
+```
+
+What happens under the hood when local state is missing:
+
+1. `ensure_required_files_exist` downloads `all_sources_data.jsonl`,
+   `all_sources_contextual_nodes.pkl`, and every per-source JSONL (including
+   courses) from the private HF dataset `towardsai-tutors/ai-tutor-data`.
+2. Fresh docs are re-fetched from GitHub / llms.txt indexes.
+3. `build_kb_artifacts.py` regenerates `data/kb/raw/` and `data/kb/generated/`
+   from the JSONL. Course raw pages are reconstructed from the JSONL too —
+   you do **not** need the original Notion exports in `data/<course_name>/`.
+4. `update_kb_wiki.py --changed-only` rebuilds `data/kb/wiki/`. When it
+   detects an empty `wiki/` it auto-promotes to a full seed (topic pages,
+   recipes/errors index pages), so a clean rebuild produces the full wiki.
+5. `data/kb/AGENTS.md` is overwritten from
+   `data/scraping_scripts/kb_agents_template.md` (the canonical template,
+   tracked in git so it survives any `rm -rf data/`).
+6. Chroma vector store is rebuilt by `create_vector_stores.py`.
+
+Prerequisites for a from-scratch rebuild:
+
+- `HF_TOKEN` with access to `towardsai-tutors/ai-tutor-data` (so course
+  JSONLs and the contextual nodes PKL can be downloaded).
+- `GITHUB_TOKEN` (rate-limit headroom for docs downloads).
+- `GEMINI_API_KEY` or `GOOGLE_API_KEY` (used by `add_context_to_nodes.py`).
+- `COHERE_API_KEY` (used by `create_vector_stores.py`).
+
+What this workflow **cannot** restore: the original Notion-exported course
+markdown in `data/<course_name>/`. You don't need it for the runtime — the
+chunked content lives in the JSONL on HF — but if you want to re-run
+`add_course_workflow.py` against fresh course content, you'd need a new
+Notion export.
+
+### Editing KB agent guidance permanently
+
+Do **not** edit `data/kb/AGENTS.md` directly. The file is overwritten in two
+places, both reading from the canonical template at
+`data/scraping_scripts/kb_agents_template.md`:
+
+- `data.scraping_scripts.update_kb_wiki.write_agents_md` — rewrites it during
+  every `update_docs_workflow.py` run, before uploading to HuggingFace.
+- `scripts.setup.ensure_kb_agents_md` — rewrites it on every runtime startup,
+  after `ensure_local_vector_db` downloads the snapshot. This catches the
+  case where the HF snapshot has a stale AGENTS.md (e.g. uploaded before a
+  template change landed in git) and ensures the live file always matches
+  the version checked into the current branch.
+
+Edit the template, commit it, and either run the docs workflow (to refresh
+the HF snapshot) or just restart the chatbot (the template gets copied into
+place on startup either way).
+
+### Where `data/kb/` actually lives
+
+`data/kb/` is gitignored (it's a 100MB+ build artifact). It's:
+
+- **Built** by `data.scraping_scripts.build_kb_artifacts` (from
+  `data/all_sources_data.jsonl`) and `data.scraping_scripts.update_kb_wiki`.
+- **Uploaded** to `towardsai-tutors/ai-tutor-vector-db` by
+  `data.scraping_scripts.upload_dbs_to_hf` (already includes `kb/**`).
+- **Downloaded** by `scripts.setup.ensure_local_vector_db` on the first
+  chatbot start (or any start where the local KB is missing).
+
+Treat it the same way as `data/chroma-db-all_sources/`: never commit it,
+never edit it by hand, regenerate or re-download when you need it.
+
 This will update all supported documentation sources. You can also specify specific sources:
 
 ```bash
@@ -225,3 +298,9 @@ leaving the source configured as active for a future rebuild.
 6. Vector-store creation:
    - `create_vector_stores.py` now shows terminal progress for embedding generation and Chroma upserts
    - `all_sources_contextual_nodes.pkl` stores chunk records for embedding; legacy pickles containing LlamaIndex nodes are still accepted by the runtime compatibility helpers
+
+7. KB wiki artifact creation:
+   - `build_kb_artifacts.py` converts `all_sources_data.jsonl` into generated markdown under `data/kb/raw/`
+   - `update_kb_wiki.py --changed-only` refreshes wiki navigation pages under `data/kb/wiki/`
+   - The docs and course workflows run these steps automatically unless `--skip-kb` is passed
+   - `upload_dbs_to_hf.py` uploads `data/kb/**` with the vector database so the runtime can download one KB bundle

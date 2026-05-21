@@ -31,8 +31,9 @@ def upload_vector_db(repo_id: str = DEFAULT_REPO_ID) -> None:
         allow_patterns=[
             "chroma-db-all_sources/**",
             "all_sources_contextual_nodes.pkl",
+            "kb/**",
         ],
-        ignore_patterns=["*.jsonl", "*.py", "*.txt", "*.ipynb", "*.md", "*.pyc", "*.mdx"],
+        ignore_patterns=["*.py", "*.ipynb", "*.pyc", "__pycache__/**"],
     )
 
 

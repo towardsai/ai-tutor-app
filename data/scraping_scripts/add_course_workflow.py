@@ -381,6 +381,21 @@ def create_vector_stores() -> None:
     logger.info("Successfully created vector stores")
 
 
+def build_kb_artifacts() -> None:
+    """Build generated markdown corpus, indexes, and refreshed wiki pages."""
+    logger.info("Building KB artifacts")
+    result = run_module("data.scraping_scripts.build_kb_artifacts")
+    if result.returncode != 0:
+        logger.error("Error building KB artifacts - check output above")
+        sys.exit(1)
+
+    result = run_module("data.scraping_scripts.update_kb_wiki", "--changed-only")
+    if result.returncode != 0:
+        logger.error("Error updating KB wiki - check output above")
+        sys.exit(1)
+    logger.info("Successfully built KB artifacts")
+
+
 def upload_to_huggingface(upload_jsonl: bool = False) -> None:
     """Upload databases to HuggingFace."""
     logger.info("Uploading databases to HuggingFace")
@@ -466,6 +481,11 @@ def main():
         "--skip-vectors", action="store_true", help="Skip vector store creation"
     )
     parser.add_argument(
+        "--skip-kb",
+        action="store_true",
+        help="Skip generated KB markdown/wiki artifact creation",
+    )
+    parser.add_argument(
         "--skip-upload", action="store_true", help="Skip uploading to HuggingFace"
     )
     parser.add_argument(
@@ -513,6 +533,9 @@ def main():
     # Shared steps — run once across all courses
     if not args.skip_merge:
         rebuild_all_sources(courses)
+
+    if not args.skip_kb:
+        build_kb_artifacts()
 
     if args.purge_sources:
         purge_sources_from_pkl(args.purge_sources)

@@ -164,6 +164,12 @@ cython_debug/
 .vscode/
 data/chroma-db**/
 evaluation_data/chroma-db**/
+# `data/kb/` is built by data.scraping_scripts.build_kb_artifacts and
+# uploaded to HuggingFace by data.scraping_scripts.upload_dbs_to_hf.
+# The runtime downloads it on first start (see scripts/setup.ensure_local_vector_db).
+# Treat it as a build artifact, not a source file. The canonical AGENTS.md
+# content lives in data/scraping_scripts/kb_agents_template.md.
+data/kb/
 data/*_md_files/
 data/full_stack_ai_engineering/
 data/beginner_python_for_ai_engineering/

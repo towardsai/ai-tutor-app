@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import types
 import unittest
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from scripts.chat_service import (
+    _claim_kb_command_budget,
+    _clear_kb_command_budget,
     agent_run_config,
     build_agent,
     effective_tool_names,
+    resolve_answer_citations,
     sync_thread_with_history,
+    stream_chat,
 )
-from scripts.chat_types import ChatRequest, ChatTurn
+from scripts.chat_types import ChatRequest, ChatTurn, SourceMatch
 
 
 class FakeAgent:
@@ -27,6 +32,61 @@ class FakeAgent:
         self.updated_states.append((config, payload))
 
 
+class FakeStreamingAgent(FakeAgent):
+    async def astream(self, *_args, **_kwargs):
+        yield {
+            "type": "messages",
+            "data": (
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_rg",
+                            "name": "run_kb_command",
+                            "args": {"command": "rg LoraConfig raw"},
+                        }
+                    ],
+                ),
+                {"langgraph_step": "model"},
+            ),
+        }
+        yield {
+            "type": "updates",
+            "data": {
+                "tools": {
+                    "messages": [
+                        ToolMessage(
+                            content=(
+                                "$ rg LoraConfig raw\n"
+                                "cwd: /tmp/kb\n"
+                                "exit_code: 0\n"
+                                "stdout:\n"
+                                "raw/docs/peft/lora.md:3:LoraConfig"
+                            ),
+                            name="run_kb_command",
+                            tool_call_id="call_rg",
+                        )
+                    ]
+                }
+            },
+        }
+        yield {
+            "type": "updates",
+            "data": {
+                "model": {
+                    "messages": [
+                        AIMessage(
+                            content=(
+                                "LoraConfig is documented in LoRA "
+                                "[LoRA](raw/docs/peft/lora.md)."
+                            )
+                        )
+                    ]
+                }
+            },
+        }
+
+
 class ChatServiceTestCase(unittest.TestCase):
     def test_effective_tool_names_follow_provider(self) -> None:
         self.assertEqual(
@@ -34,14 +94,24 @@ class ChatServiceTestCase(unittest.TestCase):
                 "google-genai:gemini-3.5-flash",
                 ("web_search", "url_context", "web_fetch"),
             ),
-            ("retrieve_tutor_context", "google_search", "url_context"),
+            (
+                "retrieve_tutor_context",
+                "run_kb_command",
+                "google_search",
+                "url_context",
+            ),
         )
         self.assertEqual(
             effective_tool_names(
                 "anthropic:claude-haiku-4-5",
                 ("web_search", "url_context", "web_fetch"),
             ),
-            ("retrieve_tutor_context", "web_search", "web_fetch"),
+            (
+                "retrieve_tutor_context",
+                "run_kb_command",
+                "web_search",
+                "web_fetch",
+            ),
         )
 
     def test_agent_run_config_adds_langsmith_metadata(self) -> None:
@@ -59,13 +129,18 @@ class ChatServiceTestCase(unittest.TestCase):
         self.assertEqual(config["run_name"], "ai-tutor-agent-turn")
         self.assertIn("provider:google-genai", config["tags"])
         self.assertIn("tool:retrieve_tutor_context", config["tags"])
+        self.assertIn("tool:run_kb_command", config["tags"])
         self.assertIn("tool:google_search", config["tags"])
         self.assertEqual(config["metadata"]["thread_id"], "thread_123")
         self.assertEqual(config["metadata"]["conversation_id"], "thread_123")
         self.assertEqual(config["metadata"]["message_id"], "message_456")
         self.assertEqual(
             config["metadata"]["available_tools"],
-            ["retrieve_tutor_context", "google_search"],
+            [
+                "retrieve_tutor_context",
+                "run_kb_command",
+                "google_search",
+            ],
         )
         self.assertEqual(
             config["metadata"]["source_keys"],
@@ -117,9 +192,116 @@ class ChatServiceTestCase(unittest.TestCase):
         disabled_tool_defs = created_agents[1].kwargs["tools"]
         self.assertIn({"google_search": {}}, enabled_tool_defs)
         self.assertIn({"url_context": {}}, enabled_tool_defs)
-        self.assertEqual(disabled_tool_defs, [enabled_tool_defs[0]])
+        self.assertEqual(len(disabled_tool_defs), 2)
+        disabled_tool_names = {tool.name for tool in disabled_tool_defs}
+        self.assertEqual(
+            disabled_tool_names,
+            {
+                "retrieve_tutor_context",
+                "run_kb_command",
+            },
+        )
         self.assertEqual(len(created_agents[0].kwargs["middleware"]), 1)
         self.assertEqual(created_agents[1].kwargs["middleware"], [])
+
+    def test_kb_command_budget_blocks_after_limit(self) -> None:
+        session_id = "test_budget_session"
+        _clear_kb_command_budget(session_id)
+        try:
+            self.assertEqual(_claim_kb_command_budget(session_id, 2), (True, 1))
+            self.assertEqual(_claim_kb_command_budget(session_id, 2), (True, 2))
+            self.assertEqual(_claim_kb_command_budget(session_id, 2), (False, 2))
+        finally:
+            _clear_kb_command_budget(session_id)
+
+    def test_resolve_answer_citations_uses_current_turn_evidence(self) -> None:
+        retrieval = SourceMatch(
+            doc_id="peft:lora",
+            title="LoRA",
+            url="https://example.com/lora",
+            source_key="peft",
+            source_label="PEFT Docs",
+            score=12.0,
+            group="docs",
+        )
+
+        resolved = resolve_answer_citations(
+            "See [LoRA](https://example.com/lora) and [Other](https://example.com/other).",
+            retrieval_evidence={"peft:lora": retrieval},
+            shell_evidence={},
+            web_evidence={},
+        )
+
+        self.assertEqual(resolved, [retrieval])
+
+    def test_resolve_answer_citations_ignores_unseen_kb_paths(self) -> None:
+        resolved = resolve_answer_citations(
+            "See [LoRA](raw/docs/peft/lora.md).",
+            retrieval_evidence={},
+            shell_evidence={},
+            web_evidence={},
+        )
+
+        self.assertEqual(resolved, [])
+
+    def test_stream_chat_resolves_shell_citation_after_final_answer(self) -> None:
+        agent = FakeStreamingAgent([])
+        request = ChatRequest(
+            query="Use rg to find LoraConfig",
+            source_keys=("peft",),
+            model_name="google-genai:gemini-3.5-flash",
+            include_reasoning=False,
+            enabled_tools=(),
+        )
+
+        async def collect_events():
+            return [event async for event in stream_chat(request)]
+
+        shell_match = SourceMatch(
+            doc_id="peft:lora",
+            title="LoRA",
+            url="https://example.com/lora",
+            source_key="peft",
+            source_label="PEFT Docs",
+            score=1.0,
+            group="docs",
+        )
+
+        def fake_resolve_manifest_reference(reference, **_kwargs):
+            return shell_match if "raw/docs/peft/lora.md" in reference else None
+
+        with (
+            patch("scripts.chat_service.build_agent", return_value=agent),
+            patch("scripts.chat_service.new_thread_id", return_value="thread_rg"),
+            patch(
+                "scripts.chat_service.resolve_manifest_reference",
+                side_effect=fake_resolve_manifest_reference,
+            ),
+        ):
+            events = asyncio.run(collect_events())
+
+        started = [
+            event
+            for event in events
+            if event.type == "tool_call_started"
+            and event.data.get("tool_name") == "run_kb_command"
+        ]
+        completed = [
+            event
+            for event in events
+            if event.type == "tool_call_completed"
+            and event.data.get("tool_name") == "run_kb_command"
+        ]
+        source_matches = [
+            event
+            for event in events
+            if event.type == "source_match"
+        ]
+
+        self.assertEqual(started[0].data["args_text"], "rg LoraConfig raw")
+        self.assertIn("rg LoraConfig raw", completed[0].data["output_text"])
+        self.assertEqual(source_matches[0].data["source_key"], "peft")
+        self.assertNotIn("call_id", source_matches[0].data)
 
     def test_shorter_history_branches_to_fresh_thread(self) -> None:
         agent = FakeAgent(

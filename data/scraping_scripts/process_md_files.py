@@ -30,12 +30,13 @@ To add, modify, or retire sources, update data/scraping_scripts/source_registry.
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import re
-import uuid
 from typing import Dict, List
+from urllib.parse import urlparse
 
 import tiktoken
 
@@ -262,6 +263,34 @@ def clean_document_content(content: str) -> str:
     return content.strip()
 
 
+def content_sha256(content: str) -> str:
+    return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def slugify_identifier(value: str) -> str:
+    value = os.path.splitext(value.replace("\\", "/"))[0]
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    value = value.strip("-")
+    return value or "untitled"
+
+
+def stable_doc_id(
+    *,
+    source: str,
+    source_path: str,
+    title: str | None,
+    url: str,
+    content_hash: str,
+) -> str:
+    if source_path:
+        basis = source_path
+    else:
+        parsed_path = urlparse(url).path.strip("/") if url else ""
+        basis = parsed_path or title or content_hash.removeprefix("sha256:")[:12]
+    return f"{source}:{slugify_identifier(basis)}"
+
+
 def process_md_files(directory: str, config: Dict) -> List[Dict]:
     jsonl_data = []
     source_extension_manifest = load_source_extension_manifest(directory)
@@ -280,6 +309,14 @@ def process_md_files(directory: str, config: Dict) -> List[Dict]:
                     cleaned_content = clean_document_content(content)
                     title = extract_title(cleaned_content)
                     token_count = num_tokens_from_string(cleaned_content, "cl100k_base")
+                    source_path = relative_path.replace("\\", "/")
+                    url = generate_url(
+                        relative_path,
+                        config,
+                        source_extension_manifest.get(source_path),
+                        source_url_manifest.get(source_path),
+                    )
+                    hash_value = content_sha256(cleaned_content)
 
                     # Skip very small or extremely large files
                     if token_count < 100 or token_count > 200_000:
@@ -290,18 +327,19 @@ def process_md_files(directory: str, config: Dict) -> List[Dict]:
 
                     json_object = {
                         "tokens": token_count,
-                        "doc_id": str(uuid.uuid4()),
-                        "name": (title if title else file),
-                        "url": generate_url(
-                            relative_path,
-                            config,
-                            source_extension_manifest.get(
-                                relative_path.replace("\\", "/")
-                            ),
-                            source_url_manifest.get(relative_path.replace("\\", "/")),
+                        "doc_id": stable_doc_id(
+                            source=config["source_name"],
+                            source_path=source_path,
+                            title=title,
+                            url=url,
+                            content_hash=hash_value,
                         ),
+                        "name": (title if title else file),
+                        "url": url,
                         "retrieve_doc": (token_count <= 8000),
                         "source": config["source_name"],
+                        "source_path": source_path,
+                        "content_hash": hash_value,
                         "content": cleaned_content,
                     }
 

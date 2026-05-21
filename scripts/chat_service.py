@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 from dataclasses import dataclass
 from functools import lru_cache
 from threading import Lock
@@ -10,7 +11,12 @@ from uuid import uuid4
 
 import logfire
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    ClearToolUsesEdit,
+    ContextEditingMiddleware,
+    SummarizationMiddleware,
+)
 from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 from langchain_openai import ChatOpenAI
@@ -18,6 +24,18 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from .chat_types import ChatEvent, ChatRequest, ChatTurn, SourceMatch
 from .chroma_rag import LocalChromaRetriever, format_tool_payload, parse_tool_payload
+from .kb_shell import (
+    KbCommandError,
+    format_command_payload,
+    run_kb_command as execute_kb_command,
+)
+from .kb_manifest import (
+    extract_raw_paths,
+    parse_markdown_citations,
+    resolve_manifest_reference,
+    source_match_key,
+    source_match_payload,
+)
 from .prompts import build_system_prompt
 from .setup import (
     BM25_INDEX_PATH,
@@ -39,11 +57,36 @@ LEGACY_THOUGHTS_DETAILS_OPEN = "<details><summary>Gemini thoughts</summary>"
 LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED = "<details open><summary>Gemini thoughts</summary>"
 CHECKPOINTER = InMemorySaver()
 _RETRIEVER_INIT_LOCK = Lock()
+KB_TOOL_NAMES = ("run_kb_command",)
+DEFAULT_KB_COMMAND_LIMIT = 20
+_KB_COMMAND_COUNTS: dict[str, int] = {}
+_KB_COMMAND_COUNT_LOCK = Lock()
 
 
 @dataclass(frozen=True)
 class AppContext:
     allowed_sources: tuple[str, ...]
+    kb_session_id: str = ""
+    kb_command_limit: int = DEFAULT_KB_COMMAND_LIMIT
+
+
+def _claim_kb_command_budget(session_id: str, limit: int) -> tuple[bool, int]:
+    if not session_id:
+        return True, 1
+    with _KB_COMMAND_COUNT_LOCK:
+        used = _KB_COMMAND_COUNTS.get(session_id, 0)
+        if used >= limit:
+            return False, used
+        used += 1
+        _KB_COMMAND_COUNTS[session_id] = used
+        return True, used
+
+
+def _clear_kb_command_budget(session_id: str) -> None:
+    if not session_id:
+        return
+    with _KB_COMMAND_COUNT_LOCK:
+        _KB_COMMAND_COUNTS.pop(session_id, None)
 
 
 @lru_cache(maxsize=1)
@@ -98,6 +141,68 @@ def retrieve_tutor_context(query: str, runtime: ToolRuntime[AppContext]) -> str:
         allowed_sources=list(runtime.context.allowed_sources),
     )
     return format_tool_payload(query, results)
+
+
+RUN_KB_COMMAND_SCHEMA = {
+    "title": "run_kb_command",
+    "description": "Run a safe, read-only terminal-style command inside the local KB.",
+    "type": "object",
+    "properties": {
+        "command": {
+            "type": "string",
+            "description": (
+                "Single read-only command to run under data/kb. Supported commands: "
+                "rg, grep, find, ls, sed, head, cat, wc. Pipes, redirects, command "
+                "chaining, network commands, and writes are not allowed."
+            ),
+        },
+        "timeout_seconds": {
+            "type": "integer",
+            "description": "Command timeout in seconds, capped by the runtime.",
+            "default": 8,
+        },
+        "max_output_chars": {
+            "type": "integer",
+            "description": "Maximum stdout/stderr characters to return, capped by the runtime.",
+            "default": 40000,
+        },
+    },
+    "required": ["command"],
+}
+
+
+@tool(args_schema=RUN_KB_COMMAND_SCHEMA)
+def run_kb_command(
+    command: str,
+    runtime: ToolRuntime[AppContext],
+    timeout_seconds: int = 8,
+    max_output_chars: int = 40000,
+) -> str:
+    """Run a safe, read-only terminal-style command inside the local KB."""
+    allowed, used = _claim_kb_command_budget(
+        runtime.context.kb_session_id,
+        runtime.context.kb_command_limit,
+    )
+    if not allowed:
+        return (
+            f"$ {command}\n"
+            "error: KB command budget exceeded for this turn "
+            f"({used}/{runtime.context.kb_command_limit}). "
+            "Use the evidence already collected to answer now."
+        )
+    try:
+        ensure_local_vector_db()
+    except Exception as exc:  # pragma: no cover - diagnostic only
+        logfire.warn("KB artifact download/check failed.", error=str(exc))
+    try:
+        result = execute_kb_command(
+            command,
+            timeout_seconds=timeout_seconds,
+            max_output_chars=max_output_chars,
+        )
+        return format_command_payload(result)
+    except (KbCommandError, OSError) as exc:
+        return f"$ {command}\nerror: {exc}"
 
 
 def message_content_to_text(content: Any) -> str:
@@ -260,27 +365,114 @@ def sync_thread_with_history(
     return branched_thread_id
 
 
-def collect_updated_source_matches(
-    matches_by_doc_id: dict[str, SourceMatch],
-    payload: str,
-) -> list[SourceMatch]:
-    updated: list[SourceMatch] = []
+def collect_retrieval_source_matches(payload: str) -> list[SourceMatch]:
+    matches: list[SourceMatch] = []
     for match in parse_tool_payload(payload):
-        source_match = SourceMatch(
-            doc_id=match.doc_id,
-            title=match.title,
-            url=match.url,
-            source_key=match.source,
-            source_label=SOURCE_KEY_TO_LABEL.get(match.source, match.source),
-            score=match.score,
-            group="courses" if match.source in COURSE_SOURCE_KEYS else "docs",
+        matches.append(
+            SourceMatch(
+                doc_id=match.doc_id,
+                title=match.title,
+                url=match.url,
+                source_key=match.source,
+                source_label=SOURCE_KEY_TO_LABEL.get(match.source, match.source),
+                score=match.score,
+                group="courses" if match.source in COURSE_SOURCE_KEYS else "docs",
+            )
         )
-        existing = matches_by_doc_id.get(match.doc_id)
-        if existing and existing.score >= source_match.score:
+    return matches
+
+
+def _record_evidence(target: dict[str, SourceMatch], matches: list[SourceMatch]) -> None:
+    for match in matches:
+        key = source_match_key(match)
+        existing = target.get(key)
+        if existing and existing.score >= match.score:
             continue
-        matches_by_doc_id[match.doc_id] = source_match
-        updated.append(source_match)
-    return updated
+        target[key] = match
+
+
+def _index_evidence(matches: dict[str, SourceMatch]) -> dict[str, SourceMatch]:
+    index: dict[str, SourceMatch] = {}
+    for match in matches.values():
+        for key in (match.doc_id, match.url, match.title.strip().lower()):
+            if key:
+                index[key] = match
+    return index
+
+
+def resolve_answer_citations(
+    answer: str,
+    *,
+    retrieval_evidence: dict[str, SourceMatch],
+    shell_evidence: dict[str, SourceMatch],
+    web_evidence: dict[str, SourceMatch],
+) -> list[SourceMatch]:
+    evidence_indexes = [
+        _index_evidence(retrieval_evidence),
+        _index_evidence(shell_evidence),
+        _index_evidence(web_evidence),
+    ]
+    resolved: list[SourceMatch] = []
+    seen: set[str] = set()
+    for label, reference in parse_markdown_citations(answer):
+        candidates = [reference, label.strip().lower()]
+        match: SourceMatch | None = None
+        for index in evidence_indexes:
+            for candidate in candidates:
+                if candidate and candidate in index:
+                    match = index[candidate]
+                    break
+            if match:
+                break
+        if not match:
+            manifest_match = resolve_manifest_reference(reference, label=label)
+            if manifest_match:
+                shell_index = _index_evidence(shell_evidence)
+                if (
+                    manifest_match.doc_id in shell_index
+                    or manifest_match.url in shell_index
+                    or manifest_match.title.strip().lower() in shell_index
+                ):
+                    match = shell_index.get(manifest_match.doc_id) or shell_index.get(manifest_match.url) or shell_index.get(manifest_match.title.strip().lower())
+        if not match:
+            continue
+        key = source_match_key(match)
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(match)
+    return resolved
+
+
+def extract_shell_source_matches(command: str, output_text: str) -> list[SourceMatch]:
+    raw_paths = extract_raw_paths(output_text)
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = []
+    if tokens:
+        executable = tokens[0]
+        if executable == "cat":
+            raw_paths.extend(tokens[1:])
+        elif executable == "sed" and len(tokens) >= 4:
+            raw_paths.append(tokens[-1])
+        elif executable == "head":
+            start = 1
+            if len(tokens) > 2 and tokens[1] == "-n":
+                start = 3
+            raw_paths.extend(tokens[start:])
+    matches: list[SourceMatch] = []
+    seen: set[str] = set()
+    for path in raw_paths:
+        match = resolve_manifest_reference(path)
+        if not match:
+            continue
+        key = source_match_key(match)
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append(match)
+    return matches
 
 
 def normalize_model_name(model_name: str) -> str:
@@ -335,6 +527,9 @@ def format_tool_args(args: Any) -> str:
         query = str(args.get("query", "")).strip()
         if query:
             return query
+        command = str(args.get("command", "")).strip()
+        if command:
+            return command
         if args:
             return json.dumps(args, ensure_ascii=False, sort_keys=True)
         return ""
@@ -413,8 +608,27 @@ def build_agent(
     include_thoughts: bool = False,
 ):
     model = build_chat_model(model_name, include_thoughts=include_thoughts)
-    tools: list[Any] = [retrieve_tutor_context]
-    middleware: list[AgentMiddleware] = []
+    tools: list[Any] = [
+        retrieve_tutor_context,
+        run_kb_command,
+    ]
+    middleware: list[AgentMiddleware] = [
+        ContextEditingMiddleware(
+            edits=[
+                ClearToolUsesEdit(
+                    trigger=5_000,
+                    keep=3,
+                    placeholder="[tool output cleared to save context]",
+                )
+            ],
+            token_count_method="approximate",
+        ),
+        SummarizationMiddleware(
+            model=model,
+            trigger=("tokens", 30_000),
+            keep=("messages", 20),
+        ),
+    ]
     enabled = set(enabled_tools)
     if is_google_genai_model(model_name):
         if "web_search" in enabled:
@@ -460,7 +674,7 @@ def effective_tool_names(
     model_name: str,
     enabled_tools: tuple[str, ...],
 ) -> tuple[str, ...]:
-    names = ["retrieve_tutor_context"]
+    names = ["retrieve_tutor_context", *KB_TOOL_NAMES]
     enabled = set(enabled_tools)
     if is_google_genai_model(model_name):
         if "web_search" in enabled:
@@ -693,7 +907,9 @@ def extract_anthropic_source_matches(
 
 async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     normalized_history = normalize_history(request.history)
-    matches_by_doc_id: dict[str, SourceMatch] = {}
+    retrieval_evidence: dict[str, SourceMatch] = {}
+    shell_evidence: dict[str, SourceMatch] = {}
+    web_evidence: dict[str, SourceMatch] = {}
     tool_calls_by_id: dict[str, dict[str, Any]] = {}
     answer_chunks: list[str] = []
     completed_answer = ""
@@ -717,260 +933,234 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
         normalized_history,
     )
 
-    yield ChatEvent(
-        "thread_started",
-        {"thread_id": active_thread_id},
-    )
-    yield ChatEvent(
-        "message_started",
-        {"message_id": message_id},
-    )
+    yield ChatEvent("thread_started", {"thread_id": active_thread_id})
+    yield ChatEvent("message_started", {"message_id": message_id})
 
-    async for chunk in agent.astream(
-        {"messages": [{"role": "user", "content": request.query}]},
-        agent_run_config(request, active_thread_id, message_id),
-        context=AppContext(allowed_sources=request.source_keys),
-        stream_mode=["messages", "updates"],
-        version="v2",
-    ):
-        if chunk["type"] == "messages":
-            token, metadata = chunk["data"]
-            if not isinstance(token, AIMessageChunk):
-                continue
+    try:
+        async for chunk in agent.astream(
+            {"messages": [{"role": "user", "content": request.query}]},
+            agent_run_config(request, active_thread_id, message_id),
+            context=AppContext(
+                allowed_sources=request.source_keys,
+                kb_session_id=message_id,
+                kb_command_limit=DEFAULT_KB_COMMAND_LIMIT,
+            ),
+            stream_mode=["messages", "updates"],
+            version="v2",
+        ):
+            if chunk["type"] == "messages":
+                token, metadata = chunk["data"]
+                if not isinstance(token, AIMessageChunk):
+                    continue
 
-            step = str(metadata.get("langgraph_step", ""))
-            if include_reasoning:
-                thought_text = "\n\n".join(extract_thought_summaries(token.content))
-                if thought_text:
-                    yield ChatEvent(
-                        "reasoning_delta",
-                        {
-                            "message_id": message_id,
-                            "step": step,
-                            "text": thought_text,
-                        },
+                step = str(metadata.get("langgraph_step", ""))
+                if include_reasoning:
+                    thought_text = "\n\n".join(
+                        extract_thought_summaries(token.content)
                     )
+                    if thought_text:
+                        yield ChatEvent(
+                            "reasoning_delta",
+                            {
+                                "message_id": message_id,
+                                "step": step,
+                                "text": thought_text,
+                            },
+                        )
 
-            for tool_call in getattr(token, "tool_calls", []) or []:
-                tool_call_id = str(tool_call.get("id") or uuid4().hex)
-                tool_calls_by_id[tool_call_id] = tool_call
-                yield ChatEvent(
-                    "tool_call_started",
-                    {
-                        "message_id": message_id,
-                        "call_id": tool_call_id,
-                        "tool_name": str(tool_call.get("name", "tool")),
-                        "args": tool_call.get("args"),
-                        "args_text": format_tool_args(tool_call.get("args")),
-                    },
-                )
-
-            text_delta = token.text or ""
-            if not text_delta and token.content:
-                text_delta = message_content_to_text(token.content)
-            if text_delta:
-                answer_chunks.append(text_delta)
-                yield ChatEvent(
-                    "text_delta",
-                    {
-                        "message_id": message_id,
-                        "text": text_delta,
-                    },
-                )
-
-            token_metadata = getattr(token, "response_metadata", None)
-            new_queries = [
-                q
-                for q in extract_web_search_queries(token_metadata)
-                if q not in google_search_queries
-            ]
-            new_grounding = extract_grounding_source_matches(
-                token_metadata,
-                matches_by_doc_id,
-            )
-            if (new_queries or new_grounding) and not google_search_call_id:
-                google_search_call_id = uuid4().hex
-                yield ChatEvent(
-                    "tool_call_started",
-                    {
-                        "message_id": message_id,
-                        "call_id": google_search_call_id,
-                        "tool_name": GOOGLE_SEARCH_TOOL_NAME,
-                        "args": {"query": "; ".join(new_queries) if new_queries else ""},
-                        "args_text": "; ".join(new_queries),
-                    },
-                )
-            if new_queries:
-                google_search_queries.extend(new_queries)
-            for source_match in new_grounding:
-                google_search_match_count += 1
-                yield ChatEvent(
-                    "source_match",
-                    {
-                        "message_id": message_id,
-                        "doc_id": source_match.doc_id,
-                        "title": source_match.title,
-                        "url": source_match.url,
-                        "source_key": source_match.source_key,
-                        "source_label": source_match.source_label,
-                        "score": source_match.score,
-                        "group": source_match.group,
-                        "call_id": google_search_call_id,
-                    },
-                )
-            continue
-
-        if chunk["type"] != "updates":
-            continue
-
-        for step, update in chunk["data"].items():
-            message = update["messages"][-1]
-            if (
-                getattr(message, "type", None) == "tool"
-                and getattr(message, "name", "") == "retrieve_tutor_context"
-            ):
-                payload = message_content_to_text(message.content)
-                tool_call_id = str(getattr(message, "tool_call_id", "") or uuid4().hex)
-                for source_match in collect_updated_source_matches(
-                    matches_by_doc_id,
-                    payload,
-                ):
-                    yield ChatEvent(
-                        "source_match",
-                        {
-                            "message_id": message_id,
-                            "doc_id": source_match.doc_id,
-                            "title": source_match.title,
-                            "url": source_match.url,
-                            "source_key": source_match.source_key,
-                            "source_label": source_match.source_label,
-                            "score": source_match.score,
-                            "group": source_match.group,
-                            "call_id": tool_call_id,
-                        },
-                    )
-
-                tool_call = tool_calls_by_id.get(
-                    tool_call_id,
-                    {"name": getattr(message, "name", "tool"), "args": None},
-                )
-                yield ChatEvent(
-                    "tool_call_completed",
-                    {
-                        "message_id": message_id,
-                        "step": step,
-                        "call_id": tool_call_id,
-                        "tool_name": str(tool_call.get("name", getattr(message, "name", "tool"))),
-                        "args": tool_call.get("args"),
-                        "args_text": format_tool_args(tool_call.get("args")),
-                        "output_text": payload,
-                    },
-                )
-                continue
-
-            if step != "model" or getattr(message, "type", None) != "ai":
-                continue
-
-            message_metadata = getattr(message, "response_metadata", None)
-            new_queries = [
-                q
-                for q in extract_web_search_queries(message_metadata)
-                if q not in google_search_queries
-            ]
-            new_grounding = extract_grounding_source_matches(
-                message_metadata,
-                matches_by_doc_id,
-            )
-            if (new_queries or new_grounding) and not google_search_call_id:
-                google_search_call_id = uuid4().hex
-                yield ChatEvent(
-                    "tool_call_started",
-                    {
-                        "message_id": message_id,
-                        "call_id": google_search_call_id,
-                        "tool_name": GOOGLE_SEARCH_TOOL_NAME,
-                        "args": {"query": "; ".join(new_queries) if new_queries else ""},
-                        "args_text": "; ".join(new_queries),
-                    },
-                )
-            if new_queries:
-                google_search_queries.extend(new_queries)
-            for source_match in new_grounding:
-                google_search_match_count += 1
-                yield ChatEvent(
-                    "source_match",
-                    {
-                        "message_id": message_id,
-                        "doc_id": source_match.doc_id,
-                        "title": source_match.title,
-                        "url": source_match.url,
-                        "source_key": source_match.source_key,
-                        "source_label": source_match.source_label,
-                        "score": source_match.score,
-                        "group": source_match.group,
-                        "call_id": google_search_call_id,
-                    },
-                )
-
-            if is_anthropic_model(request.model_name):
-                anthropic_updates, anthropic_tool_uses = extract_anthropic_source_matches(
-                    message.content,
-                    matches_by_doc_id,
-                )
-                for tool_use_id, tool_use in anthropic_tool_uses.items():
-                    if tool_use_id in tool_calls_by_id:
-                        continue
-                    tool_calls_by_id[tool_use_id] = tool_use
+                for tool_call in getattr(token, "tool_calls", []) or []:
+                    tool_call_id = str(tool_call.get("id") or uuid4().hex)
+                    tool_calls_by_id[tool_call_id] = tool_call
                     yield ChatEvent(
                         "tool_call_started",
                         {
                             "message_id": message_id,
-                            "call_id": tool_use_id,
-                            "tool_name": tool_use["name"],
-                            "args": tool_use.get("args"),
-                            "args_text": format_tool_args(tool_use.get("args")),
+                            "call_id": tool_call_id,
+                            "tool_name": str(tool_call.get("name", "tool")),
+                            "args": tool_call.get("args"),
+                            "args_text": format_tool_args(tool_call.get("args")),
                         },
                     )
-                for tool_use_id, new_matches in anthropic_updates.items():
-                    for source_match in new_matches:
-                        yield ChatEvent(
-                            "source_match",
-                            {
-                                "message_id": message_id,
-                                "doc_id": source_match.doc_id,
-                                "title": source_match.title,
-                                "url": source_match.url,
-                                "source_key": source_match.source_key,
-                                "source_label": source_match.source_label,
-                                "score": source_match.score,
-                                "group": source_match.group,
-                                "call_id": tool_use_id,
-                            },
-                        )
-                    if not tool_use_id:
-                        continue
-                    tool_call = tool_calls_by_id.get(tool_use_id, {})
-                    tool_name = str(tool_call.get("name") or "web_search")
-                    plural = "" if len(new_matches) == 1 else "s"
-                    output_text = (
-                        f"{tool_name} returned {len(new_matches)} result{plural}."
+
+                text_delta = token.text or ""
+                if not text_delta and token.content:
+                    text_delta = message_content_to_text(token.content)
+                if text_delta:
+                    answer_chunks.append(text_delta)
+                    yield ChatEvent(
+                        "text_delta",
+                        {
+                            "message_id": message_id,
+                            "text": text_delta,
+                        },
                     )
+
+                token_metadata = getattr(token, "response_metadata", None)
+                new_queries = [
+                    q
+                    for q in extract_web_search_queries(token_metadata)
+                    if q not in google_search_queries
+                ]
+                new_grounding = extract_grounding_source_matches(
+                    token_metadata,
+                    web_evidence,
+                )
+                if (new_queries or new_grounding) and not google_search_call_id:
+                    google_search_call_id = uuid4().hex
+                    yield ChatEvent(
+                        "tool_call_started",
+                        {
+                            "message_id": message_id,
+                            "call_id": google_search_call_id,
+                            "tool_name": GOOGLE_SEARCH_TOOL_NAME,
+                            "args": {
+                                "query": "; ".join(new_queries)
+                                if new_queries
+                                else ""
+                            },
+                            "args_text": "; ".join(new_queries),
+                        },
+                    )
+                if new_queries:
+                    google_search_queries.extend(new_queries)
+                google_search_match_count += len(new_grounding)
+                continue
+
+            if chunk["type"] != "updates":
+                continue
+
+            for step, update in chunk["data"].items():
+                if not isinstance(update, dict):
+                    continue
+                messages = update.get("messages")
+                if not messages:
+                    continue
+                message = messages[-1]
+                if getattr(message, "type", None) == "tool":
+                    payload = message_content_to_text(message.content)
+                    tool_call_id = str(
+                        getattr(message, "tool_call_id", "") or uuid4().hex
+                    )
+                    tool_name = str(getattr(message, "name", "tool"))
+                    if tool_name == "retrieve_tutor_context":
+                        _record_evidence(
+                            retrieval_evidence,
+                            collect_retrieval_source_matches(payload),
+                        )
+
+                    tool_call = tool_calls_by_id.get(
+                        tool_call_id,
+                        {"name": getattr(message, "name", "tool"), "args": None},
+                    )
+                    if tool_name == "run_kb_command":
+                        args = tool_call.get("args")
+                        command = str(
+                            args.get("command") if isinstance(args, dict) else ""
+                        )
+                        _record_evidence(
+                            shell_evidence,
+                            extract_shell_source_matches(command, payload),
+                        )
                     yield ChatEvent(
                         "tool_call_completed",
                         {
                             "message_id": message_id,
                             "step": step,
-                            "call_id": tool_use_id,
-                            "tool_name": tool_name,
+                            "call_id": tool_call_id,
+                            "tool_name": str(
+                                tool_call.get(
+                                    "name",
+                                    getattr(message, "name", "tool"),
+                                )
+                            ),
                             "args": tool_call.get("args"),
                             "args_text": format_tool_args(tool_call.get("args")),
-                            "output_text": output_text,
+                            "output_text": payload,
                         },
                     )
+                    continue
 
-            if getattr(message, "tool_calls", None):
-                continue
-            completed_answer = message_content_to_text(message.content)
+                if step != "model" or getattr(message, "type", None) != "ai":
+                    continue
+
+                message_metadata = getattr(message, "response_metadata", None)
+                new_queries = [
+                    q
+                    for q in extract_web_search_queries(message_metadata)
+                    if q not in google_search_queries
+                ]
+                new_grounding = extract_grounding_source_matches(
+                    message_metadata,
+                    web_evidence,
+                )
+                if (new_queries or new_grounding) and not google_search_call_id:
+                    google_search_call_id = uuid4().hex
+                    yield ChatEvent(
+                        "tool_call_started",
+                        {
+                            "message_id": message_id,
+                            "call_id": google_search_call_id,
+                            "tool_name": GOOGLE_SEARCH_TOOL_NAME,
+                            "args": {
+                                "query": "; ".join(new_queries)
+                                if new_queries
+                                else ""
+                            },
+                            "args_text": "; ".join(new_queries),
+                        },
+                    )
+                if new_queries:
+                    google_search_queries.extend(new_queries)
+                google_search_match_count += len(new_grounding)
+
+                if is_anthropic_model(request.model_name):
+                    anthropic_updates, anthropic_tool_uses = (
+                        extract_anthropic_source_matches(
+                            message.content,
+                            web_evidence,
+                        )
+                    )
+                    for tool_use_id, tool_use in anthropic_tool_uses.items():
+                        if tool_use_id in tool_calls_by_id:
+                            continue
+                        tool_calls_by_id[tool_use_id] = tool_use
+                        yield ChatEvent(
+                            "tool_call_started",
+                            {
+                                "message_id": message_id,
+                                "call_id": tool_use_id,
+                                "tool_name": tool_use["name"],
+                                "args": tool_use.get("args"),
+                                "args_text": format_tool_args(tool_use.get("args")),
+                            },
+                        )
+                    for tool_use_id, new_matches in anthropic_updates.items():
+                        if not tool_use_id:
+                            continue
+                        tool_call = tool_calls_by_id.get(tool_use_id, {})
+                        tool_name = str(tool_call.get("name") or "web_search")
+                        plural = "" if len(new_matches) == 1 else "s"
+                        output_text = (
+                            f"{tool_name} returned {len(new_matches)} result{plural}."
+                        )
+                        yield ChatEvent(
+                            "tool_call_completed",
+                            {
+                                "message_id": message_id,
+                                "step": step,
+                                "call_id": tool_use_id,
+                                "tool_name": tool_name,
+                                "args": tool_call.get("args"),
+                                "args_text": format_tool_args(tool_call.get("args")),
+                                "output_text": output_text,
+                            },
+                        )
+
+                if getattr(message, "tool_calls", None):
+                    continue
+                completed_answer = message_content_to_text(message.content)
+    finally:
+        _clear_kb_command_budget(message_id)
 
     if google_search_call_id:
         joined_queries = "; ".join(google_search_queries)
@@ -994,6 +1184,16 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
         )
 
     answer = "".join(answer_chunks).strip() or completed_answer.strip()
+    for source_match in resolve_answer_citations(
+        answer,
+        retrieval_evidence=retrieval_evidence,
+        shell_evidence=shell_evidence,
+        web_evidence=web_evidence,
+    ):
+        yield ChatEvent(
+            "source_match",
+            source_match_payload(source_match, message_id=message_id),
+        )
     yield ChatEvent(
         "message_completed",
         {

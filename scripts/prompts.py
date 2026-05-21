@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 
 BASE_PROMPT_HEADER = """You are an AI teacher for applied AI, LLM, RAG, and Python topics.
 
 Your job is to answer student questions clearly and accurately."""
 
+DEFAULT_KB_AGENTS_PATH = "data/kb/AGENTS.md"
+
 RETRIEVAL_TOOL_LINE = (
     "- `retrieve_tutor_context` — retrieval over the course and documentation\n"
     "  corpus. Use this for anything that depends on course content."
+)
+
+KB_TOOL_LINES = (
+    "- `run_kb_command` — run safe, read-only terminal-style KB inspection\n"
+    "  commands such as `rg`, `grep`, `find`, `ls`, `sed`, `head`, `cat`, and `wc`.",
 )
 
 WEB_TOOL_LINES = {
@@ -74,6 +84,21 @@ DO NOT use retrieval for:
 - Questions about your own role or capabilities in this app (answer directly).
 - Questions you can answer fully from general knowledge with no corpus dependency."""
 
+KB_USAGE_SECTION = """## When to use the KB browsing tools
+
+USE KB browsing for:
+- Exact API names, class names, function names, config keys, or error strings.
+- Broad questions where a wiki page can identify the right source pages.
+- Comparisons, recipes, debugging, and verification-heavy answers.
+- Course questions where reading the generated lesson markdown is useful.
+- Targeted terminal-style inspection when `rg`, `grep`, `find`, or `sed`
+  can verify a specific string/path faster than top-k retrieval.
+
+`run_kb_command` is not a general shell: no pipes, redirects, command chaining,
+network commands, or writes. Follow the Local KB Instructions below for the
+current wiki structure, the first-command rule, and the efficient command
+patterns to use."""
+
 RETRIEVAL_CALL_STRATEGY = """## How to call the retrieval tool
 
 You have two strategies. Pick one per turn:
@@ -97,6 +122,26 @@ You have two strategies. Pick one per turn:
 ANSWERING_RULES = """## Answering rules
 
 - Ground factual claims about the corpus in the retrieved results.
+- When using KB browsing, ground factual claims in raw source pages inspected
+  with `run_kb_command`, not only in wiki navigation pages.
+- If the user explicitly restricts you to one available local knowledge tool,
+  obey that restriction. If the restriction prevents a complete answer, say so.
+- Cite retrieved context using the original source URL or title shown by
+  `retrieve_tutor_context`.
+- Cite files explored with `run_kb_command` using the raw file frontmatter URL,
+  `kb://doc/<doc_id>`, or a KB-root path like
+  `raw/docs/peft/developer_guides/lora.md`.
+- Use inline Markdown links as citations sentence-by-sentence: place a
+  `[short source title](url-or-kb-reference)` citation in the same sentence,
+  immediately after the claim it supports.
+- Do not use bare bracketed URLs or paths like `[https://...]` or
+  `[raw/docs/...]`; the bracket text should be a short source title.
+- Do not place citations inside code blocks. Cite the prose sentence that
+  introduces or explains the code instead.
+- Do not put all citations only in a final "Sources" section. A short sources
+  recap is okay only if the answer already has inline citations.
+- Do not cite wiki pages unless the wiki page itself is the source of the
+  claim. Prefer raw docs and course lessons.
 - If retrieval results are weak or missing, say the topic is not well
   covered by the current knowledge base rather than guessing.
 - Synthesize retrieved material into a clear teaching explanation. Do not
@@ -122,10 +167,24 @@ def _provider_key(model_name: str) -> str:
     return ""
 
 
+def kb_agents_path() -> Path:
+    return Path(os.getenv("AI_TUTOR_KB_AGENTS_PATH", DEFAULT_KB_AGENTS_PATH))
+
+
+def load_kb_agents_instructions(path: Path | None = None) -> str:
+    resolved = path or kb_agents_path()
+    try:
+        if not resolved.exists() or not resolved.is_file():
+            return ""
+        return resolved.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def build_system_prompt(model_name: str, enabled_tools: tuple[str, ...]) -> str:
     provider = _provider_key(model_name)
     enabled = set(enabled_tools)
-    tool_lines = [RETRIEVAL_TOOL_LINE]
+    tool_lines = [RETRIEVAL_TOOL_LINE, *KB_TOOL_LINES]
     usage_sections: list[str] = []
     provider_web_tools = WEB_TOOL_LINES.get(provider, {})
     provider_web_usage = WEB_USAGE_SECTIONS.get(provider, {})
@@ -143,6 +202,7 @@ def build_system_prompt(model_name: str, enabled_tools: tuple[str, ...]) -> str:
         BASE_PROMPT_HEADER,
         f"{intro}\n\n" + "\n".join(tool_lines),
         RETRIEVAL_USAGE_SECTION,
+        KB_USAGE_SECTION,
     ]
     if usage_sections:
         parts.append("## When to use web search / URL reading\n\n" + "\n\n".join(usage_sections))
@@ -150,6 +210,14 @@ def build_system_prompt(model_name: str, enabled_tools: tuple[str, ...]) -> str:
             "Prefer `retrieve_tutor_context` first when the question is clearly about\n"
             "course material. Combine tools when it helps (e.g. retrieve corpus\n"
             "context, then search the web for the latest update)."
+        )
+    kb_agents_instructions = load_kb_agents_instructions()
+    if kb_agents_instructions:
+        parts.append(
+            "## Local KB Instructions\n\n"
+            "The following instructions are loaded from `data/kb/AGENTS.md` and "
+            "describe the current local KB schema and workflow.\n\n"
+            f"{kb_agents_instructions}"
         )
     parts.append(RETRIEVAL_CALL_STRATEGY)
     parts.append(ANSWERING_RULES)

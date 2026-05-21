@@ -181,11 +181,13 @@ Notes:
 After updating the JSONL corpus, rebuild the local Chroma index with:
 
 ```bash
+uv run -m data.scraping_scripts.build_kb_artifacts
+uv run -m data.scraping_scripts.update_kb_wiki --changed-only
 uv run -m data.scraping_scripts.add_context_to_nodes
 uv run -m data.scraping_scripts.create_vector_stores all_sources
 ```
 
-The first command now builds the chunk manifest used by the workflows, and the second command writes dense embeddings into the local Chroma database.
+The KB commands generate browseable markdown, indexes, and wiki navigation pages for the agent. The context command builds the chunk manifest used by the workflows, and the vector command writes dense embeddings into the local Chroma database.
 The vector-store build now shows embedding and Chroma upsert progress in the terminal.
 
 ### Updating Data Sources

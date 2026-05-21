@@ -71,9 +71,15 @@ def upsert_activity_event(
 def format_tool_args(args: Any, args_text: str = "") -> str:
     query = ""
     url = ""
+    command = ""
     if isinstance(args, dict):
         query = str(args.get("query", "")).strip()
         url = str(args.get("url", "")).strip()
+        command = str(args.get("command", "")).strip()
+
+    if command:
+        trimmed = command[:157] + "..." if len(command) > 160 else command
+        return f"Command: `{trimmed}`"
 
     if not query and args_text.strip():
         query = args_text.strip()
@@ -116,11 +122,24 @@ def summarize_tool_result(event: ChatEvent) -> str:
 
     if tool_name == "retrieve_tutor_context":
         if not matches:
+            try:
+                payload = json.loads(str(event.data.get("output_text", "")))
+                matches = payload.get("matches", []) if isinstance(payload, dict) else []
+                match_count = len(matches)
+            except json.JSONDecodeError:
+                matches = []
+                match_count = 0
+        if not matches:
             return "_No matching sources found in the selected sources._"
         ordered_sources: list[str] = []
         seen_sources: set[str] = set()
         for match in matches:
-            source_label = str(match.get("source_label", match.get("source_key", "unknown")))
+            source_label = str(
+                match.get("source_label")
+                or match.get("source_key")
+                or match.get("source")
+                or "unknown"
+            )
             if source_label in seen_sources:
                 continue
             seen_sources.add(source_label)
@@ -128,6 +147,23 @@ def summarize_tool_result(event: ChatEvent) -> str:
         source_summary = summarize_activity_sources(ordered_sources)
         match_label = "match" if match_count == 1 else "matches"
         return f"_Found {match_count} {match_label} from {source_summary}._"
+
+    if tool_name == "run_kb_command":
+        output_text = str(event.data.get("output_text", "")).strip()
+        command = ""
+        exit_code = ""
+        for line in output_text.splitlines():
+            if line.startswith("$ "):
+                command = line[2:].strip()
+            elif line.startswith("exit_code:"):
+                exit_code = line.partition(":")[2].strip()
+        if "error:" in output_text:
+            return f"_KB command failed: {output_text.split('error:', 1)[1].strip()[:160]}_"
+        if command and exit_code:
+            return f"_Ran `{command}` with exit code {exit_code}._"
+        if command:
+            return f"_Ran `{command}`._"
+        return "_Ran KB command._"
 
     output_text = str(event.data.get("output_text", "")).strip()
     if output_text:
