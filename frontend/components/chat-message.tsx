@@ -5,15 +5,18 @@ import {
   BookOpen,
   Check,
   ChevronDown,
+  ChevronRight,
   Copy,
+  Database,
   ExternalLink,
   Globe,
   GraduationCap,
   LibraryBig,
+  Loader2,
   Pencil,
   RefreshCw,
-  SearchCheck,
   Sparkles,
+  Terminal,
   Wrench,
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
@@ -26,12 +29,14 @@ import {
 } from "react";
 import { MarkdownBlock } from "@/components/markdown-block";
 import type {
+  ActivityItem,
+  MessageCitation,
   TutorMessage,
   TutorMessageBlock,
-  MessageCitation,
   TutorMessagePart,
 } from "@/lib/chat-ui";
 import {
+  buildActivityItems,
   getMessageCitations,
   getOrderedMessageBlocks,
   prettifyToolName,
@@ -279,28 +284,47 @@ function ContentBlock({
   block: TutorMessageBlock;
   isActive?: boolean;
 }) {
-  if (block.kind === "reasoning") {
-    return <ReasoningBlock parts={block.parts} isActive={isActive} />;
+  if (block.kind === "activity") {
+    return <ActivityPanel parts={block.parts} isActive={isActive} />;
   }
-
-  if (block.kind === "tool") {
-    return <ToolActivityBlock parts={block.parts} isActive={isActive} />;
-  }
-
   return <TextBlock parts={block.parts} />;
 }
 
-function ReasoningBlock({
+function ActivityPanel({
   parts,
   isActive = false,
 }: {
   parts: TutorMessagePart[];
   isActive?: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  // Open by default while streaming; closed when done. A user toggle pins it
+  // to that explicit state.
+  const [override, setOverride] = useState<boolean | null>(null);
+  const isOpen = override ?? isActive;
+
+  const items = buildActivityItems(parts);
+  const toolItems = items.filter(
+    (item): item is Extract<ActivityItem, { kind: "tool" }> => item.kind === "tool",
+  );
+  const reasoningItems = items.filter(
+    (item): item is Extract<ActivityItem, { kind: "reasoning" }> =>
+      item.kind === "reasoning",
+  );
+  const sourceCount = getToolPartSourceCount(parts);
+
+  const liveTool = isActive
+    ? toolItems.find((item) => item.part.state !== "output-available")
+      ?? toolItems[toolItems.length - 1]
+    : undefined;
+
+  const summary = buildActivitySummary({
+    toolCount: toolItems.length,
+    reasoningCount: reasoningItems.length,
+    sourceCount,
+  });
 
   return (
-    <section className="relative overflow-hidden rounded-[1.35rem] border border-[var(--line)] bg-[var(--paper)]/80 px-4 py-3">
+    <section className="relative overflow-hidden rounded-[1.35rem] border border-[var(--line)] bg-[var(--surface)]">
       {isActive ? (
         <span
           aria-hidden="true"
@@ -311,119 +335,238 @@ function ReasoningBlock({
         type="button"
         onClick={(event) => {
           event.stopPropagation();
-          setIsOpen((current) => !current);
+          setOverride(!isOpen);
         }}
-        className="relative z-[1] flex w-full items-center justify-between gap-3 text-left"
+        className="relative z-[1] flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left"
         aria-expanded={isOpen}
       >
-        <div className="inline-flex items-center gap-2 text-[13px] font-semibold tracking-[-0.012em] text-[var(--ink)]">
-          <Sparkles
-            className={clsx(
-              "h-4 w-4 text-[var(--accent)]",
-              isActive && "animate-pulse",
-            )}
-          />
-          <span>{isActive ? "Thinking" : "Reasoning trace"}</span>
+        <div className="flex min-w-0 items-center gap-2 text-[12.5px] font-semibold tracking-[-0.01em] text-[var(--ink)]">
           {isActive ? (
-            <span
-              aria-hidden="true"
-              className="processing-button__pulse ml-0.5 h-1.5 w-1.5 rounded-full text-[var(--accent)]"
-            />
-          ) : null}
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--accent)]" />
+          ) : (
+            <Wrench className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+          )}
+          {isActive && liveTool ? (
+            <span className="truncate text-[var(--muted)]">
+              <span className="text-[var(--ink)]">Running</span>{" "}
+              <code className="rounded bg-[var(--paper)]/70 px-1 py-0.5 font-mono text-[11.5px]">
+                {prettifyToolName(liveTool.part.type)}
+              </code>{" "}
+              {toolInputSummary(liveTool.part.input)}
+            </span>
+          ) : (
+            <span className="truncate">Activity{summary ? ` · ${summary}` : ""}</span>
+          )}
         </div>
         <ChevronDown
           className={clsx(
-            "h-4 w-4 text-[var(--muted)] transition-transform",
+            "h-4 w-4 shrink-0 text-[var(--muted)] transition-transform",
             isOpen && "rotate-180",
           )}
         />
       </button>
       {isOpen ? (
-        <div className="relative z-[1] mt-3 space-y-3 text-[14px] leading-[1.65] text-[var(--muted)]">
-          {parts.map((part, index) => (
-            <MarkdownBlock
-              key={`reasoning-${index}`}
-              className="markdown-block-muted"
-            >
-              {part.text ?? ""}
-            </MarkdownBlock>
-          ))}
-        </div>
+        <ol className="relative z-[1] border-t border-[var(--line)]/70">
+          {items.map((item) =>
+            item.kind === "reasoning" ? (
+              <ReasoningLine key={item.key} text={item.text} />
+            ) : (
+              <ToolRow key={item.key} part={item.part} />
+            ),
+          )}
+        </ol>
       ) : null}
     </section>
   );
 }
 
-function ToolActivityBlock({
-  parts,
-  isActive = false,
+function buildActivitySummary({
+  toolCount,
+  reasoningCount,
+  sourceCount,
 }: {
-  parts: TutorMessagePart[];
-  isActive?: boolean;
+  toolCount: number;
+  reasoningCount: number;
+  sourceCount: number;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const fragments: string[] = [];
+  if (toolCount > 0) {
+    fragments.push(`${toolCount} tool${toolCount === 1 ? "" : "s"}`);
+  }
+  if (reasoningCount > 0) {
+    fragments.push(
+      `${reasoningCount} thought${reasoningCount === 1 ? "" : "s"}`,
+    );
+  }
+  if (sourceCount > 0) {
+    fragments.push(
+      `${sourceCount} source${sourceCount === 1 ? "" : "s"}`,
+    );
+  }
+  return fragments.join(" · ");
+}
 
-  const sourceCount = getToolPartSourceCount(parts);
-  const sourceCountLabel =
-    sourceCount > 0
-      ? `${sourceCount} source${sourceCount === 1 ? "" : "s"}`
-      : "";
+function ReasoningLine({ text }: { text: string }) {
+  return (
+    <li className="border-b border-[var(--line)]/40 px-4 py-2.5 last:border-b-0">
+      <div className="flex gap-2">
+        <Sparkles className="mt-1 h-3 w-3 shrink-0 text-[var(--muted)]" />
+        <div className="min-w-0 flex-1 italic text-[13px] leading-[1.55] text-[var(--muted)]">
+          <MarkdownBlock className="markdown-block-muted">
+            {text}
+          </MarkdownBlock>
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function ToolRow({ part }: { part: TutorMessagePart }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const name = prettifyToolName(part.type);
+  const inputSummary = toolInputSummary(part.input);
+  const outputObject =
+    part.output && typeof part.output === "object"
+      ? (part.output as { text?: string; matches?: unknown[] })
+      : undefined;
+  const outputText = (outputObject?.text ?? "").trim();
+  const matchCount = Array.isArray(outputObject?.matches)
+    ? outputObject.matches.length
+    : 0;
+  const resultSummary = formatToolResultSummary({
+    outputText,
+    matchCount,
+    state: part.state,
+    errorText: part.errorText,
+  });
+  const stateBadge = formatToolStateBadge(part.state, part.errorText);
+  const canExpand = Boolean(outputText) || Boolean(part.errorText);
 
   return (
-    <section className="relative overflow-hidden rounded-[1.35rem] border border-[var(--line)] bg-[var(--surface)] px-4 py-3">
-      {isActive ? (
-        <span
-          aria-hidden="true"
-          className="activity-sheen pointer-events-none absolute inset-0"
-        />
-      ) : null}
+    <li className="border-b border-[var(--line)]/40 last:border-b-0">
       <button
         type="button"
         onClick={(event) => {
           event.stopPropagation();
-          setIsOpen((current) => !current);
+          if (canExpand) {
+            setIsOpen((current) => !current);
+          }
         }}
-        className="relative z-[1] flex w-full items-center justify-between gap-3 text-left"
-        aria-expanded={isOpen}
+        disabled={!canExpand}
+        className={clsx(
+          "flex w-full items-center gap-2 px-4 py-2 text-left text-[12.5px] leading-[1.5]",
+          canExpand && "hover:bg-[var(--paper)]/40",
+        )}
+        aria-expanded={canExpand ? isOpen : undefined}
       >
-        <div className="inline-flex items-center gap-2 text-[13px] font-semibold tracking-[-0.012em] text-[var(--ink)]">
-          <Wrench
+        <ToolKindIcon type={part.type} className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+        <span className="shrink-0 text-[11px] uppercase tracking-[0.06em] text-[var(--muted)]">
+          {name}
+        </span>
+        {inputSummary ? (
+          <code className="min-w-0 flex-1 truncate font-mono text-[12px] text-[var(--ink)]">
+            {inputSummary}
+          </code>
+        ) : (
+          <span className="flex-1" />
+        )}
+        {resultSummary ? (
+          <span className="shrink-0 text-[11px] text-[var(--muted)]">{resultSummary}</span>
+        ) : null}
+        {stateBadge ? (
+          <span
             className={clsx(
-              "h-4 w-4 text-[var(--accent)]",
-              isActive && "animate-pulse",
+              "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]",
+              stateBadge.tone === "error"
+                ? "bg-red-100 text-red-700"
+                : "bg-[var(--paper)]/60 text-[var(--muted)]",
+            )}
+          >
+            {stateBadge.label}
+          </span>
+        ) : null}
+        {canExpand ? (
+          <ChevronRight
+            className={clsx(
+              "h-3 w-3 shrink-0 text-[var(--muted)]/70 transition-transform",
+              isOpen && "rotate-90",
             )}
           />
-          <span>{isActive ? "Running tools" : "Tool activity"}</span>
-          {isActive ? (
-            <span
-              aria-hidden="true"
-              className="processing-button__pulse ml-0.5 h-1.5 w-1.5 rounded-full text-[var(--accent)]"
-            />
-          ) : null}
-        </div>
-        <div className="flex items-center gap-3">
-          {sourceCountLabel ? (
-            <span className="rounded-full bg-[var(--surface)] px-2.5 py-1 text-[10px] font-semibold uppercase leading-none tracking-[0.1em] text-[var(--muted)]">
-              {sourceCountLabel}
-            </span>
-          ) : null}
-          <ChevronDown
-            className={clsx(
-              "h-4 w-4 text-[var(--muted)] transition-transform",
-              isOpen && "rotate-180",
-            )}
-          />
-        </div>
+        ) : null}
       </button>
-      {isOpen ? (
-        <div className="relative z-[1] mt-3 space-y-3">
-          {parts.map((part, index) => (
-            <ToolCard key={`tool-${index}`} part={part} />
-          ))}
+      {isOpen && canExpand ? (
+        <div className="border-t border-[var(--line)]/30 bg-[var(--paper)]/40 px-4 py-2">
+          {part.errorText ? (
+            <pre className="whitespace-pre-wrap break-words text-[11.5px] leading-[1.55] text-red-700">
+              {part.errorText}
+            </pre>
+          ) : (
+            <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-[1.55] text-[var(--ink)]/80">
+              {outputText}
+            </pre>
+          )}
         </div>
       ) : null}
-    </section>
+    </li>
   );
+}
+
+function ToolKindIcon({ type, className }: { type: string; className?: string }) {
+  const name = type.replace(/^tool-/, "");
+  if (name.includes("kb_command") || name.includes("shell") || name.includes("command")) {
+    return <Terminal className={className} />;
+  }
+  if (name.includes("retrieve") || name.includes("search")) {
+    return <Database className={className} />;
+  }
+  if (name.includes("web") || name.includes("url") || name.includes("google")) {
+    return <Globe className={className} />;
+  }
+  return <Wrench className={className} />;
+}
+
+function formatToolStateBadge(
+  state: string | undefined,
+  errorText: string | undefined,
+): { label: string; tone: "default" | "error" } | null {
+  if (errorText) {
+    return { label: "error", tone: "error" };
+  }
+  if (!state || state === "output-available") {
+    return null;
+  }
+  return { label: state.replaceAll("-", " "), tone: "default" };
+}
+
+function formatToolResultSummary({
+  outputText,
+  matchCount,
+  state,
+  errorText,
+}: {
+  outputText: string;
+  matchCount: number;
+  state?: string;
+  errorText?: string;
+}) {
+  if (errorText) {
+    return "";
+  }
+  if (matchCount > 0) {
+    return `${matchCount} match${matchCount === 1 ? "" : "es"}`;
+  }
+  if (outputText) {
+    const lineCount = outputText.split("\n").length;
+    const charCount = outputText.length;
+    if (lineCount > 3) {
+      return `${lineCount} lines`;
+    }
+    return charCount > 1000 ? `${(charCount / 1000).toFixed(1)}k chars` : `${charCount} chars`;
+  }
+  if (state && state !== "output-available") {
+    return "";
+  }
+  return "";
 }
 
 function TextBlock({ parts }: { parts: TutorMessagePart[] }) {
@@ -439,79 +582,6 @@ function TextBlock({ parts }: { parts: TutorMessagePart[] }) {
       ))}
     </div>
   );
-}
-
-function ToolCard({ part }: { part: TutorMessagePart }) {
-  const summary = toolInputSummary(part.input);
-  const output =
-    part.output && typeof part.output === "object"
-      ? (part.output as { text?: string; matches?: unknown[] })
-      : undefined;
-  const matchCount = Array.isArray(output?.matches) ? output.matches.length : 0;
-  const resultSummary = describeToolResult(output?.text, matchCount);
-
-  return (
-    <div className="rounded-[1.25rem] border border-[var(--line)] bg-[var(--surface)] px-4 py-3 shadow-[0_10px_30px_rgba(18,42,204,0.05)]">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.11em] text-[var(--muted)]">
-            Tool call
-          </p>
-          <p className="mt-1 text-[13px] font-semibold tracking-[-0.012em] text-[var(--ink)]">
-            {prettifyToolName(part.type)}
-          </p>
-        </div>
-        <span className="rounded-full bg-[var(--surface)] px-2 py-1 text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
-          {formatToolState(part.state)}
-        </span>
-      </div>
-
-      {summary ? (
-        <div className="mt-3 rounded-[1rem] border border-[var(--line)] bg-[var(--paper)]/65 px-3 py-3">
-          <div className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.11em] text-[var(--muted)]">
-            <SearchCheck className="h-3.5 w-3.5 text-[var(--accent)]" />
-            Tool input
-          </div>
-          <p className="mt-2 text-[13px] leading-[1.65] text-[var(--ink)]">{summary}</p>
-        </div>
-      ) : null}
-
-      {resultSummary ? (
-        <div className="mt-3 rounded-[1rem] border border-[var(--line)] bg-[rgba(11,136,238,0.08)] px-3 py-3">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.11em] text-[var(--muted)]">
-            Tool result
-          </p>
-          <p className="mt-2 text-[13px] leading-[1.65] text-[var(--ink)]">
-            {resultSummary}
-          </p>
-        </div>
-      ) : null}
-
-      {part.errorText ? (
-        <p className="mt-3 text-xs leading-5 text-red-700">{part.errorText}</p>
-      ) : null}
-    </div>
-  );
-}
-
-function formatToolState(state?: string) {
-  if (!state) {
-    return "running";
-  }
-
-  return state.replaceAll("-", " ");
-}
-
-function describeToolResult(outputText?: string, matchCount = 0) {
-  if (matchCount > 0) {
-    return `${matchCount} source match${matchCount === 1 ? "" : "es"} captured for the final answer.`;
-  }
-
-  if ((outputText ?? "").trim()) {
-    return "Tool completed.";
-  }
-
-  return "";
 }
 
 function getToolPartSourceCount(parts: TutorMessagePart[]) {

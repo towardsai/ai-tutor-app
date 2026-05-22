@@ -20,9 +20,13 @@ export type TutorMessagePart = {
 
 export type TutorMessageBlock = {
   key: string;
-  kind: "text" | "reasoning" | "tool";
+  kind: "text" | "activity";
   parts: TutorMessagePart[];
 };
+
+export type ActivityItem =
+  | { kind: "reasoning"; key: string; text: string }
+  | { kind: "tool"; key: string; part: TutorMessagePart };
 
 export type CitationKind = "web" | "course" | "doc";
 
@@ -222,9 +226,21 @@ function hostnameFromUrl(url: string) {
   }
 }
 
+const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  run_kb_command: "KB shell",
+  retrieve_tutor_context: "Retrieve",
+  web_search: "Web search",
+  google_search: "Web search",
+  url_context: "Fetch URL",
+  web_fetch: "Fetch URL",
+};
+
 export function prettifyToolName(type: string) {
-  return type
-    .replace(/^tool-/, "")
+  const raw = type.replace(/^tool-/, "");
+  if (TOOL_DISPLAY_NAMES[raw]) {
+    return TOOL_DISPLAY_NAMES[raw];
+  }
+  return raw
     .replaceAll("_", " ")
     .replace(/\b\w/g, (match) => match.toUpperCase());
 }
@@ -254,15 +270,47 @@ function classifyMessagePart(
     return "text";
   }
 
-  if (part.type === "reasoning") {
-    return "reasoning";
-  }
-
-  if (String(part.type).startsWith("tool-")) {
-    return "tool";
+  if (
+    part.type === "reasoning" ||
+    String(part.type).startsWith("tool-")
+  ) {
+    return "activity";
   }
 
   return null;
+}
+
+// Build a flat list of activity items from a parts array, joining consecutive
+// reasoning fragments into one entry and keeping each tool call as its own row.
+export function buildActivityItems(parts: TutorMessagePart[]): ActivityItem[] {
+  const items: ActivityItem[] = [];
+  let pendingReasoning: string[] = [];
+
+  const flushReasoning = () => {
+    if (pendingReasoning.length === 0) {
+      return;
+    }
+    const text = pendingReasoning.map((entry) => entry.trim()).filter(Boolean).join("\n\n");
+    if (text) {
+      items.push({ kind: "reasoning", key: `r-${items.length}`, text });
+    }
+    pendingReasoning = [];
+  };
+
+  for (const part of parts) {
+    if (part.type === "reasoning") {
+      pendingReasoning.push(part.text ?? "");
+      continue;
+    }
+    if (String(part.type).startsWith("tool-")) {
+      flushReasoning();
+      const id = part.toolCallId ?? "";
+      items.push({ kind: "tool", key: `t-${items.length}-${id}`, part });
+    }
+  }
+  flushReasoning();
+
+  return items;
 }
 
 type RawLinkCitation = { label: string; url: string };
