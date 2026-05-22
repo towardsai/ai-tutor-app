@@ -675,7 +675,7 @@ def build_agent(
             edits=[
                 ClearToolUsesEdit(
                     trigger=5_000,
-                    keep=3,
+                    keep=5,
                     # Retrieval results stay; only shell outputs get cleared.
                     exclude_tools=("retrieve_tutor_context",),
                     placeholder="[tool output cleared to save context]",
