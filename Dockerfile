@@ -17,6 +17,11 @@ RUN npm run build
 # Stage 2: Python runtime + FastAPI + bundled static frontend
 FROM python:3.13
 
+# ripgrep backs run_kb_command's `rg`; without it the model falls back to find+cat.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install uv into /usr/local/bin (on PATH for every user, including HF's uid 1000).
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/ \

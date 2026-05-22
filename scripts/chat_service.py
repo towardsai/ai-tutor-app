@@ -618,12 +618,7 @@ def build_agent(
                 ClearToolUsesEdit(
                     trigger=5_000,
                     keep=3,
-                    # Preserve retrieval results through the whole turn. They
-                    # are pre-ranked, citation-bearing summaries that the
-                    # model uses to ground the final synthesis. KB shell
-                    # outputs (raw file content) get aggressively cleared
-                    # past the last 3, which is correct because they're
-                    # large and easy to re-fetch with another `cat`.
+                    # Retrieval results stay; only shell outputs get cleared.
                     exclude_tools=("retrieve_tutor_context",),
                     placeholder="[tool output cleared to save context]",
                 )
@@ -960,14 +955,8 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 if not isinstance(token, AIMessageChunk):
                     continue
 
-                # SummarizationMiddleware fires its own LLM call to compress
-                # older history. LangChain tags those calls with
-                # `lc_source="summarization"` (see langchain.agents.middleware
-                # SummarizationMiddleware._create_summary). Without this
-                # filter, the structured summary template ("## SESSION INTENT
-                # ...") leaks into the user-facing answer stream. The summary
-                # is supposed to be model-internal — like Codex's compact —
-                # so we drop those chunks here.
+                # SummarizationMiddleware's internal LLM call is tagged this;
+                # skip so its summary template doesn't leak into the answer.
                 if metadata.get("lc_source") == "summarization":
                     continue
 
@@ -1202,12 +1191,28 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
         )
 
     answer = "".join(answer_chunks).strip() or completed_answer.strip()
-    for source_match in resolve_answer_citations(
-        answer,
-        retrieval_evidence=retrieval_evidence,
-        shell_evidence=shell_evidence,
-        web_evidence=web_evidence,
-    ):
+    matched_sources = list(
+        resolve_answer_citations(
+            answer,
+            retrieval_evidence=retrieval_evidence,
+            shell_evidence=shell_evidence,
+            web_evidence=web_evidence,
+        )
+    )
+
+    # Fallback when the model writes no inline `[label](url)` (Gemini grounds
+    # via metadata segments instead): surface collected evidence as cards.
+    if not matched_sources:
+        seen_keys: set[str] = set()
+        for evidence in (web_evidence, retrieval_evidence, shell_evidence):
+            for src in evidence.values():
+                key = source_match_key(src)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                matched_sources.append(src)
+
+    for source_match in matched_sources:
         yield ChatEvent(
             "source_match",
             source_match_payload(source_match, message_id=message_id),
