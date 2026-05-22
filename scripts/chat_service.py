@@ -18,7 +18,13 @@ from langchain.agents.middleware import (
     SummarizationMiddleware,
 )
 from langchain.tools import ToolRuntime, tool
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -40,6 +46,7 @@ from .prompts import build_system_prompt
 from .setup import (
     BM25_INDEX_PATH,
     COURSE_SOURCE_KEYS,
+    DEFAULT_SELECTED_SOURCE_KEYS,
     DOCUMENT_DICT_PATH,
     SOURCE_KEY_TO_LABEL,
     VECTOR_COLLECTION_NAME,
@@ -601,6 +608,57 @@ class GeminiServerSideToolsMiddleware(AgentMiddleware):
         return await handler(self._inject(request))
 
 
+class SourcePreferenceMiddleware(AgentMiddleware):
+    """Append a selected-sources hint to the system prompt per request."""
+
+    def _build_note(self, sources: tuple[str, ...]) -> str | None:
+        if not sources:
+            return None
+        # Skip when the user kept the default (all sources). The note is only
+        # useful when the user narrowed the picker.
+        if set(sources) >= set(DEFAULT_SELECTED_SOURCE_KEYS):
+            return None
+        lines = [
+            "## Selected sources for this turn",
+            "",
+            "Prefer these paths when using `run_kb_command`:",
+        ]
+        for key in sources:
+            label = SOURCE_KEY_TO_LABEL.get(key, key)
+            group = "courses" if key in COURSE_SOURCE_KEYS else "docs"
+            wiki_dir = "courses" if key in COURSE_SOURCE_KEYS else "frameworks"
+            lines.append(
+                f"- {label}: `raw/{group}/{key}/`, `wiki/{wiki_dir}/{key}.md`"
+            )
+        lines.append("")
+        lines.append(
+            "Only branch out to other KB sources if these don't have the answer."
+        )
+        return "\n".join(lines)
+
+    def _inject(self, request):
+        sources: tuple[str, ...] = ()
+        runtime = getattr(request, "runtime", None)
+        ctx = getattr(runtime, "context", None) if runtime else None
+        if ctx is not None:
+            sources = getattr(ctx, "allowed_sources", ()) or ()
+        note = self._build_note(sources)
+        if not note:
+            return request
+        sys_msg = request.system_message
+        if sys_msg is None:
+            new_sys = SystemMessage(content=note)
+        else:
+            new_sys = SystemMessage(content=f"{sys_msg.content}\n\n{note}")
+        return request.override(system_message=new_sys)
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._inject(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._inject(request))
+
+
 @lru_cache(maxsize=32)
 def build_agent(
     model_name: str,
@@ -630,6 +688,7 @@ def build_agent(
             trigger=("tokens", 30_000),
             keep=("messages", 20),
         ),
+        SourcePreferenceMiddleware(),
     ]
     enabled = set(enabled_tools)
     if is_google_genai_model(model_name):
