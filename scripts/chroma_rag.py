@@ -1339,9 +1339,7 @@ class LocalChromaRetriever:
             if result.score < 0.10:
                 continue
 
-            # disallowed_special=() so chunks containing literal special-token
-            # strings like "<|endoftext|>" (which sometimes appear verbatim in
-            # tokenizer/training docs) don't crash the encode call.
+            # disallowed_special=() so literal "<|endoftext|>" in chunks doesn't crash.
             result_tokens = len(
                 self._encoding.encode(result.content, disallowed_special=())
             )

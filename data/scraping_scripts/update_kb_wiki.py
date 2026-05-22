@@ -10,10 +10,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_KB_DIR = Path("data/kb")
-# Template file lives next to this script (inside `data/scraping_scripts/`) so
-# it survives `rm -rf data/kb` and stays in git. Edit the template here when
-# you want a permanent change to the KB agent guidance; the live
-# `data/kb/AGENTS.md` is overwritten from it on every run of this script.
+# Edit this template to change KB agent guidance; gets copied to data/kb/AGENTS.md.
 AGENTS_TEMPLATE_PATH = Path(__file__).resolve().parent / "kb_agents_template.md"
 AUTO_START = "<!-- AUTO-GENERATED:START -->"
 AUTO_END = "<!-- AUTO-GENERATED:END -->"
@@ -238,28 +235,16 @@ This index starts empty. Add pages here when repeated recipes or recurring error
 
 
 def write_agents_md(kb_dir: Path) -> None:
-    # The canonical AGENTS.md content lives in `kb_agents_template.md` next to
-    # this script. Editing the template is the right way to change the agent's
-    # KB guidance for good — direct edits to `data/kb/AGENTS.md` would be
-    # clobbered on the next workflow run.
     if not AGENTS_TEMPLATE_PATH.exists():
-        raise FileNotFoundError(
-            f"KB AGENTS.md template missing at {AGENTS_TEMPLATE_PATH}. "
-            "Restore it from git (it's tracked alongside this script)."
-        )
-    content = AGENTS_TEMPLATE_PATH.read_text(encoding="utf-8")
+        raise FileNotFoundError(f"Template missing: {AGENTS_TEMPLATE_PATH}")
     (kb_dir / "AGENTS.md").parent.mkdir(parents=True, exist_ok=True)
-    (kb_dir / "AGENTS.md").write_text(content, encoding="utf-8")
+    (kb_dir / "AGENTS.md").write_text(
+        AGENTS_TEMPLATE_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+    )
 
 
 def wiki_is_empty(kb_dir: Path) -> bool:
-    """Return True when the wiki has no real content yet (fresh build).
-
-    Used by both this script and `update_docs_workflow.py` to decide when to
-    auto-promote to `seed_defaults=True` (which seeds topic pages and the
-    recipes/errors index pages, not just the source pages). Treats a missing
-    or empty `wiki/` directory, or one with no `.md` files, as empty.
-    """
+    """True when wiki/ is missing or has no .md files (fresh build)."""
     wiki_dir = kb_dir / "wiki"
     if not wiki_dir.exists():
         return True
@@ -268,10 +253,7 @@ def wiki_is_empty(kb_dir: Path) -> bool:
 
 def update_kb_wiki(kb_dir: Path, *, seed_defaults: bool, changed_only: bool) -> None:
     manifest = load_manifest(kb_dir)
-    # Fresh-build safety net: if the wiki dir is empty (e.g. after a full
-    # `rm -rf data/kb`), promote to seed_defaults so topic/recipe/error pages
-    # are also written. Without this, only `index.md`, `log.md`, and source
-    # pages would be created and the wiki would feel half-empty to the agent.
+    # Empty wiki/ promotes to a full seed so topic/recipe/error pages get written.
     if not seed_defaults and wiki_is_empty(kb_dir):
         seed_defaults = True
     overwrite = seed_defaults or changed_only

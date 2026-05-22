@@ -375,21 +375,10 @@ def create_vector_stores() -> None:
 
 
 def build_kb_artifacts() -> None:
-    """Build generated markdown corpus, indexes, and refreshed wiki pages.
+    """Build kb/raw, kb/generated, and refresh kb/wiki.
 
-    Notes for a from-scratch rebuild (e.g. after `rm -rf data/kb`):
-
-    - `build_kb_artifacts.py` rebuilds `kb/raw/` and `kb/generated/` from
-      `data/all_sources_data.jsonl` (which `ensure_required_files_exist`
-      downloaded from HuggingFace if it was missing). Course raw pages come
-      from the JSONL too, so missing Notion exports don't matter at runtime.
-    - `update_kb_wiki.py` is called with `--changed-only` here, which only
-      forces overwrites on `index.md`, `log.md`, and per-source pages. The
-      topic pages (`wiki/topics/*.md`) and the recipes/errors index pages
-      need `--seed-defaults`. The script auto-promotes to `seed_defaults=True`
-      when it sees an empty `wiki/` (see `wiki_is_empty` in update_kb_wiki.py),
-      so the workflow's `--changed-only` is safe for both fresh and
-      incremental rebuilds.
+    update_kb_wiki auto-promotes to seed_defaults when wiki/ is empty, so
+    `--changed-only` is safe for both fresh and incremental rebuilds.
     """
     logger.info("Building KB artifacts")
     result = run_module("data.scraping_scripts.build_kb_artifacts")
