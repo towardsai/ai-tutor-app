@@ -86,6 +86,13 @@ def local_relative_path(url: str) -> str:
     return normalized
 
 
+def display_url(doc_url: str) -> str:
+    for suffix in (".md", ".mdx"):
+        if doc_url.endswith(suffix):
+            return doc_url[: -len(suffix)]
+    return doc_url
+
+
 def write_text_file(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -155,7 +162,7 @@ def process_source(source: str, *, dry_run: bool = False) -> None:
         content = fetch_text(doc_url)
         write_text_file(local_path, content)
         source_extensions[relative_path] = os.path.splitext(relative_path)[1]
-        source_urls[relative_path] = doc_url
+        source_urls[relative_path] = display_url(doc_url)
 
     write_json(os.path.join(local_dir, SOURCE_EXTENSIONS_FILENAME), source_extensions)
     write_json(os.path.join(local_dir, SOURCE_URLS_FILENAME), source_urls)

@@ -1,8 +1,8 @@
 {
   "claude_code_docs": {
-    "indexedAt": "2026-05-15",
+    "indexedAt": "2026-05-26",
     "sha": null,
-    "version": "Fri, 15 May 2026 00:40:38 GMT"
+    "version": "Tue, 26 May 2026 05:21:24 GMT"
   },
   "deep_agents": {
     "indexedAt": "2026-05-14",
@@ -30,9 +30,9 @@
     "version": null
   },
   "openai_docs": {
-    "indexedAt": "2026-05-14",
+    "indexedAt": "2026-05-26",
     "sha": null,
-    "version": "Thu, 14 May 2026 23:08:56 GMT"
+    "version": "Tue, 26 May 2026 16:20:22 GMT"
   },
   "peft": {
     "indexedAt": "2026-05-14",
