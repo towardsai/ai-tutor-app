@@ -389,7 +389,7 @@ def build_kb_artifacts() -> None:
         logger.error("Error building KB artifacts - check output above")
         sys.exit(1)
 
-    result = run_module("data.scraping_scripts.update_kb_wiki", "--changed-only")
+    result = run_module("data.scraping_scripts.update_kb_wiki")
     if result.returncode != 0:
         logger.error("Error updating KB wiki - check output above")
         sys.exit(1)

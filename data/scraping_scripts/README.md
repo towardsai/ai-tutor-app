@@ -157,9 +157,11 @@ What happens under the hood when local state is missing:
 3. `build_kb_artifacts.py` regenerates `data/kb/raw/` and `data/kb/generated/`
    from the JSONL. Course raw pages are reconstructed from the JSONL too —
    you do **not** need the original Notion exports in `data/<course_name>/`.
-4. `update_kb_wiki.py --changed-only` rebuilds `data/kb/wiki/`. When it
-   detects an empty `wiki/` it auto-promotes to a full seed (topic pages,
-   recipes/errors index pages), so a clean rebuild produces the full wiki.
+4. `update_kb_wiki.py` rebuilds `data/kb/wiki/`. When it detects an empty
+   `wiki/` it auto-promotes to a full seed (topic pages, recipes/errors index
+   pages), so a clean rebuild produces the full wiki. On incremental runs,
+   maintainer-authored prose outside `<!-- AUTO-GENERATED -->` markers is
+   preserved; pass `--seed-defaults` to wipe and reseed everything.
 5. `data/kb/AGENTS.md` is overwritten from
    `data/scraping_scripts/kb_agents_template.md` (the canonical template,
    tracked in git so it survives any `rm -rf data/`).
@@ -301,6 +303,6 @@ leaving the source configured as active for a future rebuild.
 
 7. KB wiki artifact creation:
    - `build_kb_artifacts.py` converts `all_sources_data.jsonl` into generated markdown under `data/kb/raw/`
-   - `update_kb_wiki.py --changed-only` refreshes wiki navigation pages under `data/kb/wiki/`
+   - `update_kb_wiki.py` refreshes wiki navigation pages under `data/kb/wiki/`, preserving maintainer prose outside `<!-- AUTO-GENERATED -->` markers
    - The docs and course workflows run these steps automatically unless `--skip-kb` is passed
    - `upload_dbs_to_hf.py` uploads `data/kb/**` with the vector database so the runtime can download one KB bundle

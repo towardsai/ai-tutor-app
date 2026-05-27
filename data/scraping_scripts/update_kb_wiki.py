@@ -43,14 +43,6 @@ def wiki_path(kb_dir: Path, *parts: str) -> Path:
     return kb_dir / "wiki" / Path(*parts)
 
 
-def write_page(path: Path, content: str, *, overwrite: bool) -> bool:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and not overwrite:
-        return False
-    path.write_text(content.rstrip() + "\n", encoding="utf-8")
-    return True
-
-
 def shell_path(row: dict[str, Any], kb_dir: Path) -> str:
     path = str(row.get("path") or "")
     if not path:
@@ -104,11 +96,11 @@ def seed_index(kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite: bool)
         folder = "courses" if group_by_source.get(source) == "courses" else "frameworks"
         source_lines.append(f"- {source}: `wiki/{folder}/{source}.md` - {count} corpus pages")
     topic_lines = [f"- {topic}: `wiki/topics/{topic}.md`" for topic in TOPIC_KEYWORDS]
-    content = f"""# AI Tutor KB Index
+    header = """# AI Tutor KB Index
 
 This wiki is a navigation layer over the generated corpus markdown.
-
-## Sources
+"""
+    generated = f"""## Sources
 
 {chr(10).join(source_lines) if source_lines else "- No corpus sources indexed yet."}
 
@@ -122,7 +114,10 @@ This wiki is a navigation layer over the generated corpus markdown.
 - Headings: `generated/headings.jsonl`
 - Symbols: `generated/symbols.tsv`
 """
-    write_page(wiki_path(kb_dir, "index.md"), content, overwrite=overwrite)
+    path = wiki_path(kb_dir, "index.md")
+    if path.exists() and AUTO_START not in path.read_text(encoding="utf-8"):
+        overwrite = True
+    write_generated_section(path, header, generated, overwrite=overwrite)
 
 
 def seed_log(kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite: bool) -> None:
@@ -155,11 +150,11 @@ def seed_source_pages(kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite
         ]
         group = str(rows[0].get("source_group") or "docs")
         folder = "courses" if group == "courses" else "frameworks"
-        content = f"""# {source}
+        header = f"""# {source}
 
 Use this page to orient inside the `{source}` corpus before reading source pages directly.
-
-## Corpus Pages
+"""
+        generated = f"""## Corpus Pages
 
 {chr(10).join(page_links) if page_links else "- No pages indexed."}
 
@@ -167,7 +162,11 @@ Use this page to orient inside the `{source}` corpus before reading source pages
 
 Treat generated corpus markdown as the source of truth for this source. Use exact search for symbols, error strings, and code identifiers.
 """
-        write_page(wiki_path(kb_dir, folder, f"{source}.md"), content, overwrite=overwrite)
+        path = wiki_path(kb_dir, folder, f"{source}.md")
+        page_overwrite = overwrite
+        if path.exists() and AUTO_START not in path.read_text(encoding="utf-8"):
+            page_overwrite = True
+        write_generated_section(path, header, generated, overwrite=page_overwrite)
 
 
 def matching_topic_rows(
@@ -251,16 +250,15 @@ def wiki_is_empty(kb_dir: Path) -> bool:
     return not any(wiki_dir.rglob("*.md"))
 
 
-def update_kb_wiki(kb_dir: Path, *, seed_defaults: bool, changed_only: bool) -> None:
+def update_kb_wiki(kb_dir: Path, *, seed_defaults: bool) -> None:
     manifest = load_manifest(kb_dir)
     # Empty wiki/ promotes to a full seed so topic/recipe/error pages get written.
     if not seed_defaults and wiki_is_empty(kb_dir):
         seed_defaults = True
-    overwrite = seed_defaults or changed_only
     write_agents_md(kb_dir)
-    seed_index(kb_dir, manifest, overwrite=overwrite)
-    seed_log(kb_dir, manifest, overwrite=overwrite)
-    seed_source_pages(kb_dir, manifest, overwrite=overwrite)
+    seed_index(kb_dir, manifest, overwrite=seed_defaults)
+    seed_log(kb_dir, manifest, overwrite=seed_defaults)
+    seed_source_pages(kb_dir, manifest, overwrite=seed_defaults)
     seed_topic_pages(kb_dir, manifest, overwrite=seed_defaults)
     seed_index_pages(kb_dir, overwrite=seed_defaults)
 
@@ -269,13 +267,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Seed or refresh the KB wiki.")
     parser.add_argument("--kb-dir", default=str(DEFAULT_KB_DIR))
     parser.add_argument("--seed-defaults", action="store_true")
-    parser.add_argument("--changed-only", action="store_true")
     args = parser.parse_args()
 
     update_kb_wiki(
         Path(args.kb_dir),
         seed_defaults=bool(args.seed_defaults),
-        changed_only=bool(args.changed_only),
     )
     print(f"Updated KB wiki in {args.kb_dir}")
 

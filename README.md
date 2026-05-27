@@ -182,7 +182,7 @@ After updating the JSONL corpus, rebuild the local Chroma index with:
 
 ```bash
 uv run -m data.scraping_scripts.build_kb_artifacts
-uv run -m data.scraping_scripts.update_kb_wiki --changed-only
+uv run -m data.scraping_scripts.update_kb_wiki
 uv run -m data.scraping_scripts.add_context_to_nodes
 uv run -m data.scraping_scripts.create_vector_stores all_sources
 ```

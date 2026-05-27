@@ -377,8 +377,10 @@ def create_vector_stores() -> None:
 def build_kb_artifacts() -> None:
     """Build kb/raw, kb/generated, and refresh kb/wiki.
 
-    update_kb_wiki auto-promotes to seed_defaults when wiki/ is empty, so
-    `--changed-only` is safe for both fresh and incremental rebuilds.
+    update_kb_wiki auto-promotes to seed_defaults when wiki/ is empty, so the
+    same invocation works for both fresh and incremental rebuilds. On
+    incremental runs, maintainer-authored prose outside `<!-- AUTO-GENERATED -->`
+    markers is preserved.
     """
     logger.info("Building KB artifacts")
     result = run_module("data.scraping_scripts.build_kb_artifacts")
@@ -386,7 +388,7 @@ def build_kb_artifacts() -> None:
         logger.error("Error building KB artifacts - check output above")
         sys.exit(1)
 
-    result = run_module("data.scraping_scripts.update_kb_wiki", "--changed-only")
+    result = run_module("data.scraping_scripts.update_kb_wiki")
     if result.returncode != 0:
         logger.error("Error updating KB wiki - check output above")
         sys.exit(1)

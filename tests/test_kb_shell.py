@@ -46,7 +46,7 @@ def kb_dir(tmp_path: Path) -> Path:
         ],
     )
     build_kb_artifacts(input_file, output_dir)
-    update_kb_wiki(output_dir, seed_defaults=True, changed_only=False)
+    update_kb_wiki(output_dir, seed_defaults=True)
     return output_dir
 
 

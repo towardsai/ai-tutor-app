@@ -42,16 +42,16 @@ def test_update_kb_wiki_seeds_navigation_pages(tmp_path: Path) -> None:
     )
     build_kb_artifacts(input_file, kb_dir)
 
-    update_kb_wiki(kb_dir, seed_defaults=True, changed_only=False)
+    update_kb_wiki(kb_dir, seed_defaults=True)
 
     assert (kb_dir / "AGENTS.md").exists()
     assert (kb_dir / "wiki" / "index.md").exists()
     assert (kb_dir / "wiki" / "frameworks" / "peft.md").exists()
     assert (kb_dir / "wiki" / "courses" / "agentic_ai_engineering.md").exists()
     agents = (kb_dir / "AGENTS.md").read_text(encoding="utf-8")
-    assert "## Exploration Budget" in agents
-    assert 'rg -n -m 20 "query terms"' in agents
-    assert "Stop browsing once you have one clearly relevant source page" in agents
+    assert "## Ground Truth" in agents
+    assert "## First Command Rule" in agents
+    assert "run_kb_command" in agents
     index = (kb_dir / "wiki" / "index.md").read_text(encoding="utf-8")
     assert "`wiki/courses/agentic_ai_engineering.md`" in index
     assert "`wiki/frameworks/peft.md`" in index
@@ -84,8 +84,8 @@ def test_update_kb_wiki_preserves_authored_topic_content_and_appends_log(tmp_pat
     topic_path.parent.mkdir(parents=True)
     topic_path.write_text("# Lora\n\nAuthored synthesis stays.\n", encoding="utf-8")
 
-    update_kb_wiki(kb_dir, seed_defaults=False, changed_only=True)
-    update_kb_wiki(kb_dir, seed_defaults=False, changed_only=True)
+    update_kb_wiki(kb_dir, seed_defaults=False)
+    update_kb_wiki(kb_dir, seed_defaults=False)
 
     topic = topic_path.read_text(encoding="utf-8")
     assert "Authored synthesis stays." in topic
