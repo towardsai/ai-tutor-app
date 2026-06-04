@@ -266,7 +266,7 @@ function RetrievalTool({
       if (!infoRef.current) return;
       const trigger = infoRef.current.getBoundingClientRect();
       const width = 224;
-      const estimatedHeight = 96;
+      const estimatedHeight = 150;
       const spaceBelow = window.innerHeight - trigger.bottom;
       const openAbove = spaceBelow < estimatedHeight + 16 && trigger.top > spaceBelow;
       setDialogPos({
@@ -366,8 +366,10 @@ function RetrievalTool({
               className="rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
             >
               <p className="text-[12px] leading-[1.45] text-[var(--ink)]">
-                Searches the selected knowledge base semantically to find relevant
-                course and docs passages before answering.
+                Grounds answers in the sources you select using hybrid retrieval:
+                semantic and keyword (BM25) search, then reranking. The tutor can
+                also browse the knowledge base like a filesystem to read full
+                documents before answering.
               </p>
             </div>,
             document.body,

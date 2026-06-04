@@ -639,7 +639,7 @@ function CitationRow({ citations }: { citations: MessageCitation[] }) {
               href={citation.url}
               target="_blank"
               rel="noreferrer"
-              title={`${meta.label}${citation.sublabel ? ` — ${citation.sublabel}` : ""}`}
+              title={`${meta.label}${citation.sublabel ? ` · ${citation.sublabel}` : ""}`}
               className="group inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--line-strong)] bg-[var(--accent-faint)] px-2.5 py-1.5 text-xs font-medium text-[var(--accent)] transition hover:border-[var(--accent)] hover:bg-[var(--surface-strong)]"
             >
               <Icon className="h-3.5 w-3.5 shrink-0" />

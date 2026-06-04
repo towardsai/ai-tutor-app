@@ -99,6 +99,11 @@ Chat runtime: `COHERE_API_KEY` (retrieval), one chat-model provider key (`GEMINI
 
 `.github/workflows/sync-to-hf.yml` force-pushes to two HF Spaces on every push to `main`: **`ai-tutor`** (`Dockerfile`: FastAPI + Next.js export) and **`ai-tutor-chatbot`** (`Dockerfile.gradio`). Both install `ripgrep` for `run_kb_command` and run on :7860.
 
+## Conventions
+
+- **No em-dashes in frontend user-facing text.** Use a comma, parentheses, a colon, or two sentences instead. This covers every string the UI renders (Next.js components and Gradio): tool descriptions, popovers, labels, `title` tooltips, placeholders, empty states. This file and other docs are exempt.
+- **Decide frontend vs. backend ownership before changing behavior, and fix it on the side that owns the data.** The backend is the single source of truth for data shape and meaning; the frontend renders what it receives instead of reshaping it. If a field is empty, that should be because the server wrote it empty, not because the UI stripped it. For example, a source with no library version must get `version: null` from `capture_source_versions.py`; it should never be filtered out client-side. Reshaping data in the frontend causes drift between the two frontends and ambiguity about why a value is missing (did the server omit it, or did the client hide it?).
+
 ## Gotchas
 
 - **Context generation uses Gemini**; embeddings/rerank use **Cohere**; the chat model is provider-configurable. OpenAI is required only when explicitly selected.
