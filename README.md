@@ -97,8 +97,8 @@ The repo now also includes a separate Next.js frontend in [frontend](./frontend)
 
 This frontend consumes:
 
-- `GET /api/sources`
-- `POST /api/chat`
+- `GET /api/tools` — available models, tools, and the source picker (sources are nested in the response)
+- `POST /api/chat` — the streaming chat endpoint (SSE, Vercel AI SDK UI-message protocol)
 
 and renders sources, tool activity, and reasoning as separate UI elements rather than a single markdown block.
 
@@ -175,6 +175,12 @@ Notes:
 - API clients should usually send `[]` for history and continue the conversation with `thread_id`.
 - The source filter is request-scoped, so you can keep the same `thread_id` while changing sources between turns.
 - Sending an empty `thread_id` starts a new backend conversation.
+
+### Knowledge Base (file-based)
+
+Alongside vector retrieval, the agent can browse a local, file-based knowledge base under `data/kb/` like a filesystem (read-only `rg`/`grep`/`cat`/… via the `run_kb_command` tool). It has three layers: `raw/` (immutable corpus mirrors), `wiki/` (an LLM-maintained synthesis/navigation layer), and `generated/` (machine indexes for manifests, headings, and symbols).
+
+This is a deliberate take on [Andrej Karpathy's "LLM wiki" idea](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — a persistent, compounding wiki an LLM maintains over immutable sources, rather than re-deriving knowledge from scratch on every query. See [data/kb/MAINTAINER.md](./data/kb/MAINTAINER.md) for the design and the wiki-maintainer workflow, and [AGENTS.md](./AGENTS.md) for the overall app architecture.
 
 ### Rebuild Local Retrieval Index
 

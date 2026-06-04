@@ -1,162 +1,107 @@
-# AI Tutor App Instructions for Codex
+# AI Tutor App — Agent Instructions
+
+This is the **canonical, tool-agnostic** instruction file for the repo. `CLAUDE.md` pulls it in via `@AGENTS.md`; Codex and other agents read it directly. **Put new repo-wide guidance here** so every agent stays in sync. Keep this file a concise map — deep procedures live in the docs it points to.
 
 ## Project Overview
 
-This is an AI tutor application that uses RAG (Retrieval Augmented Generation) to provide accurate responses about AI concepts by searching through multiple documentation sources. The application has a Gradio UI and uses ChromaDB for vector storage.
+AI tutor for applied AI, LLMs, RAG, and Python. **Agentic RAG**: a LangChain/LangGraph agent grounds answers in a curated corpus of course + library docs, can browse a local file-based knowledge base, and (optionally) search the live web. Two frontends share one agent core:
 
-## Key Repositories and URLs
+- **Gradio** UI — `scripts/main.py` (the original chatbot).
+- **Next.js** UI — `frontend/`, served by a **FastAPI** backend (`scripts/api.py`) that streams in the Vercel AI SDK UI-message protocol.
 
-- [Repository on GitHub](https://github.com/towardsai/ai-tutor-app)
-- [Live demo](https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot)
-- [Vector database](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-vector-db)
-- [Private JSONL repo (the raw document data)](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-data)
+ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-configurable (Gemini default, Anthropic, OpenAI). Python ≥3.13, managed with `uv`.
 
-## Architecture Overview
+## Key URLs
 
-- Frontend: Gradio-based UI in `scripts/main.py`
-- Retrieval: Local Chroma retriever in `scripts/chroma_rag.py`
-- Embedding: Cohere embeddings for vector search
-- LLM: Provider-configurable LangChain chat model (OpenAI, Anthropic, or Gemini)
-- Storage: Individual JSONL files per source + combined file for retrieval
+- [GitHub repo](https://github.com/towardsai/ai-tutor-app)
+- [Live demo (Gradio)](https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot)
+- [Vector DB + KB bundle](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-vector-db) · [Private raw JSONL data](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-data)
 
-## Data Update Workflows
+## Where things live
 
-### 1. Adding a New Course
+| Concern | File(s) |
+|---|---|
+| Agent core (`build_agent`, `stream_chat`) | `scripts/chat_service.py` |
+| System prompt assembly | `scripts/prompts.py` |
+| Hybrid retrieval | `scripts/chroma_rag.py` |
+| KB browsing sandbox + citation resolution | `scripts/kb_shell.py`, `scripts/kb_manifest.py` |
+| FastAPI server (`/api/chat`, `/api/tools`, `/healthz`) | `scripts/api.py` |
+| Gradio app + renderer | `scripts/main.py`, `scripts/gradio_presenter.py` |
+| Paths, models, startup downloads | `scripts/setup.py` |
+| **Sources — single source of truth** | `data/scraping_scripts/source_registry.py` |
+| Tracing (LangSmith + Logfire) | `scripts/agent_tracing.py`, `scripts/setup.py` |
+| Data pipeline / workflows (deep guide) | `data/scraping_scripts/README.md` |
+| KB design + wiki maintainer workflow (deep guide) | `data/kb/MAINTAINER.md` |
 
-```bash
-uv run -m data.scraping_scripts.add_course_workflow --course [COURSE_NAME]
-```
+## Architecture in brief
 
-- This requires the course to be already configured in `process_md_files.py` under `SOURCE_CONFIGS`
-- The workflow will pause for manual URL addition after processing markdown files
-- Only new content will have context added by default (efficient)
-- Use `--process-all-context` if you need to regenerate context for all documents
-- Both database and data files are uploaded to HuggingFace by default
-- Use `--skip-data-upload` if you don't want to upload data files
+The agent is built with `langchain.agents.create_agent()` (LangGraph), an `InMemorySaver` checkpointer keyed by `thread_id`, and middlewares for context-editing, summarization, and source preference. `stream_chat()` is the single entry point both frontends call; it yields typed `ChatEvent`s. It always exposes two custom tools, plus provider-native web tools when enabled:
 
-### 2. Updating Documentation from GitHub
+- **`retrieve_tutor_context(query)`** — hybrid RAG over the corpus, scoped to the user's selected sources.
+- **`run_kb_command(...)`** — read-only KB file browsing (see below).
+- **Gemini**: `google_search`, `url_context`. **Anthropic**: `web_search`, `web_fetch`.
 
-```bash
-uv run -m data.scraping_scripts.update_docs_workflow --sources [SOURCE1] [SOURCE2] ...
-```
+Final-answer inline citations are resolved against current-turn evidence + the KB manifest into trusted source cards (`scripts/kb_manifest.py`).
 
-- Updates all supported documentation sources (or specify specific ones with `--sources`)
-- Downloads fresh documentation from GitHub repositories
-- Only new content will have context added by default (efficient)
-- Use `--process-all-context` if you need to regenerate context for all documents
-- Both database and data files are uploaded to HuggingFace by default
-- Use `--skip-data-upload` if you don't want to upload data files
+**Retrieval** (`scripts/chroma_rag.py`): dense (Cohere `embed-v4.0`) + BM25 → Reciprocal Rank Fusion → Cohere rerank → token budget. See the file for the exact top-k / score constants.
 
-### 3. Data File Management
+**Corpus → searchable** lifecycle: markdown → `process_md_files.py` → per-source JSONL → `all_sources_data.jsonl` → (`add_context_to_nodes.py`, **Gemini**) → `*_contextual_nodes.pkl` → `create_vector_stores.py` → ChromaDB. Separately, `all_sources_data.jsonl` → `build_kb_artifacts.py` + `update_kb_wiki.py` → `data/kb/`.
 
-```bash
-# Upload both JSONL and PKL files to private HuggingFace repository
-uv run -m data.scraping_scripts.upload_data_to_hf
-```
+## Knowledge base (KB) browsing tool
 
-## Data Flow and File Relationships
+The agent's second grounding mechanism: instead of only top-k retrieval, it browses the corpus like a filesystem via `run_kb_command` — a sandboxed, **read-only** shell over `data/kb/` (allowed: `rg grep find ls sed head cat wc`; no pipes/redirects/network/writes; path-jailed to `data/kb/`; per-turn command budget). Sandbox lives in `scripts/kb_shell.py`.
 
-### Document Processing Pipeline
+`data/kb/` (a gitignored build artifact, downloaded on first start) has three layers:
 
-1. **Markdown Files** → `process_md_files.py` → **Individual JSONL files** (e.g., `transformers_data.jsonl`)
-2. Individual JSONL files → `combine_all_sources()` → `all_sources_data.jsonl`
-3. `all_sources_data.jsonl` → `add_context_to_nodes.py` → `all_sources_contextual_nodes.pkl`
-4. `all_sources_contextual_nodes.pkl` → `create_vector_stores.py` → ChromaDB vector stores
+- `raw/` — read-only markdown mirrors of the corpus (`docs/<source>/…`, `courses/<source>/…`).
+- `wiki/` — LLM-maintained synthesis/navigation (`index.md`, `frameworks/`, `courses/`, `topics/`, `recipes/`, `errors/`, `log.md`).
+- `generated/` — machine indexes (`corpus_manifest.jsonl`, `headings.jsonl`, `symbols.tsv`).
 
-### Important Files and Their Purpose
+This deliberately implements **[Karpathy's "LLM wiki"](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)** idea — a persistent, compounding wiki an LLM maintains over immutable sources, instead of re-deriving knowledge per query. **`data/kb/MAINTAINER.md` owns the full design and the maintainer (ingest/curate/lint) workflow — read it before touching KB structure.**
 
-- `all_sources_data.jsonl` - Combined raw document data without context
-- Source-specific JSONL files (e.g., `transformers_data.jsonl`) - Raw data for individual sources
-- `all_sources_contextual_nodes.pkl` - Context-enriched chunk manifest used for embedding
-- `chroma-db-all_sources` - Vector database directory containing embeddings
-- `document_dict_all_sources.pkl` - Dictionary mapping document IDs to full documents
+Runtime guidance the agent follows is in `data/kb/AGENTS.md` (injected into the system prompt). It is **generated** — edit the template at `data/scraping_scripts/kb_agents_template.md`, never `data/kb/AGENTS.md` directly. Don't confuse `data/kb/AGENTS.md` (runtime KB rules) with this root file (repo dev guidance).
 
-## Configuration Details
+## Sources & config
 
-### Adding a New Course Source
+`data/scraping_scripts/source_registry.py` is the **single source of truth** for sources (`SOURCE_CONFIGS`, key groupings, UI labels, defaults); `scripts/setup.py` re-exports them and both frontends derive the picker from it. Docs sources ingest via the GitHub API or `llms.txt`; course sources are Notion exports. To add a source: add it to the registry (+ the relevant grouping tuples), then run the matching workflow — no separate UI edit needed. Models live in `setup.AVAILABLE_MODELS` (default `google-genai:gemini-3.5-flash`; also Claude Haiku 4.5; OpenAI supported in code).
 
-1. Update `SOURCE_CONFIGS` in `process_md_files.py`:
-
-   ```python
-   "new_course": {
-      "base_url": "",
-      "input_directory": "data/new_course",
-      "output_file": "data/new_course_data.jsonl",
-      "source_name": "new_course",
-      "use_include_list": False,
-      "included_dirs": [],
-      "excluded_dirs": [],
-      "excluded_root_files": [],
-      "included_root_files": [],
-      "url_extension": "",
-   },
-   ```
-
-2. Update UI configurations in:
-
-- `setup.py`: Add to `AVAILABLE_SOURCES`, `AVAILABLE_SOURCES_UI`, and `SOURCE_UI_TO_KEY`
-- `main.py`: Optionally add the source to the default selected UI list
-
-## Deployment and Publishing
-
-### GitHub Actions Workflow
-
-The application is automatically deployed to HuggingFace Spaces when changes are pushed to the main branch (excluding documentation and scraping scripts).
-
-### Manual Deployment
+## Running locally
 
 ```bash
-git push --force https://$HF_USERNAME:$HF_TOKEN@huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot main:main
+uv sync && cp .env.example .env      # then fill in keys
+uv run -m scripts.main               # Gradio UI (:7860)
+uv run -m scripts.api                # FastAPI backend (:8000; override AI_TUTOR_API_PORT/PORT)
+# Next.js frontend (needs the API running):
+cd frontend && npm install && cp .env.example .env.local && npm run dev   # :3000
 ```
 
-## Development Environment Setup
+First start downloads the vector-db/KB bundle from HF if missing (`HF_TOKEN`). The frontend is a static export (`output: 'export'`); `npm run build` emits `frontend/out`, which `scripts/api.py` mounts at `/`.
 
-### Required Environment Variables
+Test & lint: `uv run pytest` · `uv run ruff check .`
 
-- `OPENAI_API_KEY` - For LLM processing
-- `COHERE_API_KEY` - For embeddings
-- `HF_TOKEN` - For HuggingFace uploads
-- `GITHUB_TOKEN` - For accessing documentation via the GitHub API
+## Data update workflows
 
-### Running the Application Locally
+Run from the repo root; by default they rebuild KB artifacts and upload to HF. **Full guide: `data/scraping_scripts/README.md`.**
 
 ```bash
-# Install dependencies
-uv sync
-
-# Start the Gradio UI
-uv run -m scripts.main
+uv run -m data.scraping_scripts.add_course_workflow --courses NAME [NAME ...]   # note: --courses (plural)
+uv run -m data.scraping_scripts.update_docs_workflow [--sources transformers peft ...]
+uv run -m data.scraping_scripts.retire_source_workflow --sources KEY [--dry-run | --yes]
 ```
 
-## Important Notes
+`update_docs_workflow` also performs a from-scratch rebuild if `data/kb` / `data/chroma-db-all_sources` are deleted. Common flags: `--process-all-context` (default is new-content-only), `--skip-kb`, `--skip-vectors`, `--skip-upload`, `--skip-data-upload`.
 
-1. When adding new courses, make sure to:
-   - Place markdown files exported from Notion in the appropriate directory
-   - Add URLs manually from the live course platform
-   - Example URL format: `https://academy.towardsai.net/courses/take/python-for-genai/multimedia/62515980-course-structure`
-   - Configure the course in `process_md_files.py`
-   - Verify it appears in the UI after deployment
+## Environment variables
 
-2. For updating documentation:
-   - The GitHub API is used to fetch the latest documentation
-   - The workflow handles updating existing sources without affecting course data
+Chat runtime: `COHERE_API_KEY` (retrieval), one chat-model provider key (`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`), `HF_TOKEN` (first-start download). Optional: `MONGODB_URI` (logging), `LANGSMITH_*` (tracing), `AI_TUTOR_API_PORT`/`HOST`/`CORS_ALLOW_ORIGINS`, `AI_TUTOR_KB_DIR`, `NEXT_PUBLIC_AI_TUTOR_API_BASE_URL`. Data workflows also need `GITHUB_TOKEN` and `GEMINI_API_KEY`/`GOOGLE_API_KEY` (context generation). See `.env.example`.
 
-3. For efficient context addition:
-   - Only new content gets processed by default
-   - Old nodes for updated sources are removed from the PKL file
-   - This ensures no duplicate content in the vector database
+## Deployment
 
-## Technical Details for Debugging
+`.github/workflows/sync-to-hf.yml` force-pushes to two HF Spaces on every push to `main`: **`ai-tutor`** (`Dockerfile`: FastAPI + Next.js export) and **`ai-tutor-chatbot`** (`Dockerfile.gradio`). Both install `ripgrep` for `run_kb_command` and run on :7860.
 
-### Node Removal Logic
+## Gotchas
 
-- When adding context, the workflow now removes existing nodes for sources being updated
-- This prevents duplication of content in the vector database
-- The source and `doc_id` are extracted through compatibility helpers in `scripts/chroma_rag.py`, so legacy node pickles and current chunk-record pickles both work
-
-### Performance Considerations
-
-- Context addition is the most time-consuming step (uses OpenAI API)
-- The new default behavior only processes new content
-- `create_vector_stores.py` now shows embedding and Chroma upsert progress in the terminal
-- For large updates, consider running in batches
+- **Context generation uses Gemini**; embeddings/rerank use **Cohere**; the chat model is provider-configurable. OpenAI is required only when explicitly selected.
+- `data/kb/` and `data/chroma-db-all_sources/` are build artifacts — never commit or hand-edit; regenerate or re-download.
+- Two `AGENTS.md` files: this root one (repo dev guidance) vs `data/kb/AGENTS.md` (generated runtime KB rules).
+- Source config lives in `source_registry.py`, not `setup.py` / `process_md_files.py` (older docs were wrong).
