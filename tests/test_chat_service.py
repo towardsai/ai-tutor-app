@@ -158,7 +158,12 @@ class ChatServiceTestCase(unittest.TestCase):
 
         try:
             with (
-                patch("scripts.chat_service.build_chat_model", return_value=object()),
+                patch(
+                    "scripts.chat_service.build_chat_model",
+                    # SummarizationMiddleware reads model._llm_type at init, so the
+                    # stub needs that attribute (a bare object() would AttributeError).
+                    return_value=types.SimpleNamespace(_llm_type="fake-chat-model"),
+                ),
                 patch(
                     "scripts.chat_service.build_system_prompt", return_value="prompt"
                 ),
@@ -201,8 +206,14 @@ class ChatServiceTestCase(unittest.TestCase):
                 "run_kb_command",
             },
         )
-        self.assertEqual(len(created_agents[0].kwargs["middleware"]), 1)
-        self.assertEqual(created_agents[1].kwargs["middleware"], [])
+        # Enabling Gemini web tools adds exactly one toggle-specific middleware
+        # (GeminiServerSideToolsMiddleware) on top of the shared base middlewares.
+        web_middleware = [type(m).__name__ for m in created_agents[0].kwargs["middleware"]]
+        plain_middleware = [type(m).__name__ for m in created_agents[1].kwargs["middleware"]]
+        self.assertIn("GeminiServerSideToolsMiddleware", web_middleware)
+        self.assertNotIn("GeminiServerSideToolsMiddleware", plain_middleware)
+        self.assertEqual(len(web_middleware), len(plain_middleware) + 1)
+        self.assertGreater(len(plain_middleware), 0)
 
     def test_kb_command_budget_blocks_after_limit(self) -> None:
         session_id = "test_budget_session"
@@ -243,6 +254,68 @@ class ChatServiceTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resolved, [])
+
+    def test_resolve_answer_citations_dedupes_repeated_citation(self) -> None:
+        retrieval = SourceMatch(
+            doc_id="peft:lora",
+            title="LoRA",
+            url="https://example.com/lora",
+            source_key="peft",
+            source_label="PEFT Docs",
+            score=12.0,
+            group="docs",
+        )
+
+        resolved = resolve_answer_citations(
+            "See [LoRA](https://example.com/lora). More on [LoRA](https://example.com/lora).",
+            retrieval_evidence={"peft:lora": retrieval},
+            shell_evidence={},
+            web_evidence={},
+        )
+
+        self.assertEqual(resolved, [retrieval])
+
+    def test_resolve_answer_citations_resolves_cited_web_source(self) -> None:
+        web = SourceMatch(
+            doc_id="web_search::https://example.com/post",
+            title="A blog post",
+            url="https://example.com/post",
+            source_key="web_search",
+            source_label="Web",
+            score=1.0,
+            group="web",
+        )
+
+        resolved = resolve_answer_citations(
+            "As noted in [the post](https://example.com/post).",
+            retrieval_evidence={},
+            shell_evidence={},
+            web_evidence={"web_search::https://example.com/post": web},
+        )
+
+        self.assertEqual(resolved, [web])
+
+    def test_resolve_answer_citations_keep_unresolved_sources_flag(self) -> None:
+        answer = "From [some site](https://unsourced.example/page)."
+
+        gated = resolve_answer_citations(
+            answer,
+            retrieval_evidence={},
+            shell_evidence={},
+            web_evidence={},
+        )
+        self.assertEqual(gated, [])
+
+        kept = resolve_answer_citations(
+            answer,
+            retrieval_evidence={},
+            shell_evidence={},
+            web_evidence={},
+            keep_unresolved_sources=True,
+        )
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].url, "https://unsourced.example/page")
+        self.assertEqual(kept[0].group, "web")
 
     def test_stream_chat_resolves_shell_citation_after_final_answer(self) -> None:
         agent = FakeStreamingAgent([])

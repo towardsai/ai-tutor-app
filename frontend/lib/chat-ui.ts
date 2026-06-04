@@ -103,29 +103,6 @@ export function getOrderedMessageBlocks(message: TutorMessage): TutorMessageBloc
   return blocks;
 }
 
-export function getMessageSources(message: TutorMessage): SourcePartData[] {
-  const seen = new Set<string>();
-  const sources: SourcePartData[] = [];
-
-  for (const part of message.parts) {
-    if (!("type" in part) || part.type !== "data-source") {
-      continue;
-    }
-    const data = (part as TutorMessagePart).data as SourcePartData | undefined;
-    if (!data) {
-      continue;
-    }
-    const key = data.docId || data.url;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    sources.push(data);
-  }
-
-  return sources.sort((left, right) => right.score - left.score);
-}
-
 export function hasRenderableContent(message: TutorMessage): boolean {
   for (const part of message.parts) {
     if (!("type" in part)) {
@@ -163,45 +140,41 @@ export function getMessageCitations(message: TutorMessage): MessageCitation[] {
   const seen = new Set<string>();
   const citations: MessageCitation[] = [];
 
-  for (const source of getMessageSources(message)) {
-    const url = source.url?.trim();
+  // Sources are resolved server-side (deduped, in citation order) and arrive as
+  // `data-source` parts. The frontend only maps them to display props — it does
+  // NOT re-parse the answer text for links, which previously produced duplicate
+  // chips (a corpus URL added as kind "doc"/"course" AND again as kind "web").
+  for (const part of message.parts) {
+    if (!("type" in part) || part.type !== "data-source") {
+      continue;
+    }
+    const data = (part as TutorMessagePart).data as SourcePartData | undefined;
+    if (!data) {
+      continue;
+    }
+    const url = data.url?.trim();
     if (!url) {
       continue;
     }
-    const kind = classifySource(source.group);
-    const title = cleanTitle(source.title);
-    const label = (
-      kind === "web"
-        ? title || hostnameFromUrl(url) || "Source"
-        : title || source.sourceLabel || "Source"
-    ).slice(0, 80);
-    const sublabel =
-      kind === "web"
-        ? hostnameFromUrl(url)
-        : source.sourceLabel?.trim() || undefined;
-    const key = `${kind}::${url}`;
+    const key = url.replace(/#.*$/, "").replace(/\/+$/, ""); // mirror server normalize_url
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
-    citations.push({ label, url, kind, sublabel });
-  }
 
-  for (const part of getTextParts(message)) {
-    const text = part.text ?? "";
-    for (const citation of extractMarkdownLinkCitations(text)) {
-      const key = `web::${citation.url}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      citations.push({
-        label: citation.label,
-        url: citation.url,
-        kind: "web",
-        sublabel: hostnameFromUrl(citation.url) || undefined,
-      });
-    }
+    const kind = classifySource(data.group);
+    const title = cleanTitle(data.title);
+    const label = (
+      kind === "web"
+        ? title || hostnameFromUrl(url) || "Source"
+        : title || data.sourceLabel || "Source"
+    ).slice(0, 80);
+    const sublabel =
+      kind === "web"
+        ? hostnameFromUrl(url)
+        : data.sourceLabel?.trim() || undefined;
+
+    citations.push({ label, url, kind, sublabel });
   }
 
   return citations;
@@ -311,33 +284,4 @@ export function buildActivityItems(parts: TutorMessagePart[]): ActivityItem[] {
   flushReasoning();
 
   return items;
-}
-
-type RawLinkCitation = { label: string; url: string };
-
-function extractMarkdownLinkCitations(text: string): RawLinkCitation[] {
-  const citations: RawLinkCitation[] = [];
-  const markdownLinkPattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+(?:\([^\s)]+\)[^\s)]*)*)\)/g;
-  const bareUrlPattern = /(?<!\()https?:\/\/[^\s<>()]+/g;
-  const urlsInMarkdown = new Set<string>();
-
-  for (const match of text.matchAll(markdownLinkPattern)) {
-    const label = (match[1] ?? "").trim();
-    const url = (match[2] ?? "").trim();
-    if (!label || !url) {
-      continue;
-    }
-    urlsInMarkdown.add(url);
-    citations.push({ label, url });
-  }
-
-  for (const match of text.matchAll(bareUrlPattern)) {
-    const url = (match[0] ?? "").trim();
-    if (!url || urlsInMarkdown.has(url)) {
-      continue;
-    }
-    citations.push({ label: "Source", url });
-  }
-
-  return citations;
 }

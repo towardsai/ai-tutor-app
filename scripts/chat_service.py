@@ -36,6 +36,7 @@ from .kb_shell import (
     run_kb_command as execute_kb_command,
 )
 from .kb_manifest import (
+    citation_dedupe_key,
     extract_raw_paths,
     parse_markdown_citations,
     resolve_manifest_reference,
@@ -407,43 +408,106 @@ def _index_evidence(matches: dict[str, SourceMatch]) -> dict[str, SourceMatch]:
     return index
 
 
+def _external_web_source(reference: str, label: str) -> SourceMatch:
+    """A cited http(s) URL that matched no evidence bucket and no manifest entry.
+
+    Only surfaced when ``keep_unresolved_sources=True``; tagged ``group="web"`` so
+    the UI renders it as a low-trust external chip.
+    """
+    return SourceMatch(
+        doc_id="",
+        title=label.strip() or reference,
+        url=reference,
+        source_key="web",
+        source_label="Web",
+        score=0.0,
+        group="web",
+    )
+
+
+def _match_evidence(
+    reference: str,
+    label: str,
+    evidence_indexes: list[dict[str, SourceMatch]],
+) -> SourceMatch | None:
+    for index in evidence_indexes:
+        for candidate in (reference, label.strip().lower()):
+            if candidate and candidate in index:
+                return index[candidate]
+    return None
+
+
+def _match_manifest_via_shell(
+    reference: str,
+    label: str,
+    shell_index: dict[str, SourceMatch],
+) -> SourceMatch | None:
+    """Resolve a reference through the KB manifest, but only trust it when the
+    same doc was actually browsed this turn via ``run_kb_command`` (i.e. it is in
+    shell evidence)."""
+    manifest_match = resolve_manifest_reference(reference, label=label)
+    if not manifest_match:
+        return None
+    for key in (
+        manifest_match.doc_id,
+        manifest_match.url,
+        manifest_match.title.strip().lower(),
+    ):
+        if key and key in shell_index:
+            return shell_index[key]
+    return None
+
+
 def resolve_answer_citations(
     answer: str,
     *,
     retrieval_evidence: dict[str, SourceMatch],
     shell_evidence: dict[str, SourceMatch],
     web_evidence: dict[str, SourceMatch],
+    keep_unresolved_sources: bool = False,
 ) -> list[SourceMatch]:
+    """Turn the model's inline citations into trusted source cards.
+
+    For each inline citation in ``answer`` the reference (URL, title,
+    ``kb://doc/<id>``, or raw path) is matched against the current turn's
+    evidence:
+
+    * ``retrieval_evidence`` / ``web_evidence`` — anything
+      ``retrieve_tutor_context`` or the web tools surfaced. **Web-search results
+      are recorded in ``web_evidence``**, so a web source the model cites inline
+      resolves here exactly like a corpus source — no special handling needed.
+    * ``shell_evidence`` (+ KB manifest) — files browsed via ``run_kb_command``.
+
+    Matches are deduped by URL and returned in **citation order** (the order the
+    links appear in the answer).
+
+    ``keep_unresolved_sources`` governs *only* inline http(s) URLs that match no
+    evidence bucket and no manifest entry — links the model produced from memory
+    or lifted from a doc body that no tool actually surfaced. Default ``False``
+    drops them (they still render as plain links in the answer prose); ``True``
+    surfaces them as low-trust "Web" chips.
+    """
     evidence_indexes = [
         _index_evidence(retrieval_evidence),
         _index_evidence(shell_evidence),
         _index_evidence(web_evidence),
     ]
+    shell_index = _index_evidence(shell_evidence)
     resolved: list[SourceMatch] = []
     seen: set[str] = set()
     for label, reference in parse_markdown_citations(answer):
-        candidates = [reference, label.strip().lower()]
-        match: SourceMatch | None = None
-        for index in evidence_indexes:
-            for candidate in candidates:
-                if candidate and candidate in index:
-                    match = index[candidate]
-                    break
-            if match:
-                break
-        if not match:
-            manifest_match = resolve_manifest_reference(reference, label=label)
-            if manifest_match:
-                shell_index = _index_evidence(shell_evidence)
-                if (
-                    manifest_match.doc_id in shell_index
-                    or manifest_match.url in shell_index
-                    or manifest_match.title.strip().lower() in shell_index
-                ):
-                    match = shell_index.get(manifest_match.doc_id) or shell_index.get(manifest_match.url) or shell_index.get(manifest_match.title.strip().lower())
-        if not match:
+        match = _match_evidence(reference, label, evidence_indexes)
+        if match is None:
+            match = _match_manifest_via_shell(reference, label, shell_index)
+        if (
+            match is None
+            and keep_unresolved_sources
+            and reference.startswith(("http://", "https://"))
+        ):
+            match = _external_web_source(reference, label)
+        if match is None:
             continue
-        key = source_match_key(match)
+        key = citation_dedupe_key(match)
         if key in seen:
             continue
         seen.add(key)

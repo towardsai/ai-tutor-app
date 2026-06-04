@@ -156,6 +156,17 @@ def source_match_key(match: SourceMatch) -> str:
     return match.doc_id or match.url or match.title
 
 
+def normalize_url(url: str) -> str:
+    """Drop the fragment and trailing slash so one page dedupes to one card."""
+    value = url.strip().split("#", 1)[0]
+    return value.rstrip("/")
+
+
+def citation_dedupe_key(match: SourceMatch) -> str:
+    """Dedupe resolved citations by URL (one card per page); fall back to id/title."""
+    return normalize_url(match.url) or match.doc_id or match.title
+
+
 def source_match_payload(match: SourceMatch, *, message_id: str, call_id: str = "") -> dict[str, Any]:
     payload: dict[str, Any] = {
         "message_id": message_id,
