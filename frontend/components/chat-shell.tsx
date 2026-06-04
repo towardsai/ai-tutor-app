@@ -813,7 +813,7 @@ const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
   {
     title: "Structured JSON output",
     prompt:
-      "What's the most reliable way to get structured JSON output from the OpenAI API?",
+      "What's the most reliable way to get structured JSON output from a model, especially for tool calls?",
     kind: "technical",
   },
 
@@ -855,6 +855,32 @@ const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
     kind: "technical",
   },
 
+  // Working with coding agents (directing, reviewing, debugging)
+  {
+    title: "Spec for an agent",
+    prompt:
+      "How do I write a spec clear enough that a coding agent builds the right thing the first time?",
+    kind: "technical",
+  },
+  {
+    title: "Break down a feature",
+    prompt:
+      "How do I break a feature into tasks a coding agent can actually execute well?",
+    kind: "technical",
+  },
+  {
+    title: "Review agent code",
+    prompt:
+      "An AI agent wrote this feature. How do I review it for bugs and security holes before I ship it?",
+    kind: "technical",
+  },
+  {
+    title: "Unstick the agent",
+    prompt:
+      "My coding agent keeps looping on the same bug. How do I get it back on track?",
+    kind: "technical",
+  },
+
   // Beginner / getting started
   {
     title: "LLM crash course",
@@ -866,12 +892,6 @@ const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
     title: "Python for AI",
     prompt:
       "I'm new to Python. What's the minimum I need to know to start building AI apps?",
-    kind: "accessible",
-  },
-  {
-    title: "First OpenAI API call",
-    prompt:
-      "Walk me through making my first call to the OpenAI API in Python.",
     kind: "accessible",
   },
   {
@@ -923,6 +943,38 @@ const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
     prompt:
       "How can I use AI to turn meeting notes into clear next steps?",
     kind: "accessible",
+  },
+
+  // Judgment in the age of agents (what's possible, verify, stay current)
+  {
+    title: "What's even possible?",
+    prompt:
+      "I have an app idea. Which AI techniques (RAG, fine-tuning, agents) should I even be considering?",
+    kind: "accessible",
+  },
+  {
+    title: "Vibe coding, carefully",
+    prompt:
+      "What does vibe coding actually mean, and how do I do it without shipping something broken?",
+    kind: "accessible",
+  },
+  {
+    title: "Build without coding",
+    prompt:
+      "I can't really read code. How far can I get building something with an agent like Claude Code or Cowork?",
+    kind: "accessible",
+  },
+  {
+    title: "Catch a stale answer",
+    prompt:
+      "How do I tell when an AI's advice is out of date or missing a newer, better approach?",
+    kind: "accessible",
+  },
+  {
+    title: "Trust agent research",
+    prompt:
+      "Can I trust an agent to find the latest best technique for me, and how do I verify it's right?",
+    kind: "technical",
   },
 ];
 
