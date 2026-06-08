@@ -175,6 +175,7 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
 class UIMessageStreamEncoder:
     def __init__(self) -> None:
         self.message_id = ""
+        self.thread_id = ""
         self.text_block_id = ""
         self.active_reasoning_id = ""
         self.source_matches_by_call_id: dict[str, list[dict[str, Any]]] = {}
@@ -192,10 +193,11 @@ class UIMessageStreamEncoder:
         parts: list[dict[str, Any]] = []
 
         if event.type == "thread_started":
+            self.thread_id = str(event.data.get("thread_id", ""))
             parts.append(
                 {
                     "type": "data-thread",
-                    "data": {"threadId": str(event.data.get("thread_id", ""))},
+                    "data": {"threadId": self.thread_id},
                 }
             )
             return parts
@@ -459,8 +461,18 @@ async def chat(payload: ApiChatRequest) -> StreamingResponse:
                     yield sse_frame(part)
         except HTTPException:
             raise
-        except Exception as exc:
-            for part in encoder.finish_error(str(exc)):
+        except Exception:
+            ref = encoder.message_id or uuid4().hex
+            logger.exception(
+                "chat stream failed ref=%s thread=%s",
+                ref,
+                encoder.thread_id or "?",
+            )
+            message = (
+                "Something went wrong while answering. Please try again. "
+                f"If it keeps happening, reference: {ref}"
+            )
+            for part in encoder.finish_error(message):
                 yield sse_frame(part)
         else:
             if not encoder.closed:

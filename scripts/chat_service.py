@@ -146,10 +146,21 @@ RETRIEVE_TUTOR_CONTEXT_SCHEMA = {
 @tool(args_schema=RETRIEVE_TUTOR_CONTEXT_SCHEMA)
 def retrieve_tutor_context(query: str, runtime: ToolRuntime[AppContext]) -> str:
     """Retrieve relevant course and documentation context for an AI tutor question."""
-    results = get_retriever().search(
-        query=query,
-        allowed_sources=list(runtime.context.allowed_sources),
-    )
+    try:
+        results = get_retriever().search(
+            query=query,
+            allowed_sources=list(runtime.context.allowed_sources),
+        )
+    except Exception as exc:
+        # Degrade instead of killing the turn: retrieval depends on Cohere
+        # (embed + rerank), so on failure return a soft message and let the
+        # agent fall back to run_kb_command or general knowledge.
+        logger.warning("retrieve_tutor_context failed; degrading. error=%s", exc)
+        return (
+            "retrieve_tutor_context is temporarily unavailable. Use run_kb_command "
+            "to browse the knowledge base or answer from general knowledge, and let "
+            "the user know retrieval was unavailable."
+        )
     return format_tool_payload(query, results)
 
 

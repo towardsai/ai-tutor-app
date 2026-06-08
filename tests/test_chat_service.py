@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
@@ -14,6 +14,7 @@ from scripts.chat_service import (
     build_agent,
     effective_tool_names,
     resolve_answer_citations,
+    retrieve_tutor_context,
     sync_thread_with_history,
     stream_chat,
 )
@@ -224,6 +225,22 @@ class ChatServiceTestCase(unittest.TestCase):
             self.assertEqual(_claim_kb_command_budget(session_id, 2), (False, 2))
         finally:
             _clear_kb_command_budget(session_id)
+
+    def test_retrieve_tutor_context_degrades_on_retriever_failure(self) -> None:
+        runtime = types.SimpleNamespace(
+            context=types.SimpleNamespace(allowed_sources=("transformers",))
+        )
+        failing_retriever = MagicMock()
+        failing_retriever.search.side_effect = RuntimeError("cohere 500 boom")
+        with patch(
+            "scripts.chat_service.get_retriever", return_value=failing_retriever
+        ):
+            result = retrieve_tutor_context.func(query="What is RAG?", runtime=runtime)
+        # The turn survives with a soft fallback instead of a raised error...
+        self.assertIn("temporarily unavailable", result)
+        self.assertIn("run_kb_command", result)
+        # ...and the raw provider error is not exposed in the tool output.
+        self.assertNotIn("cohere 500 boom", result)
 
     def test_resolve_answer_citations_uses_current_turn_evidence(self) -> None:
         retrieval = SourceMatch(

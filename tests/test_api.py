@@ -181,10 +181,11 @@ class ApiTestCase(unittest.TestCase):
         self.assertIn("finish-step", part_types)
         self.assertIn("finish", part_types)
 
-    def test_chat_stream_emits_error_part(self) -> None:
+    def test_chat_stream_emits_sanitized_error_part(self) -> None:
         async def broken_stream_chat(_request):
-            raise RuntimeError("backend failed")
-            yield  # pragma: no cover
+            yield ChatEvent("thread_started", {"thread_id": "thread_1"})
+            yield ChatEvent("message_started", {"message_id": "message_1"})
+            raise RuntimeError("backend failed: cohere trace secret-123")
 
         with patch("scripts.api.stream_chat", broken_stream_chat):
             with TestClient(app) as client:
@@ -195,8 +196,14 @@ class ApiTestCase(unittest.TestCase):
         payloads = parse_sse_payloads(body)
         self.assertEqual(payloads[-1], "[DONE]")
         parts = [json.loads(item) for item in payloads[:-1]]
-        self.assertEqual(parts[0]["type"], "error")
-        self.assertEqual(parts[0]["errorText"], "backend failed")
+        error_parts = [part for part in parts if part.get("type") == "error"]
+        self.assertEqual(len(error_parts), 1)
+        error_text = error_parts[0]["errorText"]
+        # The raw upstream error must not leak to the client...
+        self.assertNotIn("backend failed", error_text)
+        self.assertNotIn("secret-123", error_text)
+        # ...but the correlation ref (message_id) is surfaced for support.
+        self.assertIn("message_1", error_text)
 
     def test_chat_stream_restarts_reasoning_after_tool_activity(self) -> None:
         async def fake_stream_chat(_request):
