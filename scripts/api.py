@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
-import logfire
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,6 +33,8 @@ from .setup import (
     DEFAULT_SELECTED_SOURCES_UI,
     SOURCE_UI_TO_KEY,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ApiChatTurn(BaseModel):
@@ -486,9 +488,9 @@ if FRONTEND_OUT_DIR.is_dir():
         name="frontend",
     )
 else:
-    logfire.info(
-        "Frontend static export not found; skipping static mount.",
-        path=str(FRONTEND_OUT_DIR),
+    logger.info(
+        "Frontend static export not found; skipping static mount. path=%s",
+        FRONTEND_OUT_DIR,
     )
 
 

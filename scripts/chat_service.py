@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 from dataclasses import dataclass
@@ -9,7 +10,6 @@ from threading import Lock
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
-import logfire
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     AgentMiddleware,
@@ -54,6 +54,8 @@ from .setup import (
     VECTOR_DB_DIR,
     ensure_local_vector_db,
 )
+
+logger = logging.getLogger(__name__)
 
 SOURCES_HEADER = "📝 Here are the sources I used to answer your question:"
 ACTIVITY_BLOCK_START = "<!-- MODEL_ACTIVITY_START -->"
@@ -121,9 +123,9 @@ def warm_up_retriever() -> None:
     try:
         get_retriever()
     except Exception as exc:  # pragma: no cover - diagnostic logging only
-        logfire.warn(
-            "Retriever warm-up failed; first retrieval call may retry.",
-            error=str(exc),
+        logger.warning(
+            "Retriever warm-up failed; first retrieval call may retry. error=%s",
+            exc,
         )
 
 
@@ -201,7 +203,7 @@ def run_kb_command(
     try:
         ensure_local_vector_db()
     except Exception as exc:  # pragma: no cover - diagnostic only
-        logfire.warn("KB artifact download/check failed.", error=str(exc))
+        logger.warning("KB artifact download/check failed. error=%s", exc)
     try:
         result = execute_kb_command(
             command,
@@ -1046,7 +1048,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     google_search_queries: list[str] = []
     google_search_match_count = 0
 
-    logfire.info("Running query", query=request.query)
+    logger.info("Running query: %s", request.query)
     agent = build_agent(
         request.model_name,
         enabled_tools=tuple(request.enabled_tools),

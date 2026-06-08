@@ -1,7 +1,7 @@
+import logging
 import os
 from pathlib import Path
 
-import logfire
 from dotenv import load_dotenv
 
 from data.scraping_scripts.source_registry import (
@@ -19,15 +19,21 @@ from .utils import init_mongo_db
 
 load_dotenv(override=True)
 configure_langsmith_environment()
-try:
-    logfire.configure()
-except Exception:
-    pass
+
+# Operational/server logging goes to stdout (captured by the Hugging Face Space
+# logs). This is separate from LangSmith, which traces agent runs; see
+# scripts/agent_tracing.py. basicConfig is a no-op if logging is already
+# configured (e.g. by a data-pipeline entry point), so it won't clobber callers.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 if langsmith_tracing_enabled():
-    logfire.info(
-        "LangSmith tracing enabled.",
-        project=os.getenv("LANGSMITH_PROJECT", "default"),
+    logger.info(
+        "LangSmith tracing enabled. project=%s",
+        os.getenv("LANGSMITH_PROJECT", "default"),
     )
 
 VECTOR_DB_DIR = "data/chroma-db-all_sources"
@@ -69,7 +75,7 @@ def ensure_local_vector_db() -> None:
         and os.path.exists(KB_INDEX_PATH)
     )
     if needs_download:
-        logfire.warn(
+        logger.warning(
             "Vector database does not exist locally, downloading from Hugging Face"
         )
         from huggingface_hub import snapshot_download
@@ -82,11 +88,11 @@ def ensure_local_vector_db() -> None:
     ensure_kb_agents_md()
 
 
-mongo_db = (
-    init_mongo_db(uri=MONGODB_URI, db_name="towardsai-buster")
-    if MONGODB_URI
-    else logfire.warn("No mongodb uri found, you will not be able to save data.")
-)
+if MONGODB_URI:
+    mongo_db = init_mongo_db(uri=MONGODB_URI, db_name="towardsai-buster")
+else:
+    logger.warning("No mongodb uri found, you will not be able to save data.")
+    mongo_db = None
 
 __all__ = [
     "AVAILABLE_MODELS",

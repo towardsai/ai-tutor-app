@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import pickle
@@ -16,9 +17,10 @@ from urllib.parse import unquote, urlparse
 
 import chromadb
 import cohere
-import logfire
 import tiktoken
 from tqdm.auto import tqdm
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_CHUNK_SIZE = 800
@@ -1381,5 +1383,5 @@ def parse_tool_payload(content: str) -> list[SearchResult]:
         try:
             parsed.append(SearchResult(**match))
         except TypeError:
-            logfire.warn("Skipping malformed retrieval payload entry")
+            logger.warning("Skipping malformed retrieval payload entry")
     return parsed

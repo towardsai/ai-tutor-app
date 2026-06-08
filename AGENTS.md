@@ -29,7 +29,7 @@ ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-confi
 | Gradio app + renderer | `scripts/main.py`, `scripts/gradio_presenter.py` |
 | Paths, models, startup downloads | `scripts/setup.py` |
 | **Sources — single source of truth** | `data/scraping_scripts/source_registry.py` |
-| Tracing (LangSmith + Logfire) | `scripts/agent_tracing.py`, `scripts/setup.py` |
+| Agent tracing (LangSmith) + server logging (stdlib `logging` → stdout) | `scripts/agent_tracing.py`, `scripts/setup.py` |
 | Data pipeline / workflows (deep guide) | `data/scraping_scripts/README.md` |
 | KB design + wiki maintainer workflow (deep guide) | `data/kb/MAINTAINER.md` |
 
