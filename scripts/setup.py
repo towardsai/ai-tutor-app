@@ -20,14 +20,19 @@ from .utils import init_mongo_db
 load_dotenv(override=True)
 configure_langsmith_environment()
 
-# Operational/server logging goes to stdout (captured by the Hugging Face Space
-# logs). This is separate from LangSmith, which traces agent runs; see
-# scripts/agent_tracing.py. basicConfig is a no-op if logging is already
-# configured (e.g. by a data-pipeline entry point), so it won't clobber callers.
+# Server logs go to stdout (captured by the HF Space logs); LangSmith handles agent traces.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
+
+# Drop benign per-query Gemini noise: schema-key warnings, and the AFC notice
+# (filtered by message so other google-genai warnings still surface).
+logging.getLogger("langchain_google_genai._function_utils").setLevel(logging.ERROR)
+logging.getLogger("google_genai.models").addFilter(
+    lambda record: "AFC is disabled" not in record.getMessage()
+)
+
 logger = logging.getLogger(__name__)
 
 if langsmith_tracing_enabled():
@@ -80,11 +85,18 @@ def ensure_local_vector_db() -> None:
         )
         from huggingface_hub import snapshot_download
 
-        snapshot_download(
-            repo_id="towardsai-tutors/ai-tutor-vector-db",
-            local_dir="data",
-            repo_type="dataset",
-        )
+        # Mute httpx's per-file flood during the cold-start download only.
+        httpx_logger = logging.getLogger("httpx")
+        previous_level = httpx_logger.level
+        httpx_logger.setLevel(logging.WARNING)
+        try:
+            snapshot_download(
+                repo_id="towardsai-tutors/ai-tutor-vector-db",
+                local_dir="data",
+                repo_type="dataset",
+            )
+        finally:
+            httpx_logger.setLevel(previous_level)
     ensure_kb_agents_md()
 
 
