@@ -41,7 +41,9 @@ RG_FLAG_OPTIONS = frozenset(
         "--no-ignore",
     }
 )
-GREP_FLAG_OPTIONS = frozenset({"-i", "--ignore-case", "-w", "--word-regexp", "-F", "-E"})
+GREP_FLAG_OPTIONS = frozenset(
+    {"-i", "--ignore-case", "-w", "--word-regexp", "-F", "-E"}
+)
 LS_FLAG_OPTIONS = frozenset({"-1", "-a", "-l", "-la", "-al"})
 WC_FLAG_OPTIONS = frozenset({"-l", "-w", "-c", "-m"})
 
@@ -117,7 +119,9 @@ def _is_broad_raw_path(path: str) -> bool:
     return normalized in {".", "raw", "raw/courses", "raw/docs"}
 
 
-def _reject_unbounded_raw_search(command: str, paths: list[str], has_max_count: bool) -> None:
+def _reject_unbounded_raw_search(
+    command: str, paths: list[str], has_max_count: bool
+) -> None:
     if has_max_count:
         return
     if any(_is_broad_raw_path(path) for path in paths):
@@ -230,7 +234,9 @@ def _build_find(tokens: list[str], root: Path) -> list[str]:
             argv.extend([token, _safe_pattern_value(tokens[idx + 1], token)])
             idx += 2
             continue
-        raise KbCommandError("`find` supports only path, -maxdepth, -mindepth, -type, -name, and -iname")
+        raise KbCommandError(
+            "`find` supports only path, -maxdepth, -mindepth, -type, -name, and -iname"
+        )
     return argv
 
 
@@ -291,7 +297,9 @@ def _build_wc(tokens: list[str], root: Path) -> list[str]:
     return [*argv, *paths]
 
 
-def build_kb_command_argv(command: str, *, root: Path | None = None) -> tuple[list[str], Path]:
+def build_kb_command_argv(
+    command: str, *, root: Path | None = None
+) -> tuple[list[str], Path]:
     resolved_root = _resolve_root(root)
     try:
         tokens = shlex.split(command)
@@ -304,7 +312,9 @@ def build_kb_command_argv(command: str, *, root: Path | None = None) -> tuple[li
     executable = tokens[0]
     if executable not in SUPPORTED_COMMANDS:
         supported = ", ".join(sorted(SUPPORTED_COMMANDS))
-        raise KbCommandError(f"Unsupported KB command `{executable}`. Supported: {supported}")
+        raise KbCommandError(
+            f"Unsupported KB command `{executable}`. Supported: {supported}"
+        )
 
     builders = {
         "rg": _build_rg,
@@ -361,7 +371,9 @@ def run_kb_command(
         exit_code = 124
         stdout = exc.stdout if isinstance(exc.stdout, str) else ""
         stderr = exc.stderr if isinstance(exc.stderr, str) else ""
-        stderr = (stderr + "\n" if stderr else "") + f"Command timed out after {timeout}s."
+        stderr = (
+            stderr + "\n" if stderr else ""
+        ) + f"Command timed out after {timeout}s."
 
     stdout, stdout_truncated = _truncate(stdout, output_limit)
     stderr, stderr_truncated = _truncate(stderr, min(output_limit, 8_000))

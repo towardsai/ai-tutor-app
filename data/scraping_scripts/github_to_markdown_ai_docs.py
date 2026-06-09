@@ -22,7 +22,7 @@ Example:
 
 This will download and process the documentation files for both TRL and PEFT libraries.
 
-Note: 
+Note:
 - Ensure you have set the GITHUB_TOKEN variable with your GitHub Personal Access Token.
 - The script creates a 'data' directory in the current working directory to store the downloaded files.
 - Each source's files are stored in a subdirectory named '<repo>_md_files'.
@@ -363,9 +363,7 @@ def process_source(source: str):
             os.makedirs(target_dir, exist_ok=True)
             fetch_files(api_url, target_dir, source_extensions, local_dir)
     else:
-        api_url = (
-            f"https://api.github.com/repos/{config['owner']}/{config['repo']}/contents/{config['path']}"
-        )
+        api_url = f"https://api.github.com/repos/{config['owner']}/{config['repo']}/contents/{config['path']}"
         fetch_files(api_url, local_dir, source_extensions, local_dir)
 
     save_source_extension_manifest(local_dir, source_extensions)

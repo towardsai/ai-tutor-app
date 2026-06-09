@@ -6,7 +6,7 @@ from data.scraping_scripts.retire_source_workflow import (
 
 
 def test_remove_source_from_registry_text_removes_active_source_entries():
-    registry = '''SOURCE_CONFIGS = {
+    registry = """SOURCE_CONFIGS = {
     "openai_cookbooks": {
         "output_file": "data/openai_cookbooks_data.jsonl",
         "nested": {"keep": "balanced"},
@@ -32,7 +32,7 @@ UI_SOURCE_KEYS = (
     "openai_cookbooks",
     "langchain",
 )
-'''
+"""
 
     updated, changed = remove_source_from_registry_text(
         registry,

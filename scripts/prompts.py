@@ -205,7 +205,9 @@ def build_system_prompt(model_name: str, enabled_tools: tuple[str, ...]) -> str:
         KB_USAGE_SECTION,
     ]
     if usage_sections:
-        parts.append("## When to use web search / URL reading\n\n" + "\n\n".join(usage_sections))
+        parts.append(
+            "## When to use web search / URL reading\n\n" + "\n\n".join(usage_sections)
+        )
         parts.append(
             "Prefer `retrieve_tutor_context` first when the question is clearly about\n"
             "course material. Combine tools when it helps (e.g. retrieve corpus\n"

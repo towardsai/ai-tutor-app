@@ -95,7 +95,9 @@ app.add_middleware(
 
 
 def sse_frame(payload: dict[str, Any] | str) -> str:
-    data = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+    data = (
+        payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+    )
     return f"data: {data}\n\n"
 
 
@@ -138,11 +140,14 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
 
     allowed_source_keys = set(AVAILABLE_SOURCES)
     requested_source_keys = payload.sourceKeys or list(DEFAULT_SELECTED_SOURCE_KEYS)
-    source_keys = tuple(
-        dict.fromkeys(
-            key for key in requested_source_keys if key in allowed_source_keys
+    source_keys = (
+        tuple(
+            dict.fromkeys(
+                key for key in requested_source_keys if key in allowed_source_keys
+            )
         )
-    ) or DEFAULT_SELECTED_SOURCE_KEYS
+        or DEFAULT_SELECTED_SOURCE_KEYS
+    )
     model_name = (payload.model or DEFAULT_MODEL_NAME).strip()
     if payload.enabledTools is None:
         enabled_tools = tuple(
@@ -226,7 +231,9 @@ class UIMessageStreamEncoder:
         if event.type == "reasoning_delta":
             if not self.active_reasoning_id:
                 self.active_reasoning_id = f"reasoning_{uuid4().hex[:8]}"
-                parts.append({"type": "reasoning-start", "id": self.active_reasoning_id})
+                parts.append(
+                    {"type": "reasoning-start", "id": self.active_reasoning_id}
+                )
             parts.append(
                 {
                     "type": "reasoning-delta",
@@ -281,7 +288,9 @@ class UIMessageStreamEncoder:
                 "group": str(event.data.get("group", "")),
             }
             if call_id:
-                self.source_matches_by_call_id.setdefault(call_id, []).append(source_data)
+                self.source_matches_by_call_id.setdefault(call_id, []).append(
+                    source_data
+                )
             parts.append(
                 {
                     "type": "source-url",
@@ -328,7 +337,7 @@ class UIMessageStreamEncoder:
                         "id": self.text_block_id,
                         "delta": answer,
                     }
-            )
+                )
             if self.text_block_id:
                 parts.append({"type": "text-end", "id": self.text_block_id})
             parts.append({"type": "finish-step"})

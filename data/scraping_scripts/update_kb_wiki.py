@@ -64,7 +64,9 @@ def generated_block(content: str) -> str:
     return f"{AUTO_START}\n{content.rstrip()}\n{AUTO_END}"
 
 
-def write_generated_section(path: Path, header: str, generated: str, *, overwrite: bool) -> None:
+def write_generated_section(
+    path: Path, header: str, generated: str, *, overwrite: bool
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     block = generated_block(generated)
     if not path.exists() or overwrite:
@@ -86,7 +88,9 @@ def top_sources(manifest: list[dict[str, Any]]) -> list[tuple[str, int]]:
     return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
 
 
-def seed_index(kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite: bool) -> None:
+def seed_index(
+    kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite: bool
+) -> None:
     group_by_source = {
         str(row.get("source") or "unknown"): str(row.get("source_group") or "docs")
         for row in manifest
@@ -94,7 +98,9 @@ def seed_index(kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite: bool)
     source_lines = []
     for source, count in top_sources(manifest):
         folder = "courses" if group_by_source.get(source) == "courses" else "frameworks"
-        source_lines.append(f"- {source}: `wiki/{folder}/{source}.md` - {count} corpus pages")
+        source_lines.append(
+            f"- {source}: `wiki/{folder}/{source}.md` - {count} corpus pages"
+        )
     topic_lines = [f"- {topic}: `wiki/topics/{topic}.md`" for topic in TOPIC_KEYWORDS]
     header = """# AI Tutor KB Index
 
@@ -136,7 +142,9 @@ def seed_log(kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite: bool) -
     path.write_text(f"{existing}\n\n{entry.rstrip()}\n", encoding="utf-8")
 
 
-def seed_source_pages(kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite: bool) -> None:
+def seed_source_pages(
+    kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite: bool
+) -> None:
     by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in manifest:
         by_source[str(row.get("source") or "unknown")].append(row)
@@ -145,8 +153,7 @@ def seed_source_pages(kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite
         rows = sorted(rows, key=lambda item: str(item.get("title") or ""))
         sample = rows[:20]
         page_links = [
-            f"- {row.get('title')}: `{shell_path(row, kb_dir)}`"
-            for row in sample
+            f"- {row.get('title')}: `{shell_path(row, kb_dir)}`" for row in sample
         ]
         group = str(rows[0].get("source_group") or "docs")
         folder = "courses" if group == "courses" else "frameworks"
@@ -190,13 +197,12 @@ def matching_topic_rows(
     return [row for _score, row in scored[:limit]]
 
 
-def seed_topic_pages(kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite: bool) -> None:
+def seed_topic_pages(
+    kb_dir: Path, manifest: list[dict[str, Any]], *, overwrite: bool
+) -> None:
     for topic, keywords in TOPIC_KEYWORDS.items():
         rows = matching_topic_rows(manifest, keywords)
-        links = [
-            f"- {row.get('title')}: `{shell_path(row, kb_dir)}`"
-            for row in rows
-        ]
+        links = [f"- {row.get('title')}: `{shell_path(row, kb_dir)}`" for row in rows]
         header = f"""# {topic.replace("-", " ").title()}
 
 Use this page as a starting map for questions involving: {", ".join(keywords)}.

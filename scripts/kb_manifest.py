@@ -62,7 +62,12 @@ def load_manifest_entries(kb_dir: str = KB_DIR) -> tuple[KbManifestEntry, ...]:
 
 def manifest_indexes(
     kb_dir: str = KB_DIR,
-) -> tuple[dict[str, KbManifestEntry], dict[str, KbManifestEntry], dict[str, KbManifestEntry], dict[str, KbManifestEntry]]:
+) -> tuple[
+    dict[str, KbManifestEntry],
+    dict[str, KbManifestEntry],
+    dict[str, KbManifestEntry],
+    dict[str, KbManifestEntry],
+]:
     by_doc_id: dict[str, KbManifestEntry] = {}
     by_url: dict[str, KbManifestEntry] = {}
     by_path: dict[str, KbManifestEntry] = {}
@@ -81,7 +86,9 @@ def manifest_indexes(
     return by_doc_id, by_url, by_path, by_title
 
 
-def source_match_from_manifest(entry: KbManifestEntry, *, score: float = 1.0) -> SourceMatch:
+def source_match_from_manifest(
+    entry: KbManifestEntry, *, score: float = 1.0
+) -> SourceMatch:
     return SourceMatch(
         doc_id=entry.doc_id,
         title=entry.title,
@@ -89,7 +96,9 @@ def source_match_from_manifest(entry: KbManifestEntry, *, score: float = 1.0) ->
         source_key=entry.source,
         source_label=SOURCE_KEY_TO_LABEL.get(entry.source, entry.source),
         score=score,
-        group="courses" if entry.source in COURSE_SOURCE_KEYS else entry.source_group or "docs",
+        group="courses"
+        if entry.source in COURSE_SOURCE_KEYS
+        else entry.source_group or "docs",
     )
 
 
@@ -167,7 +176,9 @@ def citation_dedupe_key(match: SourceMatch) -> str:
     return normalize_url(match.url) or match.doc_id or match.title
 
 
-def source_match_payload(match: SourceMatch, *, message_id: str, call_id: str = "") -> dict[str, Any]:
+def source_match_payload(
+    match: SourceMatch, *, message_id: str, call_id: str = ""
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "message_id": message_id,
         "doc_id": match.doc_id,

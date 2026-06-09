@@ -209,8 +209,12 @@ class ChatServiceTestCase(unittest.TestCase):
         )
         # Enabling Gemini web tools adds exactly one toggle-specific middleware
         # (GeminiServerSideToolsMiddleware) on top of the shared base middlewares.
-        web_middleware = [type(m).__name__ for m in created_agents[0].kwargs["middleware"]]
-        plain_middleware = [type(m).__name__ for m in created_agents[1].kwargs["middleware"]]
+        web_middleware = [
+            type(m).__name__ for m in created_agents[0].kwargs["middleware"]
+        ]
+        plain_middleware = [
+            type(m).__name__ for m in created_agents[1].kwargs["middleware"]
+        ]
         self.assertIn("GeminiServerSideToolsMiddleware", web_middleware)
         self.assertNotIn("GeminiServerSideToolsMiddleware", plain_middleware)
         self.assertEqual(len(web_middleware), len(plain_middleware) + 1)
@@ -382,11 +386,7 @@ class ChatServiceTestCase(unittest.TestCase):
             if event.type == "tool_call_completed"
             and event.data.get("tool_name") == "run_kb_command"
         ]
-        source_matches = [
-            event
-            for event in events
-            if event.type == "source_match"
-        ]
+        source_matches = [event for event in events if event.type == "source_match"]
 
         self.assertEqual(started[0].data["args_text"], "rg LoraConfig raw")
         self.assertIn("rg LoraConfig raw", completed[0].data["output_text"])

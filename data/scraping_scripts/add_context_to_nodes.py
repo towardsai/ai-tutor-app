@@ -19,19 +19,19 @@ from pydantic import BaseModel, Field
 from tenacity import retry, retry_if_exception, stop_after_attempt
 from tqdm.asyncio import tqdm
 
-from scripts.chroma_rag import ChunkRecord, build_chunk_records, format_chunk_for_retrieval
+from scripts.chroma_rag import (
+    ChunkRecord,
+    build_chunk_records,
+    format_chunk_for_retrieval,
+)
 
 load_dotenv(".env")
 
 CONTEXT_MODEL = os.getenv("GEMINI_CONTEXT_MODEL", "gemini-3.1-flash-lite")
 CONTEXT_MAX_OUTPUT_TOKENS = 1000
 CONTEXT_TPM_LIMIT = int(os.getenv("GEMINI_CONTEXT_TPM_LIMIT", "30000000"))
-CONTEXT_TPM_SAFETY_MARGIN = float(
-    os.getenv("GEMINI_CONTEXT_TPM_SAFETY_MARGIN", "0.8")
-)
-CONTEXT_TPM_WINDOW_SECONDS = float(
-    os.getenv("GEMINI_CONTEXT_TPM_WINDOW_SECONDS", "60")
-)
+CONTEXT_TPM_SAFETY_MARGIN = float(os.getenv("GEMINI_CONTEXT_TPM_SAFETY_MARGIN", "0.8"))
+CONTEXT_TPM_WINDOW_SECONDS = float(os.getenv("GEMINI_CONTEXT_TPM_WINDOW_SECONDS", "60"))
 CONTEXT_RETRY_ATTEMPTS = int(os.getenv("GEMINI_CONTEXT_RETRY_ATTEMPTS", "8"))
 DEFAULT_SEMAPHORE_LIMIT = int(os.getenv("GEMINI_CONTEXT_CONCURRENCY", "50"))
 MAX_DOCUMENT_TOKENS = 120_000
@@ -192,7 +192,7 @@ def wait_for_genai_retry(retry_state) -> float:
     if retry_delay is not None:
         return retry_delay + random.uniform(1.0, 4.0)
 
-    exponential_delay = min(60, max(4, 2 ** retry_state.attempt_number))
+    exponential_delay = min(60, max(4, 2**retry_state.attempt_number))
     return exponential_delay + random.uniform(0.5, 2.0)
 
 

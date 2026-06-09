@@ -37,7 +37,7 @@ def test_update_kb_wiki_seeds_navigation_pages(tmp_path: Path) -> None:
                 "tokens": 300,
                 "retrieve_doc": True,
                 "content": "# Lesson 1\n\nAgent lesson.",
-            }
+            },
         ],
     )
     build_kb_artifacts(input_file, kb_dir)
@@ -61,7 +61,9 @@ def test_update_kb_wiki_seeds_navigation_pages(tmp_path: Path) -> None:
     assert "lookup_tutor_symbol" not in topic
 
 
-def test_update_kb_wiki_preserves_authored_topic_content_and_appends_log(tmp_path: Path) -> None:
+def test_update_kb_wiki_preserves_authored_topic_content_and_appends_log(
+    tmp_path: Path,
+) -> None:
     input_file = tmp_path / "all_sources_data.jsonl"
     kb_dir = tmp_path / "kb"
     write_jsonl(

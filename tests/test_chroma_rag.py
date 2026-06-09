@@ -86,7 +86,9 @@ After the example.
         ]
         index = BM25Index.build(records)
 
-        hits = index.search("AutoModel.from_pretrained", allowed_sources=["transformers"])
+        hits = index.search(
+            "AutoModel.from_pretrained", allowed_sources=["transformers"]
+        )
 
         self.assertEqual([record.chunk_id for record, _score in hits], ["a"])
         self.assertEqual(index.search("AutoModel", allowed_sources=["langchain"]), [])
@@ -159,7 +161,9 @@ After the example.
 
         self.assertGreaterEqual(len(records), 1)
         setup_record = next(
-            record for record in records if record.metadata["heading_path"] == "Guide > Setup"
+            record
+            for record in records
+            if record.metadata["heading_path"] == "Guide > Setup"
         )
         self.assertIn("raw_text", setup_record.metadata)
         self.assertIn("Title: Guide", setup_record.text)

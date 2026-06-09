@@ -172,7 +172,9 @@ def test_live_gradio_curl_can_use_retrieval_and_shell() -> None:
                             "Use both retrieve_tutor_context and run_kb_command to answer: how does PEFT configure LoRA with LoraConfig?",
                             [],
                             ["PEFT Docs", "Transformers Docs"],
-                            os.getenv("LIVE_GRADIO_E2E_MODEL", "google-genai:gemini-3.5-flash"),
+                            os.getenv(
+                                "LIVE_GRADIO_E2E_MODEL", "google-genai:gemini-3.5-flash"
+                            ),
                             "",
                             False,
                             False,

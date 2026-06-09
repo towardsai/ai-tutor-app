@@ -85,7 +85,9 @@ def ensure_required_files_exist(data_repo_id: str) -> None:
         if local_path.exists():
             continue
 
-        print(f"{remote_filename} not found locally. Downloading from {data_repo_id}...")
+        print(
+            f"{remote_filename} not found locally. Downloading from {data_repo_id}..."
+        )
         hf_hub_download(
             token=os.getenv("HF_TOKEN"),
             repo_id=data_repo_id,
@@ -95,7 +97,9 @@ def ensure_required_files_exist(data_repo_id: str) -> None:
         )
 
 
-def filter_all_sources_jsonl(sources_to_retire: set[str], dry_run: bool) -> Counter[str]:
+def filter_all_sources_jsonl(
+    sources_to_retire: set[str], dry_run: bool
+) -> Counter[str]:
     if not ALL_SOURCES_JSONL.exists():
         raise SystemExit(f"Missing required file: {ALL_SOURCES_JSONL}")
 
@@ -272,7 +276,9 @@ def update_source_registry(sources: list[str], dry_run: bool) -> None:
 
 def rebuild_vector_store() -> None:
     if not os.getenv("COHERE_API_KEY"):
-        raise SystemExit("COHERE_API_KEY is required to rebuild the Chroma vector store.")
+        raise SystemExit(
+            "COHERE_API_KEY is required to rebuild the Chroma vector store."
+        )
 
     print("Rebuilding Chroma vector store for all_sources...")
     result = run_module("data.scraping_scripts.create_vector_stores", "all_sources")
@@ -318,7 +324,9 @@ def delete_remote_source_files(
 
 def upload_vector_store(vector_repo_id: str) -> None:
     print(f"Uploading rebuilt vector store to {vector_repo_id}...")
-    result = run_module("data.scraping_scripts.upload_dbs_to_hf", "--repo", vector_repo_id)
+    result = run_module(
+        "data.scraping_scripts.upload_dbs_to_hf", "--repo", vector_repo_id
+    )
     if result.returncode != 0:
         raise SystemExit("Error uploading vector store. Check output above.")
 
@@ -406,9 +414,8 @@ def main() -> None:
     missing_required_files = [
         path for path in (ALL_SOURCES_JSONL, CONTEXTUAL_NODES) if not path.exists()
     ]
-    needs_data_repo = (
-        (not args.skip_download and bool(missing_required_files))
-        or (not args.dry_run and not args.skip_upload and not args.skip_data_upload)
+    needs_data_repo = (not args.skip_download and bool(missing_required_files)) or (
+        not args.dry_run and not args.skip_upload and not args.skip_data_upload
     )
     needs_vector_repo = (
         not args.dry_run and not args.skip_upload and not args.skip_vector_rebuild

@@ -217,9 +217,7 @@ def unique_path(candidate: Path, used_paths: set[Path], content_hash: str) -> Pa
     candidate = candidate.with_name(f"{stem}-{suffix}{candidate.suffix}")
     counter = 2
     while candidate in used_paths:
-        candidate = candidate.with_name(
-            f"{stem}-{suffix}-{counter}{candidate.suffix}"
-        )
+        candidate = candidate.with_name(f"{stem}-{suffix}-{counter}{candidate.suffix}")
         counter += 1
     used_paths.add(candidate)
     return candidate
@@ -373,8 +371,11 @@ def write_raw_markdown(
     for record in records:
         original = find_original_markdown(record, original_indexes)
         if original:
-            output_path = raw_dir / "docs" / record.source / safe_relative_path(
-                original.source_path
+            output_path = (
+                raw_dir
+                / "docs"
+                / record.source
+                / safe_relative_path(original.source_path)
             )
             output_path = unique_path(output_path, used_paths, record.content_hash)
             source_path = original.source_path
@@ -386,7 +387,9 @@ def write_raw_markdown(
             original_path = ""
             content = record.content
             if record.source_group == "docs":
-                fallback_counts[record.source] = fallback_counts.get(record.source, 0) + 1
+                fallback_counts[record.source] = (
+                    fallback_counts.get(record.source, 0) + 1
+                )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         markdown = markdown_with_frontmatter(
@@ -417,7 +420,9 @@ def write_raw_markdown(
 def iter_markdown_headings(path: Path) -> Iterable[dict[str, Any]]:
     in_fence = False
     fence_char = ""
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), 1
+    ):
         fence_match = FENCE_RE.match(line)
         if fence_match:
             current = fence_match.group(1)[0]
@@ -464,7 +469,9 @@ def extract_symbols(text: str) -> set[str]:
     }
 
 
-def write_generated_indexes(manifest: list[dict[str, Any]], generated_dir: Path) -> None:
+def write_generated_indexes(
+    manifest: list[dict[str, Any]], generated_dir: Path
+) -> None:
     if generated_dir.exists():
         shutil.rmtree(generated_dir)
     generated_dir.mkdir(parents=True, exist_ok=True)
@@ -511,7 +518,9 @@ def write_generated_indexes(manifest: list[dict[str, Any]], generated_dir: Path)
         for row in heading_rows:
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
 
-    with (generated_dir / "symbols.tsv").open("w", encoding="utf-8", newline="") as handle:
+    with (generated_dir / "symbols.tsv").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=["symbol", "source", "title", "path", "heading", "doc_id"],
@@ -523,7 +532,9 @@ def write_generated_indexes(manifest: list[dict[str, Any]], generated_dir: Path)
 
 def build_kb_artifacts(input_file: Path, output_dir: Path) -> dict[str, int]:
     rows = load_jsonl(input_file)
-    records = [normalize_record(row) for row in rows if str(row.get("content") or "").strip()]
+    records = [
+        normalize_record(row) for row in rows if str(row.get("content") or "").strip()
+    ]
     manifest = write_raw_markdown(records, input_file=input_file, output_dir=output_dir)
     write_generated_indexes(manifest, output_dir / GENERATED_DIR_NAME)
     return {"documents": len(records), "manifest_rows": len(manifest)}

@@ -69,12 +69,16 @@ def main() -> None:
     client = genai.Client(api_key=api_key)
 
     print(f"Model: {MODEL}")
-    print(f"Stable prefix (system + LONG_CONTEXT) repeats. Only the final user_text differs.")
+    print(
+        "Stable prefix (system + LONG_CONTEXT) repeats. Only the final user_text differs."
+    )
     print()
 
     for i in range(3):
-        result = call(client, user_text=f"Question {i+1}: what is RAG in one sentence?")
-        print(f"Call {i+1}: {result}")
+        result = call(
+            client, user_text=f"Question {i + 1}: what is RAG in one sentence?"
+        )
+        print(f"Call {i + 1}: {result}")
         time.sleep(0.5)
 
 

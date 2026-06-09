@@ -124,7 +124,9 @@ def summarize_tool_result(event: ChatEvent) -> str:
         if not matches:
             try:
                 payload = json.loads(str(event.data.get("output_text", "")))
-                matches = payload.get("matches", []) if isinstance(payload, dict) else []
+                matches = (
+                    payload.get("matches", []) if isinstance(payload, dict) else []
+                )
                 match_count = len(matches)
             except json.JSONDecodeError:
                 matches = []
@@ -221,11 +223,7 @@ def render_activity_block(events: list[ActivityEvent]) -> str:
         return ""
 
     rendered_sections = "\n\n".join(section for section in sections if section)
-    return (
-        f"{ACTIVITY_BLOCK_START}\n\n"
-        f"{rendered_sections}\n\n"
-        f"{ACTIVITY_BLOCK_END}"
-    )
+    return f"{ACTIVITY_BLOCK_START}\n\n{rendered_sections}\n\n{ACTIVITY_BLOCK_END}"
 
 
 def format_sources(matches_by_doc_id: dict[str, dict[str, Any]]) -> str:
@@ -273,7 +271,9 @@ class GradioPresenterState:
     activity_events: list[ActivityEvent] = field(default_factory=list)
     answer_chunks: list[str] = field(default_factory=list)
     completed_answer: str = ""
-    tool_matches_by_call_id: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    tool_matches_by_call_id: dict[str, list[dict[str, Any]]] = field(
+        default_factory=dict
+    )
 
     def apply(self, event: ChatEvent) -> None:
         if event.type == "thread_started":

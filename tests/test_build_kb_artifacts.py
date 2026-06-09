@@ -89,7 +89,10 @@ Use `LoraConfig` with `get_peft_model`.
     assert manifest_rows[0]["original_path"] == docs_page.as_posix()
 
     markdown_path = Path(manifest_rows[0]["path"])
-    assert markdown_path == output_dir / "raw" / "docs" / "temp_docs" / "package_reference" / "lora.mdx"
+    assert (
+        markdown_path
+        == output_dir / "raw" / "docs" / "temp_docs" / "package_reference" / "lora.mdx"
+    )
     markdown = markdown_path.read_text(encoding="utf-8")
     assert 'doc_id: "temp_docs:docs-package-reference-lora"' in markdown
     assert 'source_path: "package_reference/lora.mdx"' in markdown

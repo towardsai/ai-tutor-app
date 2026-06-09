@@ -56,8 +56,7 @@ class GradioPresenterTestCase(unittest.TestCase):
             {
                 "tool_name": "retrieve_tutor_context",
                 "output_text": (
-                    '{"matches": [{"title": "LoRA", '
-                    '"source_label": "PEFT Docs"}]}'
+                    '{"matches": [{"title": "LoRA", "source_label": "PEFT Docs"}]}'
                 ),
             },
         )

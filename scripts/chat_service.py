@@ -64,7 +64,9 @@ THOUGHTS_BLOCK_START = "<!-- GEMINI_THOUGHTS_START -->"
 THOUGHTS_BLOCK_END = "<!-- GEMINI_THOUGHTS_END -->"
 ANSWER_HEADER = "**Answer**"
 LEGACY_THOUGHTS_DETAILS_OPEN = "<details><summary>Gemini thoughts</summary>"
-LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED = "<details open><summary>Gemini thoughts</summary>"
+LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED = (
+    "<details open><summary>Gemini thoughts</summary>"
+)
 CHECKPOINTER = InMemorySaver()
 _RETRIEVER_INIT_LOCK = Lock()
 KB_TOOL_NAMES = ("run_kb_command",)
@@ -403,7 +405,9 @@ def collect_retrieval_source_matches(payload: str) -> list[SourceMatch]:
     return matches
 
 
-def _record_evidence(target: dict[str, SourceMatch], matches: list[SourceMatch]) -> None:
+def _record_evidence(
+    target: dict[str, SourceMatch], matches: list[SourceMatch]
+) -> None:
     for match in matches:
         key = source_match_key(match)
         existing = target.get(key)
@@ -704,9 +708,7 @@ class SourcePreferenceMiddleware(AgentMiddleware):
             label = SOURCE_KEY_TO_LABEL.get(key, key)
             group = "courses" if key in COURSE_SOURCE_KEYS else "docs"
             wiki_dir = "courses" if key in COURSE_SOURCE_KEYS else "frameworks"
-            lines.append(
-                f"- {label}: `raw/{group}/{key}/`, `wiki/{wiki_dir}/{key}.md`"
-            )
+            lines.append(f"- {label}: `raw/{group}/{key}/`, `wiki/{wiki_dir}/{key}.md`")
         lines.append("")
         lines.append(
             "Only branch out to other KB sources if these don't have the answer."
@@ -1098,9 +1100,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
 
                 step = str(metadata.get("langgraph_step", ""))
                 if include_reasoning:
-                    thought_text = "\n\n".join(
-                        extract_thought_summaries(token.content)
-                    )
+                    thought_text = "\n\n".join(extract_thought_summaries(token.content))
                     if thought_text:
                         yield ChatEvent(
                             "reasoning_delta",
@@ -1157,9 +1157,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                             "call_id": google_search_call_id,
                             "tool_name": GOOGLE_SEARCH_TOOL_NAME,
                             "args": {
-                                "query": "; ".join(new_queries)
-                                if new_queries
-                                else ""
+                                "query": "; ".join(new_queries) if new_queries else ""
                             },
                             "args_text": "; ".join(new_queries),
                         },
@@ -1245,9 +1243,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                             "call_id": google_search_call_id,
                             "tool_name": GOOGLE_SEARCH_TOOL_NAME,
                             "args": {
-                                "query": "; ".join(new_queries)
-                                if new_queries
-                                else ""
+                                "query": "; ".join(new_queries) if new_queries else ""
                             },
                             "args_text": "; ".join(new_queries),
                         },
@@ -1311,9 +1307,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
             output_text = "Google search ran but returned no grounding results."
         else:
             plural = "" if google_search_match_count == 1 else "s"
-            output_text = (
-                f"Google search returned {google_search_match_count} web result{plural}."
-            )
+            output_text = f"Google search returned {google_search_match_count} web result{plural}."
         yield ChatEvent(
             "tool_call_completed",
             {

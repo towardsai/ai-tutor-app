@@ -515,8 +515,7 @@ def heading_aware_markdown_chunks(
         for split_unit in split_units:
             size = unit_size(split_unit.text)
             heading_changed = (
-                current_heading_path
-                and split_unit.heading_path != current_heading_path
+                current_heading_path and split_unit.heading_path != current_heading_path
             )
             would_exceed = current_parts and current_size + size > budget_size
             if heading_changed or would_exceed:
@@ -591,7 +590,7 @@ def build_chunk_records(
             }
             chunk_records.append(
                 ChunkRecord(
-                    chunk_id=f'{document["doc_id"]}:{index}',
+                    chunk_id=f"{document['doc_id']}:{index}",
                     doc_id=document["doc_id"],
                     text=chunk.text,
                     metadata=metadata,
@@ -836,7 +835,7 @@ def _wait_for_cohere_retry(
     if retry_after is not None:
         delay = retry_after
     else:
-        delay = min(window_seconds, max(15.0, 2.0 ** attempt))
+        delay = min(window_seconds, max(15.0, 2.0**attempt))
 
     time.sleep(delay + random.uniform(0.5, 2.0))
 
@@ -948,7 +947,10 @@ def embed_texts(
                     )
                     break
                 except Exception as exc:
-                    if not _is_cohere_rate_limit_error(exc) or attempt == retry_attempts:
+                    if (
+                        not _is_cohere_rate_limit_error(exc)
+                        or attempt == retry_attempts
+                    ):
                         raise
                     _wait_for_cohere_retry(exc, attempt, window_seconds)
 
@@ -1096,7 +1098,9 @@ def reciprocal_rank_fusion(
             current = representatives.get(key)
             if current is None:
                 representatives[key] = result
-            elif result.retrieval_method == "bm25" and current.retrieval_method != "bm25":
+            elif (
+                result.retrieval_method == "bm25" and current.retrieval_method != "bm25"
+            ):
                 representatives[key] = result
             elif (
                 result.retrieval_method == current.retrieval_method
@@ -1357,7 +1361,9 @@ def ensure_parent_dir(path: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
 
-def save_document_dict(document_dict: dict[str, dict[str, Any]], output_file: str) -> None:
+def save_document_dict(
+    document_dict: dict[str, dict[str, Any]], output_file: str
+) -> None:
     ensure_parent_dir(output_file)
     with open(output_file, "wb") as handle:
         pickle.dump(document_dict, handle)

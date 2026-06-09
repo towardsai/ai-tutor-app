@@ -77,7 +77,9 @@ SOURCE_CONFIGS = vector_store_source_configs()
 
 def load_or_create_chunk_records(source: str) -> list[Any]:
     config = SOURCE_CONFIGS[source]
-    if source == "all_sources" and os.path.exists("data/all_sources_contextual_nodes.pkl"):
+    if source == "all_sources" and os.path.exists(
+        "data/all_sources_contextual_nodes.pkl"
+    ):
         with open("data/all_sources_contextual_nodes.pkl", "rb") as handle:
             records = pickle.load(handle)
         active_records = []

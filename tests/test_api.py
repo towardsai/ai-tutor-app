@@ -56,7 +56,10 @@ class ApiTestCase(unittest.TestCase):
             any(source["selectedByDefault"] for source in retrieval["sources"])
         )
         self.assertTrue(
-            all(source["group"] in {"courses", "docs"} for source in retrieval["sources"])
+            all(
+                source["group"] in {"courses", "docs"}
+                for source in retrieval["sources"]
+            )
         )
         # Gemini is the default model, so web search + url reading are present.
         tool_keys = {tool["key"] for tool in tools}
@@ -124,8 +127,13 @@ class ApiTestCase(unittest.TestCase):
                     "output_text": "payload",
                 },
             )
-            yield ChatEvent("text_delta", {"message_id": "message_1", "text": "RAG combines "})
-            yield ChatEvent("text_delta", {"message_id": "message_1", "text": "retrieval with generation."})
+            yield ChatEvent(
+                "text_delta", {"message_id": "message_1", "text": "RAG combines "}
+            )
+            yield ChatEvent(
+                "text_delta",
+                {"message_id": "message_1", "text": "retrieval with generation."},
+            )
             yield ChatEvent(
                 "message_completed",
                 {
@@ -189,7 +197,9 @@ class ApiTestCase(unittest.TestCase):
 
         with patch("scripts.api.stream_chat", broken_stream_chat):
             with TestClient(app) as client:
-                with client.stream("POST", "/api/chat", json={"query": "Hello"}) as response:
+                with client.stream(
+                    "POST", "/api/chat", json={"query": "Hello"}
+                ) as response:
                     body = "".join(response.iter_text())
 
         self.assertEqual(response.status_code, 200)
@@ -208,7 +218,9 @@ class ApiTestCase(unittest.TestCase):
     def test_chat_stream_restarts_reasoning_after_tool_activity(self) -> None:
         async def fake_stream_chat(_request):
             yield ChatEvent("message_started", {"message_id": "message_1"})
-            yield ChatEvent("reasoning_delta", {"message_id": "message_1", "text": "First thought"})
+            yield ChatEvent(
+                "reasoning_delta", {"message_id": "message_1", "text": "First thought"}
+            )
             yield ChatEvent(
                 "tool_call_started",
                 {
@@ -227,8 +239,12 @@ class ApiTestCase(unittest.TestCase):
                     "output_text": "payload",
                 },
             )
-            yield ChatEvent("reasoning_delta", {"message_id": "message_1", "text": "Second thought"})
-            yield ChatEvent("text_delta", {"message_id": "message_1", "text": "Final answer"})
+            yield ChatEvent(
+                "reasoning_delta", {"message_id": "message_1", "text": "Second thought"}
+            )
+            yield ChatEvent(
+                "text_delta", {"message_id": "message_1", "text": "Final answer"}
+            )
             yield ChatEvent(
                 "message_completed",
                 {
@@ -239,7 +255,9 @@ class ApiTestCase(unittest.TestCase):
 
         with patch("scripts.api.stream_chat", fake_stream_chat):
             with TestClient(app) as client:
-                with client.stream("POST", "/api/chat", json={"query": "Hello"}) as response:
+                with client.stream(
+                    "POST", "/api/chat", json={"query": "Hello"}
+                ) as response:
                     body = "".join(response.iter_text())
 
         self.assertEqual(response.status_code, 200)
@@ -249,7 +267,9 @@ class ApiTestCase(unittest.TestCase):
 
         self.assertEqual(part_types.count("reasoning-start"), 2)
         self.assertEqual(part_types.count("reasoning-end"), 2)
-        self.assertLess(part_types.index("tool-input-start"), part_types.index("text-start"))
+        self.assertLess(
+            part_types.index("tool-input-start"), part_types.index("text-start")
+        )
 
 
 LIVE_API_E2E = pytest.mark.skipif(
