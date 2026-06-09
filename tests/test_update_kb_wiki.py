@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from data.scraping_scripts import build_kb_artifacts as builder
 from data.scraping_scripts.build_kb_artifacts import build_kb_artifacts
 from data.scraping_scripts.update_kb_wiki import update_kb_wiki
 
@@ -13,7 +14,22 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
             handle.write(json.dumps(row) + "\n")
 
 
-def test_update_kb_wiki_seeds_navigation_pages(tmp_path: Path) -> None:
+def seed_peft_original_markdown(tmp_path: Path, monkeypatch) -> None:
+    """Point the peft source at a tmp original-markdown tree so the mirrored
+    `raw/docs/peft/package_reference/lora.md` path is produced on any machine,
+    instead of depending on the locally downloaded corpus (data/peft_md_files)."""
+    md_page = tmp_path / "peft_md_files" / "package_reference" / "lora.md"
+    md_page.parent.mkdir(parents=True)
+    md_page.write_text(
+        "# LoRA\n\nUse `LoraConfig` for adapter fine-tuning.\n", encoding="utf-8"
+    )
+    peft_config = dict(builder.SOURCE_CONFIGS["peft"])
+    peft_config["input_directory"] = str(tmp_path / "peft_md_files")
+    monkeypatch.setitem(builder.SOURCE_CONFIGS, "peft", peft_config)
+
+
+def test_update_kb_wiki_seeds_navigation_pages(tmp_path: Path, monkeypatch) -> None:
+    seed_peft_original_markdown(tmp_path, monkeypatch)
     input_file = tmp_path / "all_sources_data.jsonl"
     kb_dir = tmp_path / "kb"
     write_jsonl(
@@ -63,7 +79,9 @@ def test_update_kb_wiki_seeds_navigation_pages(tmp_path: Path) -> None:
 
 def test_update_kb_wiki_preserves_authored_topic_content_and_appends_log(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    seed_peft_original_markdown(tmp_path, monkeypatch)
     input_file = tmp_path / "all_sources_data.jsonl"
     kb_dir = tmp_path / "kb"
     write_jsonl(

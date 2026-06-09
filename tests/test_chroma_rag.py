@@ -106,7 +106,7 @@ After the example.
             }
         ]
 
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temp_dir:
+        with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir)
             count = write_retrieval_artifacts(
                 config={
