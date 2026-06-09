@@ -242,16 +242,22 @@ class UIMessageStreamEncoder:
             return parts
 
         if event.type == "reasoning_delta":
+            delta = str(event.data.get("text", ""))
             if not self.active_reasoning_id:
                 self.active_reasoning_id = f"reasoning_{uuid4().hex[:8]}"
                 parts.append(
                     {"type": "reasoning-start", "id": self.active_reasoning_id}
                 )
+            elif event.data.get("is_block"):
+                # Each block-granularity delta is a complete thought summary;
+                # appending to an open block needs a paragraph break or the
+                # next summary's title glues onto the previous sentence.
+                delta = f"\n\n{delta}"
             parts.append(
                 {
                     "type": "reasoning-delta",
                     "id": self.active_reasoning_id,
-                    "delta": str(event.data.get("text", "")),
+                    "delta": delta,
                 }
             )
             return parts

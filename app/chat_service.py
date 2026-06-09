@@ -803,6 +803,10 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
         is_google_genai_model(request.model_name)
         or is_anthropic_model(request.model_name)
     )
+    # Gemini streams each thought summary as one complete block; Anthropic
+    # streams partial fragments of a single thought. The encoder uses this to
+    # decide whether consecutive deltas need a paragraph break between them.
+    reasoning_deltas_are_blocks = is_google_genai_model(request.model_name)
     google_search = GoogleSearchActivity(message_id, web_evidence)
 
     logger.info("Running query: %s", request.query)
@@ -852,6 +856,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                                 "message_id": message_id,
                                 "step": step,
                                 "text": thought_text,
+                                "is_block": reasoning_deltas_are_blocks,
                             },
                         )
 

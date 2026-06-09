@@ -27,13 +27,15 @@ def extract_thought_summaries(content: Any) -> list[str]:
 
         item_type = item.get("type")
         if item_type == "thinking":
-            thought = str(item.get("thinking", "")).strip()
+            thought = str(item.get("thinking", ""))
         elif item_type == "reasoning":
-            thought = str(item.get("reasoning", "")).strip()
+            thought = str(item.get("reasoning", ""))
         else:
             continue
 
-        if thought:
+        # Keep boundary whitespace: Anthropic streams thinking as partial
+        # fragments, so stripping here glues words together across deltas.
+        if thought.strip():
             thoughts.append(thought)
     return thoughts
 

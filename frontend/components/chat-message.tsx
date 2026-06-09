@@ -501,14 +501,43 @@ function ToolRow({ part }: { part: TutorMessagePart }) {
               {part.errorText}
             </pre>
           ) : (
-            <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-[1.55] text-[var(--ink)]/80">
-              {outputText}
-            </pre>
+            <ToolOutputPreview text={outputText} />
           )}
         </div>
       ) : null}
     </li>
   );
+}
+
+const TOOL_OUTPUT_PREVIEW_LINES = 5;
+const TOOL_OUTPUT_PREVIEW_CHARS = 1000;
+
+function ToolOutputPreview({ text }: { text: string }) {
+  let preview = text.split("\n", TOOL_OUTPUT_PREVIEW_LINES + 1)
+    .slice(0, TOOL_OUTPUT_PREVIEW_LINES)
+    .join("\n");
+  if (preview.length > TOOL_OUTPUT_PREVIEW_CHARS) {
+    preview = preview.slice(0, TOOL_OUTPUT_PREVIEW_CHARS);
+  }
+  const hiddenChars = text.length - preview.length;
+
+  return (
+    <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-[1.55] text-[var(--ink)]/80">
+      {preview}
+      {hiddenChars > 0 ? (
+        <span className="text-[var(--muted)]">
+          {`\n... truncated (${formatHiddenChars(hiddenChars)} more)`}
+        </span>
+      ) : null}
+    </pre>
+  );
+}
+
+function formatHiddenChars(count: number) {
+  if (count >= 1000) {
+    return `${(count / 1000).toFixed(1)}k chars`;
+  }
+  return `${count} chars`;
 }
 
 function ToolKindIcon({ type, className }: { type: string; className?: string }) {
