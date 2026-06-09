@@ -201,7 +201,7 @@ function hostnameFromUrl(url: string) {
 
 const TOOL_DISPLAY_NAMES: Record<string, string> = {
   run_kb_command: "KB shell",
-  retrieve_tutor_context: "Retrieve",
+  retrieve_tutor_context: "Hybrid search",
   web_search: "Web search",
   google_search: "Web search",
   url_context: "Fetch URL",
@@ -233,7 +233,10 @@ export function toolInputSummary(input: unknown) {
     return text;
   }
 
-  return JSON.stringify(input);
+  const serialized = JSON.stringify(input);
+  // Some providers announce a tool call before its args are parsed; an empty
+  // object is a streaming placeholder, not meaningful input.
+  return serialized === "{}" ? "" : serialized;
 }
 
 function classifyMessagePart(

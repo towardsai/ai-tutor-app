@@ -535,6 +535,9 @@ function formatToolStateBadge(
   if (!state || state === "output-available") {
     return null;
   }
+  if (state === "input-streaming" || state === "input-available") {
+    return { label: "running", tone: "default" };
+  }
   return { label: state.replaceAll("-", " "), tone: "default" };
 }
 
