@@ -182,6 +182,7 @@ class UIMessageStreamEncoder:
         self.message_id = ""
         self.thread_id = ""
         self.text_block_id = ""
+        self.text_block_count = 0
         self.active_reasoning_id = ""
         self.source_matches_by_call_id: dict[str, list[dict[str, Any]]] = {}
         self.closed = False
@@ -193,6 +194,18 @@ class UIMessageStreamEncoder:
         parts = [{"type": "reasoning-end", "id": self.active_reasoning_id}]
         self.active_reasoning_id = ""
         return parts
+
+    def close_text_block(self) -> list[dict[str, Any]]:
+        if not self.text_block_id:
+            return []
+
+        parts = [{"type": "text-end", "id": self.text_block_id}]
+        self.text_block_id = ""
+        return parts
+
+    def next_text_block_id(self) -> str:
+        self.text_block_count += 1
+        return f"text_{self.message_id or uuid4().hex}_{self.text_block_count}"
 
     def encode(self, event: ChatEvent) -> list[dict[str, Any]]:
         parts: list[dict[str, Any]] = []
@@ -217,7 +230,7 @@ class UIMessageStreamEncoder:
         if event.type == "text_delta":
             parts.extend(self.close_reasoning_block())
             if not self.text_block_id:
-                self.text_block_id = f"text_{self.message_id or uuid4().hex}"
+                self.text_block_id = self.next_text_block_id()
                 parts.append({"type": "text-start", "id": self.text_block_id})
             parts.append(
                 {
@@ -245,6 +258,10 @@ class UIMessageStreamEncoder:
 
         if event.type == "tool_call_started":
             parts.extend(self.close_reasoning_block())
+            # Close any open text block (e.g. a preamble before the tool
+            # call) so the answer streamed after the tools becomes its own
+            # part and the activity block renders before it, not after.
+            parts.extend(self.close_text_block())
             call_id = str(event.data.get("call_id", uuid4().hex))
             tool_name = str(event.data.get("tool_name", "tool"))
             parts.append(
@@ -312,6 +329,19 @@ class UIMessageStreamEncoder:
         if event.type == "tool_call_completed":
             parts.extend(self.close_reasoning_block())
             call_id = str(event.data.get("call_id", uuid4().hex))
+            args = event.data.get("args")
+            if isinstance(args, dict) and args:
+                # Providers that stream tool calls incrementally announce the
+                # call before its args are parsed; refresh the input now that
+                # the full args are known.
+                parts.append(
+                    {
+                        "type": "tool-input-available",
+                        "toolCallId": call_id,
+                        "toolName": str(event.data.get("tool_name", "tool")),
+                        "input": args,
+                    }
+                )
             output = {
                 "text": str(event.data.get("output_text", "")),
                 "matches": self.source_matches_by_call_id.get(call_id, []),
@@ -329,7 +359,7 @@ class UIMessageStreamEncoder:
             parts.extend(self.close_reasoning_block())
             answer = str(event.data.get("answer", "")).strip()
             if answer and not self.text_block_id:
-                self.text_block_id = f"text_{self.message_id or uuid4().hex}"
+                self.text_block_id = self.next_text_block_id()
                 parts.append({"type": "text-start", "id": self.text_block_id})
                 parts.append(
                     {

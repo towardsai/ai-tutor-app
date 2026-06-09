@@ -548,6 +548,18 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
                 "Anthropic support requires langchain-anthropic and anthropic in the environment. Run uv sync after updating dependencies."
             ) from exc
 
+        if include_thoughts:
+            # Haiku-tier models use the budget_tokens thinking surface
+            # (adaptive thinking is unsupported); the interleaved beta lets
+            # thinking blocks appear between tool calls within a turn.
+            # Thinking requires temperature=1 and budget_tokens >= 1024.
+            return ChatAnthropic(
+                model=actual_model,
+                temperature=1,
+                max_tokens=8192,
+                thinking={"type": "enabled", "budget_tokens": 2048},
+                betas=["interleaved-thinking-2025-05-14"],
+            )
         return ChatAnthropic(model=actual_model, temperature=1)
     if provider == "google-genai":
         try:
@@ -787,8 +799,9 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     answer_chunks: list[str] = []
     completed_answer = ""
     message_id = uuid4().hex
-    include_reasoning = bool(request.include_reasoning) and is_google_genai_model(
-        request.model_name
+    include_reasoning = bool(request.include_reasoning) and (
+        is_google_genai_model(request.model_name)
+        or is_anthropic_model(request.model_name)
     )
     google_search = GoogleSearchActivity(message_id, web_evidence)
 
@@ -842,8 +855,14 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                             },
                         )
 
+                # Anthropic/OpenAI stream a tool call across several chunks:
+                # only the first fragment carries the provider id + name, the
+                # rest are partial-args continuations. Announce each call once,
+                # on the id-bearing fragment.
                 for tool_call in getattr(token, "tool_calls", []) or []:
-                    tool_call_id = str(tool_call.get("id") or uuid4().hex)
+                    tool_call_id = str(tool_call.get("id") or "")
+                    if not tool_call_id or tool_call_id in tool_calls_by_id:
+                        continue
                     tool_calls_by_id[tool_call_id] = tool_call
                     yield ChatEvent(
                         "tool_call_started",
@@ -983,6 +1002,12 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                         )
 
                 if getattr(message, "tool_calls", None):
+                    # The completed message has fully parsed args; streamed
+                    # fragments may have announced the call with empty args.
+                    for tool_call in message.tool_calls:
+                        call_id = str(tool_call.get("id") or "")
+                        if call_id:
+                            tool_calls_by_id[call_id] = tool_call
                     continue
                 completed_answer = message_content_to_text(message.content)
     finally:
