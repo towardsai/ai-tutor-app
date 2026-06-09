@@ -125,7 +125,7 @@ uv run -m data.scraping_scripts.add_course_workflow --courses master_ai_for_work
 Run the chatbot locally to test if the course has been added correctly.
 
 ```bash
-uv run -m scripts.main
+uv run -m scripts.api
 ```
 
 ----
@@ -284,11 +284,11 @@ leaving the source configured as active for a future rebuild.
 
 3. By default, only new content will have context added to save time and resources. Use `--process-all-context` only if you need to regenerate context for all documents. Use `--skip-data-upload` if you don't want to upload data files to the private HuggingFace repo (they're uploaded by default).
 
-4. When adding a new course, verify that it appears in the Gradio UI:
+4. When adding a new course, verify that it appears in the UI:
    - Add the source label and default-selection metadata in `source_registry.py`
-   - Check that the new source appears in the dropdown menu in the UI
+   - Check that the new source appears in the source picker in the UI
    - Make sure it's properly included in the default selected sources if desired
-   - Restart the Gradio app to see the changes
+   - Restart the API server to see the changes
 
 5. First time setup or missing files:
    - Both workflows automatically check for and download required data files:

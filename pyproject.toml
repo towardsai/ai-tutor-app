@@ -10,7 +10,6 @@ dependencies = [
     "cohere",
     "fastapi",
     "google-genai",
-    "gradio",
     "hf-xet",
     "huggingface-hub",
     "instructor",
@@ -34,9 +33,14 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx",
+    "pre-commit",
     "pytest>=9.0.3",
     "ruff>=0.15.10",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"

@@ -4,17 +4,14 @@ This is the **canonical, tool-agnostic** instruction file for the repo. `CLAUDE.
 
 ## Project Overview
 
-AI tutor for applied AI, LLMs, RAG, and Python. **Agentic RAG**: a LangChain/LangGraph agent grounds answers in a curated corpus of course + library docs, can browse a local file-based knowledge base, and (optionally) search the live web. Two frontends share one agent core:
-
-- **Gradio** UI — `scripts/main.py` (the original chatbot).
-- **Next.js** UI — `frontend/`, served by a **FastAPI** backend (`scripts/api.py`) that streams in the Vercel AI SDK UI-message protocol.
+AI tutor for applied AI, LLMs, RAG, and Python. **Agentic RAG**: a LangChain/LangGraph agent grounds answers in a curated corpus of course + library docs, can browse a local file-based knowledge base, and (optionally) search the live web. One frontend: a **Next.js** UI (`frontend/`), served by a **FastAPI** backend (`scripts/api.py`) that streams in the Vercel AI SDK UI-message protocol. (A Gradio UI existed historically; it was removed to keep one rendering path.)
 
 ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-configurable (Gemini default, Anthropic, OpenAI). Python ≥3.13, managed with `uv`.
 
 ## Key URLs
 
 - [GitHub repo](https://github.com/towardsai/ai-tutor-app)
-- [Live demo (Gradio)](https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot)
+- [Live demo — prod Space](https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot) · [Dev Space (private)](https://huggingface.co/spaces/towardsai-tutors/ai-tutor)
 - [Vector DB + KB bundle](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-vector-db) · [Private raw JSONL data](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-data)
 
 ## Where things live
@@ -26,7 +23,6 @@ ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-confi
 | Hybrid retrieval | `scripts/chroma_rag.py` |
 | KB browsing sandbox + citation resolution | `scripts/kb_shell.py`, `scripts/kb_manifest.py` |
 | FastAPI server (`/api/chat`, `/api/tools`, `/healthz`) | `scripts/api.py` |
-| Gradio app + renderer | `scripts/main.py`, `scripts/gradio_presenter.py` |
 | Paths, models, startup downloads | `scripts/setup.py` |
 | **Sources — single source of truth** | `data/scraping_scripts/source_registry.py` |
 | Agent tracing (LangSmith) + server logging (stdlib `logging` → stdout) | `scripts/agent_tracing.py`, `scripts/setup.py` |
@@ -35,7 +31,7 @@ ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-confi
 
 ## Architecture in brief
 
-The agent is built with `langchain.agents.create_agent()` (LangGraph), an `InMemorySaver` checkpointer keyed by `thread_id`, and middlewares for context-editing, summarization, and source preference. `stream_chat()` is the single entry point both frontends call; it yields typed `ChatEvent`s. It always exposes two custom tools, plus provider-native web tools when enabled:
+The agent is built with `langchain.agents.create_agent()` (LangGraph), an `InMemorySaver` checkpointer keyed by `thread_id`, and middlewares for context-editing, summarization, and source preference. `stream_chat()` is the single entry point the API calls; it yields typed `ChatEvent`s that `scripts/api.py` encodes into the AI SDK UI-message stream. It always exposes two custom tools, plus provider-native web tools when enabled:
 
 - **`retrieve_tutor_context(query)`** — hybrid RAG over the corpus, scoped to the user's selected sources.
 - **`run_kb_command(...)`** — read-only KB file browsing (see below).
@@ -63,13 +59,12 @@ Runtime guidance the agent follows is in `data/kb/AGENTS.md` (injected into the 
 
 ## Sources & config
 
-`data/scraping_scripts/source_registry.py` is the **single source of truth** for sources (`SOURCE_CONFIGS`, key groupings, UI labels, defaults); `scripts/setup.py` re-exports them and both frontends derive the picker from it. Docs sources ingest via the GitHub API or `llms.txt`; course sources are Notion exports. To add a source: add it to the registry (+ the relevant grouping tuples), then run the matching workflow — no separate UI edit needed. Models live in `setup.AVAILABLE_MODELS` (default `google-genai:gemini-3.5-flash`; also Claude Haiku 4.5; OpenAI supported in code).
+`data/scraping_scripts/source_registry.py` is the **single source of truth** for sources (`SOURCE_CONFIGS`, key groupings, UI labels, defaults); `scripts/setup.py` re-exports them and the frontend derives the picker from it (via `/api/tools`). Docs sources ingest via the GitHub API or `llms.txt`; course sources are Notion exports. To add a source: add it to the registry (+ the relevant grouping tuples), then run the matching workflow — no separate UI edit needed. Models live in `setup.AVAILABLE_MODELS` (default `google-genai:gemini-3.5-flash`; also Claude Haiku 4.5; OpenAI supported in code).
 
 ## Running locally
 
 ```bash
 uv sync && cp .env.example .env      # then fill in keys
-uv run -m scripts.main               # Gradio UI (:7860)
 uv run -m scripts.api                # FastAPI backend (:8000; override AI_TUTOR_API_PORT/PORT)
 # Next.js frontend (needs the API running):
 cd frontend && npm install && cp .env.example .env.local && npm run dev   # :3000
@@ -77,7 +72,7 @@ cd frontend && npm install && cp .env.example .env.local && npm run dev   # :300
 
 First start downloads the vector-db/KB bundle from HF if missing (`HF_TOKEN`). The frontend is a static export (`output: 'export'`); `npm run build` emits `frontend/out`, which `scripts/api.py` mounts at `/`.
 
-Test & lint: `uv run pytest` · `uv run ruff check .`
+Test, lint & format: `uv run pytest` · `uv run ruff check .` · `uv run ruff format .`. CI (`.github/workflows/ci.yml`) enforces all three on PRs/pushes to `main`; for local auto-fix on commit, run `uv run pre-commit install` once.
 
 ## Data update workflows
 
@@ -97,12 +92,17 @@ Chat runtime: `COHERE_API_KEY` (retrieval), one chat-model provider key (`GEMINI
 
 ## Deployment
 
-`.github/workflows/sync-to-hf.yml` force-pushes to two HF Spaces on every push to `main`: **`ai-tutor`** (`Dockerfile`: FastAPI + Next.js export) and **`ai-tutor-chatbot`** (`Dockerfile.gradio`). Both install `ripgrep` for `run_kb_command` and run on :7860.
+Both HF Spaces run the same image (`Dockerfile`: FastAPI + Next.js static export, `ripgrep` installed for `run_kb_command`, port :7860), in a dev → prod flow:
+
+- **Dev — `ai-tutor`** (private): `.github/workflows/sync-to-hf.yml` force-pushes on every push to `main`. Verify changes here first.
+- **Prod — `ai-tutor-chatbot`** (public): `.github/workflows/deploy-prod-to-hf.yml`, **manual trigger only** (Actions tab → "Deploy prod to Hugging Face" → Run workflow).
+
+Both Spaces need the same runtime secrets (`COHERE_API_KEY`, model provider key, `HF_TOKEN`, optional `LANGSMITH_*`/`MONGODB_URI`) configured in their HF settings.
 
 ## Conventions
 
-- **No em-dashes in frontend user-facing text.** Use a comma, parentheses, a colon, or two sentences instead. This covers every string the UI renders (Next.js components and Gradio): tool descriptions, popovers, labels, `title` tooltips, placeholders, empty states. This file and other docs are exempt.
-- **Decide frontend vs. backend ownership before changing behavior, and fix it on the side that owns the data.** The backend is the single source of truth for data shape and meaning; the frontend renders what it receives instead of reshaping it. If a field is empty, that should be because the server wrote it empty, not because the UI stripped it. For example, a source with no library version must get `version: null` from `capture_source_versions.py`; it should never be filtered out client-side. Reshaping data in the frontend causes drift between the two frontends and ambiguity about why a value is missing (did the server omit it, or did the client hide it?).
+- **No em-dashes in frontend user-facing text.** Use a comma, parentheses, a colon, or two sentences instead. This covers every string the UI renders (Next.js components): tool descriptions, popovers, labels, `title` tooltips, placeholders, empty states. This file and other docs are exempt.
+- **Decide frontend vs. backend ownership before changing behavior, and fix it on the side that owns the data.** The backend is the single source of truth for data shape and meaning; the frontend renders what it receives instead of reshaping it. If a field is empty, that should be because the server wrote it empty, not because the UI stripped it. For example, a source with no library version must get `version: null` from `capture_source_versions.py`; it should never be filtered out client-side. Reshaping data in the frontend causes ambiguity about why a value is missing (did the server omit it, or did the client hide it?).
 
 ## Gotchas
 

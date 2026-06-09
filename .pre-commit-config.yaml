@@ -1,0 +1,10 @@
+# Local fast-feedback hooks. One-time setup per clone: `uv run pre-commit install`.
+# CI (.github/workflows/ci.yml) is the real gate; these just fix lint/format
+# before a commit so you don't get a red CI run for formatting.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.15 # keep in sync with the ruff version in pyproject dev deps
+    hooks:
+      - id: ruff-check # lint
+        args: [--fix]
+      - id: ruff-format # format

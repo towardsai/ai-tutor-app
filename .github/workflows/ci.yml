@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    name: Lint & format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install dev tooling
+        run: uv sync --only-dev --frozen
+
+      - name: Format check
+        run: uv run --no-sync ruff format --check .
+
+      - name: Lint check
+        run: uv run --no-sync ruff check .
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # run_kb_command sandbox tests shell out to ripgrep; without it they skip.
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install project
+        run: uv sync --frozen
+
+      # Live model-backed tests stay skipped here (no RUN_LIVE_* / no API keys);
+      # they are run manually/locally. CI guards the offline suite only.
+      - name: Run tests
+        run: uv run --no-sync pytest

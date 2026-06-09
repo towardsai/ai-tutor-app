@@ -51,13 +51,6 @@ uv run dotenv -f .env run -- env RUN_LIVE_API_E2E=1 \
   pytest tests/test_api.py::test_live_api_stream_exposes_frontend_parts -q
 ```
 
-Gradio curl path:
-
-```bash
-uv run dotenv -f .env run -- env RUN_LIVE_GRADIO_CURL_E2E=1 \
-  pytest tests/test_gradio_kb_e2e.py::test_live_gradio_curl_can_use_retrieval_and_shell -q
-```
-
 ## Manual API Test
 
 Start the FastAPI app in one terminal:
@@ -167,59 +160,6 @@ Expected result:
 - Tool calls include `retrieve_tutor_context` and `run_kb_command`.
 - The answer has inline citations, not only a final sources list.
 - `data-source` parts include the source cards the frontend will render.
-
-## Manual Gradio Test
-
-Start the Gradio app in one terminal:
-
-```bash
-uv run dotenv -f .env run -- python -m scripts.main
-```
-
-Submit a Gradio job:
-
-```bash
-cat >/tmp/ai_tutor_gradio_payload.json <<'JSON'
-{
-  "data": [
-    "Use run_kb_command to answer: can you tell me about codex?",
-    [],
-    [
-      "Agentic AI Engineering",
-      "LangChain Docs",
-      "LangGraph Docs",
-      "PEFT Docs",
-      "Transformers Docs"
-    ],
-    "google-genai:gemini-3.5-flash",
-    "",
-    false,
-    false
-  ]
-}
-JSON
-
-curl -s http://127.0.0.1:7860/gradio_api/call/chat \
-  -H "Content-Type: application/json" \
-  -d @/tmp/ai_tutor_gradio_payload.json \
-  -o /tmp/ai_tutor_gradio_post.json
-```
-
-Stream the result:
-
-```bash
-EVENT_ID="$(jq -r '.event_id' /tmp/ai_tutor_gradio_post.json)"
-
-curl -N --max-time 240 \
-  "http://127.0.0.1:7860/gradio_api/call/chat/${EVENT_ID}" \
-  -o /tmp/ai_tutor_gradio_stream.sse
-```
-
-Expected result:
-
-- The rendered text contains `Using \`retrieve_tutor_context\``.
-- The rendered text contains `Using \`run_kb_command\``.
-- The rendered text contains inline citations and source cards.
 
 ## Find The LangSmith Trace
 

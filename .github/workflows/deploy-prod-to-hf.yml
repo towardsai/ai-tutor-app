@@ -1,0 +1,22 @@
+name: Deploy prod to Hugging Face (ai-tutor-chatbot)
+
+# Manual-only promotion to the public prod Space. Run it from the Actions tab
+# after verifying the dev Space (ai-tutor) looks good. Deploys the ref you
+# pick in the "Run workflow" dropdown (defaults to main).
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Push to HuggingFace Space (ai-tutor-chatbot)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USERNAME: ${{ secrets.HF_USERNAME }}
+        run: git push --force "https://$HF_USERNAME:$HF_TOKEN@huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot" HEAD:main

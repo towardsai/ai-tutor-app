@@ -8,15 +8,15 @@ app_port: 7860
 pinned: false
 ---
 
-### Gradio UI Chatbot
+### AI Tutor Chatbot
 
-A Gradio UI for the chatbot is available in [scripts/main.py](./scripts/main.py).
+An agentic RAG tutor for applied AI, LLMs, RAG, and Python: a Next.js frontend served by a FastAPI backend, with a LangChain/LangGraph agent core. See [AGENTS.md](./AGENTS.md) for the architecture map.
 
-The Gradio demo is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugging Face](https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot).
+The live app is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugging Face](https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot) (prod).
 
-**Note:** A GitHub Action automatically deploys the Gradio demo when changes are pushed to the main branch (excluding documentation and scripts in the `data/scraping_scripts` directory).
+**Deployment flow:** every push to `main` auto-deploys to the private dev Space ([ai-tutor](https://huggingface.co/spaces/towardsai-tutors/ai-tutor)) for verification; the prod Space is promoted manually via the "Deploy prod to Hugging Face" workflow in the Actions tab.
 
-### Gradio UI — Quick Start
+### Backend — Quick Start
 
 1. Install dependencies (requires [uv](https://docs.astral.sh/uv/getting-started/installation/#installation-methods)):
 
@@ -30,16 +30,8 @@ The Gradio demo is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugg
    cp .env.example .env  # then edit values
    ```
 
-   The chat model is provider-agnostic. Use the UI field in `provider:model` format, for example `openai:gpt-5.4-mini`. Optional provider keys include `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `GOOGLE_API_KEY`. Anthropic support is wired through the `anthropic` SDK, and Gemini support is wired through Google’s `google-genai` SDK.
+   The chat model is provider-agnostic, configured in `provider:model` format, for example `google-genai:gemini-3.5-flash`. Optional provider keys include `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `GOOGLE_API_KEY`. Anthropic support is wired through the `anthropic` SDK, and Gemini support is wired through Google’s `google-genai` SDK.
    To trace requests in LangSmith, set `LANGSMITH_API_KEY`. The app enables tracing automatically when that key is present unless `LANGSMITH_TRACING=false` is set.
-
-3. Run:
-
-   ```bash
-   uv run -m scripts.main
-   ```
-
-   Starts the Gradio AI Tutor interface.
 
 ### LangSmith Agent Tracing
 
@@ -57,7 +49,7 @@ Tracing sends prompts, retrieved snippets, tool inputs, tool outputs, and model 
 
 ### Next.js Frontend — Quick Start
 
-The repo now also includes a separate Next.js frontend in [frontend](./frontend) that talks to the FastAPI backend instead of the Gradio transport.
+The Next.js frontend in [frontend](./frontend) talks to the FastAPI backend.
 
 1. Start the Python API:
 
@@ -102,79 +94,11 @@ This frontend consumes:
 
 and renders sources, tool activity, and reasoning as separate UI elements rather than a single markdown block.
 
-### Gradio API
+API notes:
 
-The chat endpoint is exposed as `chat`, so the API flow is:
-
-```bash
-POST /gradio_api/call/chat
-GET /gradio_api/call/chat/{event_id}
-```
-
-The `POST` body must send `data` in this exact order:
-
-1. User message: string
-2. History: array
-3. Sources: array of source labels exactly as shown in the UI
-4. Model: `provider:model` string
-5. Show Gemini thoughts: boolean
-6. Thread ID: string, empty for a new conversation
-
-Example first turn:
-
-```bash
-curl -s http://127.0.0.1:7860/gradio_api/call/chat \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "data": [
-      "What is LoRA?",
-      [],
-      ["PEFT Docs", "Transformers Docs"],
-      "openai:gpt-4o-mini",
-      false,
-      ""
-    ]
-  }'
-```
-
-That returns an `event_id`. Open the server-sent event stream with:
-
-```bash
-curl -N http://127.0.0.1:7860/gradio_api/call/chat/<event_id>
-```
-
-The streamed payloads look like this:
-
-```json
-["Partial assistant text", null, "thread-id"]
-```
-
-- `data[0]`: current streamed assistant text
-- `data[1]`: Gradio's hidden state placeholder, ignore this
-- `data[2]`: `thread_id` to reuse on the next turn
-
-Example follow-up turn on the same conversation:
-
-```bash
-curl -s http://127.0.0.1:7860/gradio_api/call/chat \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "data": [
-      "How is it different from adapters?",
-      [],
-      ["PEFT Docs", "Transformers Docs"],
-      "openai:gpt-4o-mini",
-      false,
-      "thread-id-from-previous-response"
-    ]
-  }'
-```
-
-Notes:
-
-- API clients should usually send `[]` for history and continue the conversation with `thread_id`.
-- The source filter is request-scoped, so you can keep the same `thread_id` while changing sources between turns.
-- Sending an empty `thread_id` starts a new backend conversation.
+- API clients should usually send only the new user message and continue the conversation with `threadId` (the `data-thread` part of the stream carries it; send it back on the next request).
+- The source filter is request-scoped, so you can keep the same `threadId` while changing sources between turns.
+- Sending an empty `threadId` starts a new backend conversation.
 
 ### Knowledge Base (file-based)
 

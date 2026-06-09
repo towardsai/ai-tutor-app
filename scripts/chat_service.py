@@ -57,19 +57,8 @@ from .setup import (
 
 logger = logging.getLogger(__name__)
 
-SOURCES_HEADER = "📝 Here are the sources I used to answer your question:"
-ACTIVITY_BLOCK_START = "<!-- MODEL_ACTIVITY_START -->"
-ACTIVITY_BLOCK_END = "<!-- MODEL_ACTIVITY_END -->"
-THOUGHTS_BLOCK_START = "<!-- GEMINI_THOUGHTS_START -->"
-THOUGHTS_BLOCK_END = "<!-- GEMINI_THOUGHTS_END -->"
-ANSWER_HEADER = "**Answer**"
-LEGACY_THOUGHTS_DETAILS_OPEN = "<details><summary>Gemini thoughts</summary>"
-LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED = (
-    "<details open><summary>Gemini thoughts</summary>"
-)
 CHECKPOINTER = InMemorySaver()
 _RETRIEVER_INIT_LOCK = Lock()
-KB_TOOL_NAMES = ("run_kb_command",)
 DEFAULT_KB_COMMAND_LIMIT = 20
 _KB_COMMAND_COUNTS: dict[str, int] = {}
 _KB_COMMAND_COUNT_LOCK = Lock()
@@ -246,79 +235,15 @@ def message_content_to_text(content: Any) -> str:
     return str(content)
 
 
-def strip_sources_block(text: str) -> str:
-    separator = f"\n\n{SOURCES_HEADER}"
-    body, marker, _ = text.partition(separator)
-    if marker:
-        return body.strip()
-    if text.startswith(SOURCES_HEADER):
-        return ""
-    return text.strip()
-
-
-def strip_hidden_block(text: str, start_marker: str, end_marker: str) -> str:
-    stripped = text
-    while True:
-        start = stripped.find(start_marker)
-        if start == -1:
-            return stripped
-        end = stripped.find(end_marker, start)
-        if end == -1:
-            return stripped[:start]
-        stripped = stripped[:start] + stripped[end + len(end_marker) :]
-
-
-def strip_activity_block(text: str) -> str:
-    stripped = strip_hidden_block(text, ACTIVITY_BLOCK_START, ACTIVITY_BLOCK_END)
-    stripped = strip_hidden_block(stripped, THOUGHTS_BLOCK_START, THOUGHTS_BLOCK_END)
-
-    for marker in (
-        LEGACY_THOUGHTS_DETAILS_OPEN_EXPANDED,
-        LEGACY_THOUGHTS_DETAILS_OPEN,
-    ):
-        separator = f"\n\n{marker}"
-        body, found, _ = stripped.partition(separator)
-        if found:
-            return body.strip()
-        if stripped.startswith(marker):
-            return ""
-    return stripped.strip()
-
-
-def strip_answer_header(text: str) -> str:
-    stripped = text.strip()
-    answer_prefix = f"{ANSWER_HEADER}\n\n"
-    if stripped.startswith(answer_prefix):
-        return stripped[len(answer_prefix) :].strip()
-    if stripped == ANSWER_HEADER:
-        return ""
-    return stripped
-
-
-def strip_display_blocks(text: str) -> str:
-    return strip_answer_header(strip_activity_block(strip_sources_block(text)))
-
-
-def normalize_history(
-    history: list[dict[str, Any]] | tuple[ChatTurn, ...] | list[ChatTurn],
-) -> tuple[ChatTurn, ...]:
-    if not history:
-        return ()
-
+def normalize_history(history: tuple[ChatTurn, ...]) -> tuple[ChatTurn, ...]:
+    """Keep user/assistant turns, trimming assistant whitespace so incoming
+    history compares equal to checkpoint-derived history."""
     normalized: list[ChatTurn] = []
-    for message in history:
-        if isinstance(message, ChatTurn):
-            role = message.role
-            content = message.content
-        else:
-            role = str(message.get("role", ""))
-            content = message_content_to_text(message.get("content"))
-
-        if role not in {"user", "assistant"}:
+    for turn in history:
+        if turn.role not in {"user", "assistant"}:
             continue
-        if role == "assistant":
-            content = strip_display_blocks(content)
-        normalized.append(ChatTurn(role=role, content=content))
+        content = turn.content.strip() if turn.role == "assistant" else turn.content
+        normalized.append(ChatTurn(role=turn.role, content=content))
     return tuple(normalized)
 
 
@@ -333,7 +258,7 @@ def checkpoint_messages_to_history(messages: list[BaseMessage]) -> tuple[ChatTur
             history.append(
                 ChatTurn(
                     "assistant",
-                    strip_display_blocks(message_content_to_text(message.content)),
+                    message_content_to_text(message.content).strip(),
                 )
             )
     return tuple(history)
@@ -814,7 +739,7 @@ def effective_tool_names(
     model_name: str,
     enabled_tools: tuple[str, ...],
 ) -> tuple[str, ...]:
-    names = ["retrieve_tutor_context", *KB_TOOL_NAMES]
+    names = ["retrieve_tutor_context", "run_kb_command"]
     enabled = set(enabled_tools)
     if is_google_genai_model(model_name):
         if "web_search" in enabled:
@@ -928,6 +853,76 @@ def extract_grounding_source_matches(
 
 
 GOOGLE_SEARCH_TOOL_NAME = "google_search"
+
+
+class GoogleSearchActivity:
+    """Surface Gemini's server-side google_search activity as tool events.
+
+    Gemini reports search grounding via response metadata instead of tool
+    messages, so queries and grounding results are accumulated from every
+    metadata payload and exposed as a single synthetic tool call per turn.
+    """
+
+    def __init__(self, message_id: str, web_evidence: dict[str, SourceMatch]) -> None:
+        self._message_id = message_id
+        self._web_evidence = web_evidence
+        self._call_id = ""
+        self._queries: list[str] = []
+        self._match_count = 0
+
+    def observe(self, response_metadata: Any) -> ChatEvent | None:
+        """Record metadata; return a tool_call_started event on first activity."""
+        new_queries = [
+            q
+            for q in extract_web_search_queries(response_metadata)
+            if q not in self._queries
+        ]
+        new_grounding = extract_grounding_source_matches(
+            response_metadata,
+            self._web_evidence,
+        )
+        started: ChatEvent | None = None
+        if (new_queries or new_grounding) and not self._call_id:
+            self._call_id = uuid4().hex
+            joined = "; ".join(new_queries)
+            started = ChatEvent(
+                "tool_call_started",
+                {
+                    "message_id": self._message_id,
+                    "call_id": self._call_id,
+                    "tool_name": GOOGLE_SEARCH_TOOL_NAME,
+                    "args": {"query": joined},
+                    "args_text": joined,
+                },
+            )
+        self._queries.extend(new_queries)
+        self._match_count += len(new_grounding)
+        return started
+
+    def completed_event(self) -> ChatEvent | None:
+        if not self._call_id:
+            return None
+        joined = "; ".join(self._queries)
+        if self._match_count == 0:
+            output_text = "Google search ran but returned no grounding results."
+        else:
+            plural = "" if self._match_count == 1 else "s"
+            output_text = (
+                f"Google search returned {self._match_count} web result{plural}."
+            )
+        return ChatEvent(
+            "tool_call_completed",
+            {
+                "message_id": self._message_id,
+                "call_id": self._call_id,
+                "tool_name": GOOGLE_SEARCH_TOOL_NAME,
+                "args": {"query": joined},
+                "args_text": joined,
+                "output_text": output_text,
+            },
+        )
+
+
 ANTHROPIC_SERVER_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
 ANTHROPIC_RESULT_BLOCK_TYPES = {
     "web_search_tool_result": ("web_search", "Web"),
@@ -1057,9 +1052,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     include_reasoning = bool(request.include_reasoning) and is_google_genai_model(
         request.model_name
     )
-    google_search_call_id = ""
-    google_search_queries: list[str] = []
-    google_search_match_count = 0
+    google_search = GoogleSearchActivity(message_id, web_evidence)
 
     logger.info("Running query: %s", request.query)
     agent = build_agent(
@@ -1138,33 +1131,11 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                         },
                     )
 
-                token_metadata = getattr(token, "response_metadata", None)
-                new_queries = [
-                    q
-                    for q in extract_web_search_queries(token_metadata)
-                    if q not in google_search_queries
-                ]
-                new_grounding = extract_grounding_source_matches(
-                    token_metadata,
-                    web_evidence,
+                search_started = google_search.observe(
+                    getattr(token, "response_metadata", None)
                 )
-                if (new_queries or new_grounding) and not google_search_call_id:
-                    google_search_call_id = uuid4().hex
-                    yield ChatEvent(
-                        "tool_call_started",
-                        {
-                            "message_id": message_id,
-                            "call_id": google_search_call_id,
-                            "tool_name": GOOGLE_SEARCH_TOOL_NAME,
-                            "args": {
-                                "query": "; ".join(new_queries) if new_queries else ""
-                            },
-                            "args_text": "; ".join(new_queries),
-                        },
-                    )
-                if new_queries:
-                    google_search_queries.extend(new_queries)
-                google_search_match_count += len(new_grounding)
+                if search_started:
+                    yield search_started
                 continue
 
             if chunk["type"] != "updates":
@@ -1224,33 +1195,11 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 if step != "model" or getattr(message, "type", None) != "ai":
                     continue
 
-                message_metadata = getattr(message, "response_metadata", None)
-                new_queries = [
-                    q
-                    for q in extract_web_search_queries(message_metadata)
-                    if q not in google_search_queries
-                ]
-                new_grounding = extract_grounding_source_matches(
-                    message_metadata,
-                    web_evidence,
+                search_started = google_search.observe(
+                    getattr(message, "response_metadata", None)
                 )
-                if (new_queries or new_grounding) and not google_search_call_id:
-                    google_search_call_id = uuid4().hex
-                    yield ChatEvent(
-                        "tool_call_started",
-                        {
-                            "message_id": message_id,
-                            "call_id": google_search_call_id,
-                            "tool_name": GOOGLE_SEARCH_TOOL_NAME,
-                            "args": {
-                                "query": "; ".join(new_queries) if new_queries else ""
-                            },
-                            "args_text": "; ".join(new_queries),
-                        },
-                    )
-                if new_queries:
-                    google_search_queries.extend(new_queries)
-                google_search_match_count += len(new_grounding)
+                if search_started:
+                    yield search_started
 
                 if is_anthropic_model(request.model_name):
                     anthropic_updates, anthropic_tool_uses = (
@@ -1301,24 +1250,9 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     finally:
         _clear_kb_command_budget(message_id)
 
-    if google_search_call_id:
-        joined_queries = "; ".join(google_search_queries)
-        if google_search_match_count == 0:
-            output_text = "Google search ran but returned no grounding results."
-        else:
-            plural = "" if google_search_match_count == 1 else "s"
-            output_text = f"Google search returned {google_search_match_count} web result{plural}."
-        yield ChatEvent(
-            "tool_call_completed",
-            {
-                "message_id": message_id,
-                "call_id": google_search_call_id,
-                "tool_name": GOOGLE_SEARCH_TOOL_NAME,
-                "args": {"query": joined_queries},
-                "args_text": joined_queries,
-                "output_text": output_text,
-            },
-        )
+    search_completed = google_search.completed_event()
+    if search_completed:
+        yield search_completed
 
     answer = "".join(answer_chunks).strip() or completed_answer.strip()
     matched_sources = list(
