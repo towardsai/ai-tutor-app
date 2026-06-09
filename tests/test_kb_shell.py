@@ -8,7 +8,7 @@ import pytest
 
 from data.scraping_scripts.build_kb_artifacts import build_kb_artifacts
 from data.scraping_scripts.update_kb_wiki import update_kb_wiki
-from scripts.kb_shell import KbCommandError, format_command_payload, run_kb_command
+from app.kb_shell import KbCommandError, format_command_payload, run_kb_command
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:

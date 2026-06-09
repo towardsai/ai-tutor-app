@@ -15,8 +15,8 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from scripts.api import app
-from scripts.chat_types import ChatEvent
+from app.api import app
+from app.chat_types import ChatEvent
 
 
 def parse_sse_payloads(raw_text: str) -> list[str]:
@@ -156,7 +156,7 @@ class ApiTestCase(unittest.TestCase):
             "threadId": "thread_0",
         }
 
-        with patch("scripts.api.stream_chat", fake_stream_chat):
+        with patch("app.api.stream_chat", fake_stream_chat):
             with TestClient(app) as client:
                 with client.stream("POST", "/api/chat", json=payload) as response:
                     body = "".join(response.iter_text())
@@ -195,7 +195,7 @@ class ApiTestCase(unittest.TestCase):
             yield ChatEvent("message_started", {"message_id": "message_1"})
             raise RuntimeError("backend failed: cohere trace secret-123")
 
-        with patch("scripts.api.stream_chat", broken_stream_chat):
+        with patch("app.api.stream_chat", broken_stream_chat):
             with TestClient(app) as client:
                 with client.stream(
                     "POST", "/api/chat", json={"query": "Hello"}
@@ -253,7 +253,7 @@ class ApiTestCase(unittest.TestCase):
                 },
             )
 
-        with patch("scripts.api.stream_chat", fake_stream_chat):
+        with patch("app.api.stream_chat", fake_stream_chat):
             with TestClient(app) as client:
                 with client.stream(
                     "POST", "/api/chat", json={"query": "Hello"}

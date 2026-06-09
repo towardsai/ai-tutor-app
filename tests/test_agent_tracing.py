@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from scripts.agent_tracing import (
+from app.agent_tracing import (
     DEFAULT_LANGSMITH_PROJECT,
     configure_langsmith_environment,
     langsmith_tracing_enabled,

@@ -15,7 +15,6 @@ from data.scraping_scripts.source_registry import (
 )
 
 from .agent_tracing import configure_langsmith_environment, langsmith_tracing_enabled
-from .utils import init_mongo_db
 
 load_dotenv(override=True)
 configure_langsmith_environment()
@@ -58,9 +57,6 @@ AVAILABLE_MODELS: tuple[dict[str, str], ...] = (
     {"id": "anthropic:claude-haiku-4-5", "label": "Claude Haiku 4.5"},
 )
 
-CONCURRENCY_COUNT = int(os.getenv("CONCURRENCY_COUNT", 64))
-MONGODB_URI = os.getenv("MONGODB_URI")
-
 
 def ensure_kb_agents_md() -> None:
     """Overwrite data/kb/AGENTS.md from the in-git template on every startup."""
@@ -100,12 +96,6 @@ def ensure_local_vector_db() -> None:
     ensure_kb_agents_md()
 
 
-if MONGODB_URI:
-    mongo_db = init_mongo_db(uri=MONGODB_URI, db_name="towardsai-buster")
-else:
-    logger.warning("No mongodb uri found, you will not be able to save data.")
-    mongo_db = None
-
 __all__ = [
     "AVAILABLE_MODELS",
     "AVAILABLE_SOURCES",
@@ -113,7 +103,6 @@ __all__ = [
     "COURSE_SOURCE_KEYS",
     "DEFAULT_SELECTED_SOURCE_KEYS",
     "DEFAULT_SELECTED_SOURCES_UI",
-    "CONCURRENCY_COUNT",
     "DEFAULT_MODEL_NAME",
     "BM25_INDEX_PATH",
     "DOCUMENT_DICT_PATH",
@@ -128,5 +117,4 @@ __all__ = [
     "VECTOR_DB_DIR",
     "ensure_kb_agents_md",
     "ensure_local_vector_db",
-    "mongo_db",
 ]

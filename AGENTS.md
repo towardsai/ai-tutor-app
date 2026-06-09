@@ -4,7 +4,7 @@ This is the **canonical, tool-agnostic** instruction file for the repo. `CLAUDE.
 
 ## Project Overview
 
-AI tutor for applied AI, LLMs, RAG, and Python. **Agentic RAG**: a LangChain/LangGraph agent grounds answers in a curated corpus of course + library docs, can browse a local file-based knowledge base, and (optionally) search the live web. One frontend: a **Next.js** UI (`frontend/`), served by a **FastAPI** backend (`scripts/api.py`) that streams in the Vercel AI SDK UI-message protocol. (A Gradio UI existed historically; it was removed to keep one rendering path.)
+AI tutor for applied AI, LLMs, RAG, and Python. **Agentic RAG**: a LangChain/LangGraph agent grounds answers in a curated corpus of course + library docs, can browse a local file-based knowledge base, and (optionally) search the live web. One frontend: a **Next.js** UI (`frontend/`), served by a **FastAPI** backend (`app/api.py`) that streams in the Vercel AI SDK UI-message protocol. (A Gradio UI existed historically; it was removed to keep one rendering path.)
 
 ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-configurable (Gemini default, Anthropic, OpenAI). Python ≥3.13, managed with `uv`.
 
@@ -18,34 +18,34 @@ ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-confi
 
 | Concern | File(s) |
 |---|---|
-| Agent core (`build_agent`, `stream_chat`) | `scripts/chat_service.py` |
-| System prompt assembly | `scripts/prompts.py` |
-| Hybrid retrieval | `scripts/chroma_rag.py` |
-| KB browsing sandbox + citation resolution | `scripts/kb_shell.py`, `scripts/kb_manifest.py` |
-| FastAPI server (`/api/chat`, `/api/tools`, `/healthz`) | `scripts/api.py` |
-| Paths, models, startup downloads | `scripts/setup.py` |
+| Agent core (`build_agent`, `stream_chat`) | `app/chat_service.py` |
+| System prompt assembly | `app/prompts.py` |
+| Hybrid retrieval | `app/chroma_rag.py` |
+| KB browsing sandbox + citation resolution | `app/kb_shell.py`, `app/kb_manifest.py` |
+| FastAPI server (`/api/chat`, `/api/tools`, `/healthz`) | `app/api.py` |
+| Paths, models, startup downloads | `app/setup.py` |
 | **Sources — single source of truth** | `data/scraping_scripts/source_registry.py` |
-| Agent tracing (LangSmith) + server logging (stdlib `logging` → stdout) | `scripts/agent_tracing.py`, `scripts/setup.py` |
+| Agent tracing (LangSmith) + server logging (stdlib `logging` → stdout) | `app/agent_tracing.py`, `app/setup.py` |
 | Data pipeline / workflows (deep guide) | `data/scraping_scripts/README.md` |
 | KB design + wiki maintainer workflow (deep guide) | `data/kb/MAINTAINER.md` |
 
 ## Architecture in brief
 
-The agent is built with `langchain.agents.create_agent()` (LangGraph), an `InMemorySaver` checkpointer keyed by `thread_id`, and middlewares for context-editing, summarization, and source preference. `stream_chat()` is the single entry point the API calls; it yields typed `ChatEvent`s that `scripts/api.py` encodes into the AI SDK UI-message stream. It always exposes two custom tools, plus provider-native web tools when enabled:
+The agent is built with `langchain.agents.create_agent()` (LangGraph), an `InMemorySaver` checkpointer keyed by `thread_id`, and middlewares for context-editing, summarization, and source preference. `stream_chat()` is the single entry point the API calls; it yields typed `ChatEvent`s that `app/api.py` encodes into the AI SDK UI-message stream. It always exposes two custom tools, plus provider-native web tools when enabled:
 
 - **`retrieve_tutor_context(query)`** — hybrid RAG over the corpus, scoped to the user's selected sources.
 - **`run_kb_command(...)`** — read-only KB file browsing (see below).
 - **Gemini**: `google_search`, `url_context`. **Anthropic**: `web_search`, `web_fetch`.
 
-Final-answer inline citations are resolved against current-turn evidence + the KB manifest into trusted source cards (`scripts/kb_manifest.py`).
+Final-answer inline citations are resolved against current-turn evidence + the KB manifest into trusted source cards (`app/kb_manifest.py`).
 
-**Retrieval** (`scripts/chroma_rag.py`): dense (Cohere `embed-v4.0`) + BM25 → Reciprocal Rank Fusion → Cohere rerank → token budget. See the file for the exact top-k / score constants.
+**Retrieval** (`app/chroma_rag.py`): dense (Cohere `embed-v4.0`) + BM25 → Reciprocal Rank Fusion → Cohere rerank → token budget. See the file for the exact top-k / score constants.
 
 **Corpus → searchable** lifecycle: markdown → `process_md_files.py` → per-source JSONL → `all_sources_data.jsonl` → (`add_context_to_nodes.py`, **Gemini**) → `*_contextual_nodes.pkl` → `create_vector_stores.py` → ChromaDB. Separately, `all_sources_data.jsonl` → `build_kb_artifacts.py` + `update_kb_wiki.py` → `data/kb/`.
 
 ## Knowledge base (KB) browsing tool
 
-The agent's second grounding mechanism: instead of only top-k retrieval, it browses the corpus like a filesystem via `run_kb_command` — a sandboxed, **read-only** shell over `data/kb/` (allowed: `rg grep find ls sed head cat wc`; no pipes/redirects/network/writes; path-jailed to `data/kb/`; per-turn command budget). Sandbox lives in `scripts/kb_shell.py`.
+The agent's second grounding mechanism: instead of only top-k retrieval, it browses the corpus like a filesystem via `run_kb_command` — a sandboxed, **read-only** shell over `data/kb/` (allowed: `rg grep find ls sed head cat wc`; no pipes/redirects/network/writes; path-jailed to `data/kb/`; per-turn command budget). Sandbox lives in `app/kb_shell.py`.
 
 `data/kb/` (a gitignored build artifact, downloaded on first start) has three layers:
 
@@ -59,18 +59,18 @@ Runtime guidance the agent follows is in `data/kb/AGENTS.md` (injected into the 
 
 ## Sources & config
 
-`data/scraping_scripts/source_registry.py` is the **single source of truth** for sources (`SOURCE_CONFIGS`, key groupings, UI labels, defaults); `scripts/setup.py` re-exports them and the frontend derives the picker from it (via `/api/tools`). Docs sources ingest via the GitHub API or `llms.txt`; course sources are Notion exports. To add a source: add it to the registry (+ the relevant grouping tuples), then run the matching workflow — no separate UI edit needed. Models live in `setup.AVAILABLE_MODELS` (default `google-genai:gemini-3.5-flash`; also Claude Haiku 4.5; OpenAI supported in code).
+`data/scraping_scripts/source_registry.py` is the **single source of truth** for sources (`SOURCE_CONFIGS`, key groupings, UI labels, defaults); `app/setup.py` re-exports them and the frontend derives the picker from it (via `/api/tools`). Docs sources ingest via the GitHub API or `llms.txt`; course sources are Notion exports. To add a source: add it to the registry (+ the relevant grouping tuples), then run the matching workflow — no separate UI edit needed. Models live in `setup.AVAILABLE_MODELS` (default `google-genai:gemini-3.5-flash`; also Claude Haiku 4.5; OpenAI supported in code).
 
 ## Running locally
 
 ```bash
 uv sync && cp .env.example .env      # then fill in keys
-uv run -m scripts.api                # FastAPI backend (:8000; override AI_TUTOR_API_PORT/PORT)
+uv run -m app.api                # FastAPI backend (:8000; override AI_TUTOR_API_PORT/PORT)
 # Next.js frontend (needs the API running):
 cd frontend && npm install && cp .env.example .env.local && npm run dev   # :3000
 ```
 
-First start downloads the vector-db/KB bundle from HF if missing (`HF_TOKEN`). The frontend is a static export (`output: 'export'`); `npm run build` emits `frontend/out`, which `scripts/api.py` mounts at `/`.
+First start downloads the vector-db/KB bundle from HF if missing (`HF_TOKEN`). The frontend is a static export (`output: 'export'`); `npm run build` emits `frontend/out`, which `app/api.py` mounts at `/`.
 
 Test, lint & format: `uv run pytest` · `uv run ruff check .` · `uv run ruff format .`. CI (`.github/workflows/ci.yml`) enforces all three on PRs/pushes to `main`; for local auto-fix on commit, run `uv run pre-commit install` once.
 
@@ -88,7 +88,7 @@ uv run -m data.scraping_scripts.retire_source_workflow --sources KEY [--dry-run 
 
 ## Environment variables
 
-Chat runtime: `COHERE_API_KEY` (retrieval), one chat-model provider key (`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`), `HF_TOKEN` (first-start download). Optional: `MONGODB_URI` (logging), `LANGSMITH_*` (tracing), `AI_TUTOR_API_PORT`/`HOST`/`CORS_ALLOW_ORIGINS`, `AI_TUTOR_KB_DIR`, `NEXT_PUBLIC_AI_TUTOR_API_BASE_URL`. Data workflows also need `GITHUB_TOKEN` and `GEMINI_API_KEY`/`GOOGLE_API_KEY` (context generation). See `.env.example`.
+Chat runtime: `COHERE_API_KEY` (retrieval), one chat-model provider key (`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`), `HF_TOKEN` (first-start download). Optional: `LANGSMITH_*` (tracing), `AI_TUTOR_API_PORT`/`HOST`/`CORS_ALLOW_ORIGINS`, `AI_TUTOR_KB_DIR`, `NEXT_PUBLIC_AI_TUTOR_API_BASE_URL`. Data workflows also need `GITHUB_TOKEN` and `GEMINI_API_KEY`/`GOOGLE_API_KEY` (context generation). See `.env.example`.
 
 ## Deployment
 
@@ -97,7 +97,7 @@ Both HF Spaces run the same image (`Dockerfile`: FastAPI + Next.js static export
 - **Dev — `ai-tutor`** (private): `.github/workflows/sync-to-hf.yml` force-pushes on every push to `main`. Verify changes here first.
 - **Prod — `ai-tutor-chatbot`** (public): `.github/workflows/deploy-prod-to-hf.yml`, **manual trigger only** (Actions tab → "Deploy prod to Hugging Face" → Run workflow).
 
-Both Spaces need the same runtime secrets (`COHERE_API_KEY`, model provider key, `HF_TOKEN`, optional `LANGSMITH_*`/`MONGODB_URI`) configured in their HF settings.
+Both Spaces need the same runtime secrets (`COHERE_API_KEY`, model provider key, `HF_TOKEN`, optional `LANGSMITH_*`) configured in their HF settings.
 
 ## Conventions
 

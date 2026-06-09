@@ -47,7 +47,7 @@ from data.scraping_scripts.source_registry import (
     required_data_files,
     source_output_files,
 )
-from scripts.chroma_rag import get_chunk_record_doc_id
+from app.chroma_rag import get_chunk_record_doc_id
 
 # Load environment variables from .env file
 load_dotenv()
@@ -291,7 +291,7 @@ import os
 import pickle
 import json
 from data.scraping_scripts.add_context_to_nodes import create_docs, process
-from scripts.chroma_rag import get_chunk_record_source
+from app.chroma_rag import get_chunk_record_source
 
 async def main():
     # First, get the list of sources being updated from the temp file

@@ -59,7 +59,7 @@ Start the FastAPI app in one terminal:
 uv run dotenv -f .env run -- env \
   AI_TUTOR_API_HOST=127.0.0.1 \
   AI_TUTOR_API_PORT=8000 \
-  python -m scripts.api
+  python -m app.api
 ```
 
 From another terminal, confirm the server is ready:

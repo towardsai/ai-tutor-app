@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 from huggingface_hub import hf_hub_download
 
 from data.scraping_scripts.hf_auth import HuggingFaceAuthError, validate_hf_access
-from scripts.chroma_rag import get_chunk_record_source
+from app.chroma_rag import get_chunk_record_source
 
 try:
     from data.scraping_scripts.source_registry import SOURCE_CONFIGS

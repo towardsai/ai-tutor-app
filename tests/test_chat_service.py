@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
-from scripts.chat_service import (
+from app.chat_service import (
     _claim_kb_command_budget,
     _clear_kb_command_budget,
     agent_run_config,
@@ -18,7 +18,7 @@ from scripts.chat_service import (
     sync_thread_with_history,
     stream_chat,
 )
-from scripts.chat_types import ChatRequest, ChatTurn, SourceMatch
+from app.chat_types import ChatRequest, ChatTurn, SourceMatch
 
 
 class FakeAgent:
@@ -160,17 +160,13 @@ class ChatServiceTestCase(unittest.TestCase):
         try:
             with (
                 patch(
-                    "scripts.chat_service.build_chat_model",
+                    "app.chat_service.build_chat_model",
                     # SummarizationMiddleware reads model._llm_type at init, so the
                     # stub needs that attribute (a bare object() would AttributeError).
                     return_value=types.SimpleNamespace(_llm_type="fake-chat-model"),
                 ),
-                patch(
-                    "scripts.chat_service.build_system_prompt", return_value="prompt"
-                ),
-                patch(
-                    "scripts.chat_service.create_agent", side_effect=fake_create_agent
-                ),
+                patch("app.chat_service.build_system_prompt", return_value="prompt"),
+                patch("app.chat_service.create_agent", side_effect=fake_create_agent),
             ):
                 with_web_tools = build_agent(
                     "google-genai:gemini-3.5-flash",
@@ -236,9 +232,7 @@ class ChatServiceTestCase(unittest.TestCase):
         )
         failing_retriever = MagicMock()
         failing_retriever.search.side_effect = RuntimeError("cohere 500 boom")
-        with patch(
-            "scripts.chat_service.get_retriever", return_value=failing_retriever
-        ):
+        with patch("app.chat_service.get_retriever", return_value=failing_retriever):
             result = retrieve_tutor_context.func(query="What is RAG?", runtime=runtime)
         # The turn survives with a soft fallback instead of a raised error...
         self.assertIn("temporarily unavailable", result)
@@ -365,10 +359,10 @@ class ChatServiceTestCase(unittest.TestCase):
             return shell_match if "raw/docs/peft/lora.md" in reference else None
 
         with (
-            patch("scripts.chat_service.build_agent", return_value=agent),
-            patch("scripts.chat_service.new_thread_id", return_value="thread_rg"),
+            patch("app.chat_service.build_agent", return_value=agent),
+            patch("app.chat_service.new_thread_id", return_value="thread_rg"),
             patch(
-                "scripts.chat_service.resolve_manifest_reference",
+                "app.chat_service.resolve_manifest_reference",
                 side_effect=fake_resolve_manifest_reference,
             ),
         ):
@@ -401,7 +395,7 @@ class ChatServiceTestCase(unittest.TestCase):
             ]
         )
 
-        with patch("scripts.chat_service.new_thread_id", return_value="thread_regen"):
+        with patch("app.chat_service.new_thread_id", return_value="thread_regen"):
             active_thread_id = sync_thread_with_history(agent, "thread_0", ())
 
         self.assertEqual(active_thread_id, "thread_regen")
@@ -419,7 +413,7 @@ class ChatServiceTestCase(unittest.TestCase):
             ChatTurn(role="assistant", content="Use retrieval and a model."),
         )
 
-        with patch("scripts.chat_service.new_thread_id", return_value="thread_edit"):
+        with patch("app.chat_service.new_thread_id", return_value="thread_edit"):
             active_thread_id = sync_thread_with_history(
                 agent,
                 "thread_0",

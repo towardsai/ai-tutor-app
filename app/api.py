@@ -517,7 +517,7 @@ else:
 
 if __name__ == "__main__":
     uvicorn.run(
-        "scripts.api:app",
+        "app.api:app",
         host=parse_bind_host(),
         port=parse_bind_port(),
         reload=False,

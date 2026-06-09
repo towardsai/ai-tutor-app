@@ -12,7 +12,7 @@ from data.scraping_scripts.source_registry import (
     ACTIVE_SOURCE_KEYS,
     CONTEXTUAL_NODES_PKL,
 )
-from scripts.chroma_rag import get_chunk_record_source
+from app.chroma_rag import get_chunk_record_source
 
 logger = logging.getLogger(__name__)
 

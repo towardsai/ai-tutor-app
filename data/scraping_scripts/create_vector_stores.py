@@ -27,7 +27,7 @@ try:
         vector_store_source_configs,
     )
     from data.scraping_scripts.add_context_to_nodes import create_docs, process
-    from scripts.chroma_rag import (
+    from app.chroma_rag import (
         DEFAULT_COHERE_EMBED_BATCH_SIZE,
         DEFAULT_EMBED_MODEL,
         BM25Index,
@@ -52,7 +52,7 @@ except ModuleNotFoundError:
         vector_store_source_configs,
     )
     from data.scraping_scripts.add_context_to_nodes import create_docs, process
-    from scripts.chroma_rag import (
+    from app.chroma_rag import (
         DEFAULT_COHERE_EMBED_BATCH_SIZE,
         DEFAULT_EMBED_MODEL,
         BM25Index,

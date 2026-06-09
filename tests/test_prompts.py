@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.prompts import build_system_prompt, load_kb_agents_instructions
+from app.prompts import build_system_prompt, load_kb_agents_instructions
 
 
 def test_build_system_prompt_includes_local_kb_agents_instructions(

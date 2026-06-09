@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from tenacity import retry, retry_if_exception, stop_after_attempt
 from tqdm.asyncio import tqdm
 
-from scripts.chroma_rag import (
+from app.chroma_rag import (
     ChunkRecord,
     build_chunk_records,
     format_chunk_for_retrieval,

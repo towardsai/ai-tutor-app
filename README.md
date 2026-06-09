@@ -54,13 +54,13 @@ The Next.js frontend in [frontend](./frontend) talks to the FastAPI backend.
 1. Start the Python API:
 
    ```bash
-   uv run -m scripts.api
+   uv run -m app.api
    ```
 
    If `8000` is already taken, bind another port instead:
 
    ```bash
-   AI_TUTOR_API_PORT=8001 uv run -m scripts.api
+   AI_TUTOR_API_PORT=8001 uv run -m app.api
    ```
 
 2. In a second terminal, install the frontend dependencies:

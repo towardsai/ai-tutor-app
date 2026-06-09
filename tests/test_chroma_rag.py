@@ -10,7 +10,7 @@ from unittest.mock import patch
 from data.scraping_scripts.add_context_to_nodes import process
 from data.scraping_scripts.create_vector_stores import write_retrieval_artifacts
 from llama_index.core import Document
-from scripts.chroma_rag import (
+from app.chroma_rag import (
     BM25Index,
     ChunkRecord,
     build_chunk_records,
