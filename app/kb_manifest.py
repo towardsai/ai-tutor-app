@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .chat_types import SourceMatch
-from .setup import COURSE_SOURCE_KEYS, KB_DIR, SOURCE_KEY_TO_LABEL
+from .config import COURSE_SOURCE_KEYS, KB_DIR, SOURCE_KEY_TO_LABEL
 
 KB_DOC_SCHEME_RE = re.compile(r"^kb://doc/(?P<doc_id>[^)\]\s]+)$")
 RAW_PATH_RE = re.compile(r"(?:data/kb/)?raw/[^\s)\]>,:]+?\.(?:mdx|md)")

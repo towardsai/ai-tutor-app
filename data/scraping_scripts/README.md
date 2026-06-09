@@ -189,7 +189,7 @@ places, both reading from the canonical template at
 
 - `data.scraping_scripts.update_kb_wiki.write_agents_md` — rewrites it during
   every `update_docs_workflow.py` run, before uploading to HuggingFace.
-- `app.setup.ensure_kb_agents_md` — rewrites it on every runtime startup,
+- `app.config.ensure_kb_agents_md` — rewrites it on every runtime startup,
   after `ensure_local_vector_db` downloads the snapshot. This catches the
   case where the HF snapshot has a stale AGENTS.md (e.g. uploaded before a
   template change landed in git) and ensures the live file always matches
@@ -207,7 +207,7 @@ place on startup either way).
   `data/all_sources_data.jsonl`) and `data.scraping_scripts.update_kb_wiki`.
 - **Uploaded** to `towardsai-tutors/ai-tutor-vector-db` by
   `data.scraping_scripts.upload_dbs_to_hf` (already includes `kb/**`).
-- **Downloaded** by `app.setup.ensure_local_vector_db` on the first
+- **Downloaded** by `app.config.ensure_local_vector_db` on the first
   chatbot start (or any start where the local KB is missing).
 
 Treat it the same way as `data/chroma-db-all_sources/`: never commit it,

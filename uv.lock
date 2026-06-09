@@ -22,7 +22,6 @@ dependencies = [
     { name = "google-genai" },
     { name = "hf-xet" },
     { name = "huggingface-hub" },
-    { name = "ipykernel" },
     { name = "langchain" },
     { name = "langchain-anthropic" },
     { name = "langchain-google-genai" },
@@ -41,6 +40,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
+    { name = "ipykernel" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "ruff" },
@@ -55,7 +55,6 @@ requires-dist = [
     { name = "google-genai" },
     { name = "hf-xet" },
     { name = "huggingface-hub" },
-    { name = "ipykernel" },
     { name = "langchain" },
     { name = "langchain-anthropic" },
     { name = "langchain-google-genai" },
@@ -74,6 +73,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx" },
+    { name = "ipykernel" },
     { name = "pre-commit" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "ruff", specifier = ">=0.15.10" },

@@ -23,7 +23,7 @@ from .chat_service import (
     warm_up_retriever,
 )
 from .chat_types import ChatEvent, ChatRequest, ChatTurn
-from .setup import (
+from .config import (
     AVAILABLE_MODELS,
     AVAILABLE_SOURCES,
     AVAILABLE_SOURCES_UI,

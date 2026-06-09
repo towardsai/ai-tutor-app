@@ -12,7 +12,6 @@ dependencies = [
     "google-genai",
     "hf-xet",
     "huggingface-hub",
-    "ipykernel",
     "langchain",
     "langchain-anthropic",
     "langchain-google-genai",
@@ -31,6 +30,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx",
+    "ipykernel",
     "pre-commit",
     "pytest>=9.0.3",
     "ruff>=0.15.10",

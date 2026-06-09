@@ -435,7 +435,7 @@ def update_ui_files(course_name: str) -> None:
         return
 
     logger.info(
-        "%s is configured in source_registry.py; no setup.py/main.py edits needed.",
+        "%s is configured in source_registry.py; no app-code edits needed.",
         course_name,
     )
 

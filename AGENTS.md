@@ -23,9 +23,9 @@ ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-confi
 | Hybrid retrieval | `app/chroma_rag.py` |
 | KB browsing sandbox + citation resolution | `app/kb_shell.py`, `app/kb_manifest.py` |
 | FastAPI server (`/api/chat`, `/api/tools`, `/healthz`) | `app/api.py` |
-| Paths, models, startup downloads | `app/setup.py` |
+| Paths, models, startup downloads | `app/config.py` |
 | **Sources — single source of truth** | `data/scraping_scripts/source_registry.py` |
-| Agent tracing (LangSmith) + server logging (stdlib `logging` → stdout) | `app/agent_tracing.py`, `app/setup.py` |
+| Agent tracing (LangSmith) + server logging (stdlib `logging` → stdout) | `app/agent_tracing.py`, `app/config.py` |
 | Data pipeline / workflows (deep guide) | `data/scraping_scripts/README.md` |
 | KB design + wiki maintainer workflow (deep guide) | `data/kb/MAINTAINER.md` |
 
@@ -59,7 +59,7 @@ Runtime guidance the agent follows is in `data/kb/AGENTS.md` (injected into the 
 
 ## Sources & config
 
-`data/scraping_scripts/source_registry.py` is the **single source of truth** for sources (`SOURCE_CONFIGS`, key groupings, UI labels, defaults); `app/setup.py` re-exports them and the frontend derives the picker from it (via `/api/tools`). Docs sources ingest via the GitHub API or `llms.txt`; course sources are Notion exports. To add a source: add it to the registry (+ the relevant grouping tuples), then run the matching workflow — no separate UI edit needed. Models live in `setup.AVAILABLE_MODELS` (default `google-genai:gemini-3.5-flash`; also Claude Haiku 4.5; OpenAI supported in code).
+`data/scraping_scripts/source_registry.py` is the **single source of truth** for sources (`SOURCE_CONFIGS`, key groupings, UI labels, defaults); `app/config.py` re-exports them and the frontend derives the picker from it (via `/api/tools`). Docs sources ingest via the GitHub API or `llms.txt`; course sources are Notion exports. To add a source: add it to the registry (+ the relevant grouping tuples), then run the matching workflow — no separate UI edit needed. Models live in `config.AVAILABLE_MODELS` (default `google-genai:gemini-3.5-flash`; also Claude Haiku 4.5; OpenAI supported in code).
 
 ## Running locally
 
@@ -109,4 +109,4 @@ Both Spaces need the same runtime secrets (`COHERE_API_KEY`, model provider key,
 - **Context generation uses Gemini**; embeddings/rerank use **Cohere**; the chat model is provider-configurable. OpenAI is required only when explicitly selected.
 - `data/kb/` and `data/chroma-db-all_sources/` are build artifacts — never commit or hand-edit; regenerate or re-download.
 - Two `AGENTS.md` files: this root one (repo dev guidance) vs `data/kb/AGENTS.md` (generated runtime KB rules).
-- Source config lives in `source_registry.py`, not `setup.py` / `process_md_files.py` (older docs were wrong).
+- Source config lives in `source_registry.py`, not `app/config.py` / `process_md_files.py` (older docs were wrong).
