@@ -1059,10 +1059,25 @@ def save_bm25_index(index: BM25Index, output_file: str) -> None:
 def load_bm25_index(path: str) -> BM25Index | None:
     if not os.path.exists(path):
         return None
-    with open(path, "rb") as handle:
-        index = pickle.load(handle)
+    try:
+        with open(path, "rb") as handle:
+            index = pickle.load(handle)
+    except Exception as exc:
+        logger.warning(
+            "Failed to load BM25 index; falling back to dense-only retrieval. "
+            "Rebuild it with create_vector_stores --skip-dense-embeddings. "
+            "path=%s error=%s",
+            path,
+            exc,
+        )
+        return None
     if isinstance(index, BM25Index):
         return index
+    logger.warning(
+        "BM25 index has unexpected type %s; falling back to dense-only retrieval. path=%s",
+        type(index).__name__,
+        path,
+    )
     return None
 
 
