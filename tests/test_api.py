@@ -325,11 +325,15 @@ def live_api_server() -> Iterator[int]:
         thread.join(timeout=10)
 
 
-def live_chat_payload(messages: list[dict], thread_id: str = "") -> dict:
+def live_chat_payload(
+    messages: list[dict],
+    thread_id: str = "",
+    enabled_tools: list[str] | None = None,
+) -> dict:
     return {
         "messages": messages,
         "sourceKeys": ["peft", "transformers"],
-        "enabledTools": [],
+        "enabledTools": enabled_tools or [],
         "model": os.getenv("LIVE_API_E2E_MODEL", "google-genai:gemini-3.5-flash"),
         "includeReasoning": False,
         "threadId": thread_id,
@@ -533,6 +537,40 @@ def test_live_api_edit_forks_thread_from_checkpoint() -> None:
         assert edited_thread == thread_id, (
             f"edit branched instead of forking: {thread_id} -> {edited_thread}"
         )
+
+
+@LIVE_API_E2E
+def test_live_api_pasted_url_gets_source_card_with_url_context() -> None:
+    """The paste-a-URL flow must not lose its source card.
+
+    Gemini's url_context fetches never reach the stream (the library drops
+    url_context_metadata), so the pasted URL is synthesized as web evidence;
+    whether the model cites it inline or cites nothing, a source card for
+    the page must surface.
+    """
+    require_live_api_e2e_prereqs()
+
+    page_url = "https://huggingface.co/docs/peft/index"
+    prompt = (
+        f"Read {page_url} and answer in two sentences: what is PEFT? "
+        "Cite that page inline in your answer."
+    )
+
+    with live_api_server() as port:
+        parts = post_live_api_chat(
+            port,
+            live_chat_payload(
+                [live_user_message(prompt)],
+                enabled_tools=["url_context"],
+            ),
+        )
+
+    assert "finish" in live_part_types(parts)
+    assert live_answer_text(parts)
+    sources = live_sources(parts)
+    assert any(source["url"] == page_url for source in sources), (
+        f"pasted URL missing from source cards: {sources}"
+    )
 
 
 @LIVE_API_E2E

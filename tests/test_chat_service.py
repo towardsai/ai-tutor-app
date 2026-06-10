@@ -22,6 +22,7 @@ from app.chat_service import (
     build_agent,
     checkpoint_messages_to_history,
     effective_tool_names,
+    extract_query_urls,
     resolve_answer_citations,
     retrieve_tutor_context,
     sync_thread_with_history,
@@ -103,6 +104,20 @@ class FakeStreamingAgent(FakeAgent):
                     ]
                 }
             },
+        }
+
+
+class FakeAnswerAgent(FakeAgent):
+    """Agent that streams nothing and answers with one final AI message."""
+
+    def __init__(self, answer: str):
+        super().__init__([])
+        self.answer = answer
+
+    async def astream(self, *args, **kwargs):
+        yield {
+            "type": "updates",
+            "data": {"model": {"messages": [AIMessage(content=self.answer)]}},
         }
 
 
@@ -709,6 +724,175 @@ class ChatServiceTestCase(unittest.TestCase):
                 ),
             ),
         )
+
+    def test_build_agent_cache_busts_when_kb_instructions_appear(self) -> None:
+        build_agent.cache_clear()
+        created_agents = []
+
+        def fake_create_agent(**kwargs):
+            agent = types.SimpleNamespace(kwargs=kwargs)
+            created_agents.append(agent)
+            return agent
+
+        try:
+            with (
+                patch(
+                    "app.chat_service.build_chat_model",
+                    return_value=types.SimpleNamespace(_llm_type="fake-chat-model"),
+                ),
+                patch("app.chat_service.create_agent", side_effect=fake_create_agent),
+            ):
+                degraded = build_agent(
+                    "google-genai:gemini-3.5-flash",
+                    enabled_tools=(),
+                    include_thoughts=False,
+                    kb_agents_instructions="",
+                )
+                healthy = build_agent(
+                    "google-genai:gemini-3.5-flash",
+                    enabled_tools=(),
+                    include_thoughts=False,
+                    kb_agents_instructions="# KB rules marker",
+                )
+                healthy_again = build_agent(
+                    "google-genai:gemini-3.5-flash",
+                    enabled_tools=(),
+                    include_thoughts=False,
+                    kb_agents_instructions="# KB rules marker",
+                )
+        finally:
+            build_agent.cache_clear()
+
+        # A degraded (no KB instructions) build must not pin the cache entry.
+        self.assertIsNot(degraded, healthy)
+        self.assertIs(healthy, healthy_again)
+        self.assertNotIn(
+            "## Local KB Instructions", created_agents[0].kwargs["system_prompt"]
+        )
+        self.assertIn("# KB rules marker", created_agents[1].kwargs["system_prompt"])
+
+    def test_stream_chat_passes_ensured_kb_instructions_to_build_agent(self) -> None:
+        agent = FakeAnswerAgent("Answer.")
+        request = ChatRequest(
+            query="hello",
+            source_keys=("peft",),
+            model_name="google-genai:gemini-3.5-flash",
+            include_reasoning=False,
+            enabled_tools=(),
+        )
+        self.addCleanup(_drop_thread_record, "thread_kbwire")
+
+        async def collect_events():
+            return [event async for event in stream_chat(request)]
+
+        with (
+            patch(
+                "app.chat_service.build_agent", return_value=agent
+            ) as build_agent_mock,
+            patch(
+                "app.chat_service.ensure_kb_agents_instructions",
+                return_value="# Ensured rules",
+            ),
+            patch("app.chat_service.new_thread_id", return_value="thread_kbwire"),
+        ):
+            asyncio.run(collect_events())
+
+        self.assertEqual(
+            build_agent_mock.call_args.kwargs["kb_agents_instructions"],
+            "# Ensured rules",
+        )
+
+    def test_extract_query_urls_dedupes_and_trims_punctuation(self) -> None:
+        self.assertEqual(
+            extract_query_urls(
+                "Read https://example.com/post, then https://example.com/post "
+                "and (https://other.example/page)."
+            ),
+            ["https://example.com/post", "https://other.example/page"],
+        )
+        self.assertEqual(extract_query_urls("no links here"), [])
+
+    def run_answer_stream(
+        self,
+        answer: str,
+        *,
+        query: str,
+        enabled_tools: tuple[str, ...],
+        thread_id: str,
+    ) -> list:
+        agent = FakeAnswerAgent(answer)
+        request = ChatRequest(
+            query=query,
+            source_keys=("peft",),
+            model_name="google-genai:gemini-3.5-flash",
+            include_reasoning=False,
+            enabled_tools=enabled_tools,
+        )
+        self.addCleanup(_drop_thread_record, thread_id)
+
+        async def collect_events():
+            return [event async for event in stream_chat(request)]
+
+        with (
+            patch("app.chat_service.build_agent", return_value=agent),
+            patch("app.chat_service.new_thread_id", return_value=thread_id),
+            patch("app.chat_service.resolve_manifest_reference", return_value=None),
+        ):
+            events = asyncio.run(collect_events())
+        return [event for event in events if event.type == "source_match"]
+
+    def test_cited_pasted_url_resolves_via_url_context_evidence(self) -> None:
+        sources = self.run_answer_stream(
+            "Summary. See [the post](https://example.com/post).",
+            query="Read https://example.com/post and summarize it",
+            enabled_tools=("url_context",),
+            thread_id="thread_urlctx",
+        )
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].data["source_key"], "url_context")
+        self.assertEqual(sources[0].data["url"], "https://example.com/post")
+        self.assertEqual(sources[0].data["group"], "web")
+
+    def test_unmatched_web_citation_kept_only_for_url_context(self) -> None:
+        # Only url_context fetches invisibly; the other web tools report
+        # their results into evidence, so an unmatched citation there still
+        # means a memory link and stays gated.
+        answer = "From [some site](https://unsourced.example/page)."
+
+        kept = self.run_answer_stream(
+            answer,
+            query="What does that site say?",
+            enabled_tools=("url_context",),
+            thread_id="thread_webkeep",
+        )
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].data["source_key"], "web")
+        self.assertEqual(kept[0].data["group"], "web")
+
+        for enabled_tools, thread_id in (
+            (("web_search",), "thread_webdrop_search"),
+            ((), "thread_webdrop_none"),
+        ):
+            dropped = self.run_answer_stream(
+                answer,
+                query="What does that site say?",
+                enabled_tools=enabled_tools,
+                thread_id=thread_id,
+            )
+            self.assertEqual(dropped, [])
+
+    def test_pasted_url_surfaces_in_fallback_when_nothing_cited(self) -> None:
+        sources = self.run_answer_stream(
+            "Here is a summary with no inline citations.",
+            query="Summarize https://example.com/post please",
+            enabled_tools=("url_context",),
+            thread_id="thread_urlfallback",
+        )
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].data["source_key"], "url_context")
+        self.assertEqual(sources[0].data["url"], "https://example.com/post")
 
     def test_idle_threads_evicted_with_checkpoints_and_records(self) -> None:
         self.addCleanup(_drop_thread_record, "thread_stale")

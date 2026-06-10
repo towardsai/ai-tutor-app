@@ -1,6 +1,7 @@
 import logging
 import os
 from pathlib import Path
+from threading import Lock
 
 from dotenv import load_dotenv
 
@@ -44,6 +45,7 @@ VECTOR_DB_DIR = "data/chroma-db-all_sources"
 VECTOR_COLLECTION_NAME = "chroma-db-all_sources"
 DOCUMENT_DICT_PATH = f"{VECTOR_DB_DIR}/document_dict_all_sources.pkl"
 BM25_INDEX_PATH = f"{VECTOR_DB_DIR}/bm25_index_all_sources.pkl"
+CHROMA_SQLITE_PATH = f"{VECTOR_DB_DIR}/chroma.sqlite3"
 KB_DIR = "data/kb"
 KB_MANIFEST_PATH = f"{KB_DIR}/generated/corpus_manifest.jsonl"
 KB_INDEX_PATH = f"{KB_DIR}/wiki/index.md"
@@ -58,42 +60,80 @@ AVAILABLE_MODELS: tuple[dict[str, str], ...] = (
 )
 
 
+_BUNDLE_LOCK = Lock()
+_BUNDLE_READY = False
+_KB_AGENTS_WRITE_LOCK = Lock()
+
+
+def _bundle_complete() -> bool:
+    required = (
+        VECTOR_DB_DIR,
+        CHROMA_SQLITE_PATH,
+        DOCUMENT_DICT_PATH,
+        BM25_INDEX_PATH,
+        KB_MANIFEST_PATH,
+        KB_INDEX_PATH,
+    )
+    return all(os.path.exists(path) for path in required)
+
+
 def ensure_kb_agents_md() -> None:
-    """Overwrite data/kb/AGENTS.md from the in-git template on every startup."""
+    """Write data/kb/AGENTS.md from the in-git template.
+
+    Atomic (temp file + os.replace, so a concurrent prompt build never reads
+    a truncated file) and skipped when the content already matches.
+    """
     template_path = Path(KB_AGENTS_TEMPLATE_PATH)
     if not template_path.exists():
         return
+    content = template_path.read_text(encoding="utf-8")
     target = Path(KB_AGENTS_PATH)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(template_path.read_text(encoding="utf-8"), encoding="utf-8")
+    with _KB_AGENTS_WRITE_LOCK:
+        try:
+            if target.read_text(encoding="utf-8") == content:
+                return
+        except OSError:
+            pass
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = target.with_name(target.name + ".tmp")
+        tmp_path.write_text(content, encoding="utf-8")
+        os.replace(tmp_path, target)
 
 
 def ensure_local_vector_db() -> None:
-    needs_download = not (
-        os.path.exists(VECTOR_DB_DIR)
-        and os.path.exists(DOCUMENT_DICT_PATH)
-        and os.path.exists(KB_MANIFEST_PATH)
-        and os.path.exists(KB_INDEX_PATH)
-    )
-    if needs_download:
-        logger.warning(
-            "Vector database does not exist locally, downloading from Hugging Face"
-        )
-        from huggingface_hub import snapshot_download
+    """Make sure the vector-db/KB bundle and AGENTS.md exist locally.
 
-        # Mute httpx's per-file flood during the cold-start download only.
-        httpx_logger = logging.getLogger("httpx")
-        previous_level = httpx_logger.level
-        httpx_logger.setLevel(logging.WARNING)
-        try:
-            snapshot_download(
-                repo_id="towardsai-tutors/ai-tutor-vector-db",
-                local_dir="data",
-                repo_type="dataset",
+    A flag check once the bundle has been verified, so per-tool-call use is
+    effectively free; the verification and download run single-flight under
+    a lock so parallel first-turn tool calls cannot race two downloads.
+    """
+    global _BUNDLE_READY
+    if _BUNDLE_READY:
+        return
+    with _BUNDLE_LOCK:
+        if _BUNDLE_READY:
+            return
+        if not _bundle_complete():
+            logger.warning(
+                "Vector database missing or incomplete locally, downloading "
+                "from Hugging Face"
             )
-        finally:
-            httpx_logger.setLevel(previous_level)
-    ensure_kb_agents_md()
+            from huggingface_hub import snapshot_download
+
+            # Mute httpx's per-file flood during the cold-start download only.
+            httpx_logger = logging.getLogger("httpx")
+            previous_level = httpx_logger.level
+            httpx_logger.setLevel(logging.WARNING)
+            try:
+                snapshot_download(
+                    repo_id="towardsai-tutors/ai-tutor-vector-db",
+                    local_dir="data",
+                    repo_type="dataset",
+                )
+            finally:
+                httpx_logger.setLevel(previous_level)
+        ensure_kb_agents_md()
+        _BUNDLE_READY = _bundle_complete() and os.path.exists(KB_AGENTS_PATH)
 
 
 __all__ = [

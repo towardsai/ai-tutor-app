@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import time
 from dataclasses import dataclass
@@ -44,7 +45,7 @@ from .kb_manifest import (
     source_match_key,
     source_match_payload,
 )
-from .prompts import build_system_prompt
+from .prompts import build_system_prompt, ensure_kb_agents_instructions
 from .provider_events import (
     GoogleSearchActivity,
     extract_anthropic_source_matches,
@@ -813,7 +814,11 @@ def build_agent(
     model_name: str,
     enabled_tools: tuple[str, ...] = (),
     include_thoughts: bool = False,
+    kb_agents_instructions: str | None = None,
 ):
+    # kb_agents_instructions is part of the cache key on purpose: an agent
+    # built before data/kb/AGENTS.md existed must not pin its degraded
+    # system prompt for the process lifetime.
     model = build_chat_model(model_name, include_thoughts=include_thoughts)
     tools: list[Any] = [
         retrieve_tutor_context,
@@ -867,7 +872,9 @@ def build_agent(
     return create_agent(
         model=model,
         tools=tools,
-        system_prompt=build_system_prompt(model_name, enabled_tools),
+        system_prompt=build_system_prompt(
+            model_name, enabled_tools, kb_agents_instructions
+        ),
         context_schema=AppContext,
         checkpointer=CHECKPOINTER,
         middleware=middleware,
@@ -897,6 +904,41 @@ def effective_tool_names(
         if "web_fetch" in enabled:
             names.append("web_fetch")
     return tuple(names)
+
+
+_QUERY_URL_PATTERN = re.compile(r"https?://[^\s<>()\[\]\"']+")
+
+
+def extract_query_urls(text: str) -> list[str]:
+    """Pull http(s) URLs out of a user query, in order, deduped."""
+    urls: list[str] = []
+    for raw_url in _QUERY_URL_PATTERN.findall(text):
+        url = raw_url.rstrip(".,;:!?")
+        if url and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def url_context_evidence(query: str) -> list[SourceMatch]:
+    """Evidence for URLs the user pasted when `url_context` is enabled.
+
+    langchain-google-genai (4.2.4) never surfaces Gemini's
+    `url_context_metadata`, so fetches are invisible to the stream. Treating
+    pasted URLs as web evidence at least lets the model's citation of a
+    fetched page resolve to a source card instead of being dropped.
+    """
+    return [
+        SourceMatch(
+            doc_id=f"url_context::{url}",
+            title=url,
+            url=url,
+            source_key="url_context",
+            source_label="Web page",
+            score=1.0,
+            group="web",
+        )
+        for url in extract_query_urls(query)
+    ]
 
 
 def agent_run_config(
@@ -958,12 +1000,16 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     # decide whether consecutive deltas need a paragraph break between them.
     reasoning_deltas_are_blocks = is_google_genai_model(request.model_name)
     google_search = GoogleSearchActivity(message_id, web_evidence)
+    effective_tools = effective_tool_names(request.model_name, request.enabled_tools)
+    if "url_context" in effective_tools:
+        _record_evidence(web_evidence, url_context_evidence(request.query))
 
     logger.info("Running query: %s", request.query)
     agent = build_agent(
         request.model_name,
         enabled_tools=tuple(request.enabled_tools),
         include_thoughts=include_reasoning,
+        kb_agents_instructions=ensure_kb_agents_instructions(),
     )
     _evict_idle_threads()
     active_thread_id, fork_checkpoint_id = sync_thread_with_history(
@@ -1200,6 +1246,11 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
             retrieval_evidence=retrieval_evidence,
             shell_evidence=shell_evidence,
             web_evidence=web_evidence,
+            # url_context is the only tool whose fetches are invisible to the
+            # stream (the other web tools report results into web_evidence),
+            # so only then is a cited-but-unmatched URL plausibly a fetched
+            # page rather than a memory link: keep it as a low-trust Web chip.
+            keep_unresolved_sources="url_context" in effective_tools,
         )
     )
 

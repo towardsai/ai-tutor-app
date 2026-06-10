@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 BASE_PROMPT_HEADER = """You are an AI teacher for applied AI, LLM, RAG, and Python topics.
@@ -183,7 +186,36 @@ def load_kb_agents_instructions(path: Path | None = None) -> str:
         return ""
 
 
-def build_system_prompt(model_name: str, enabled_tools: tuple[str, ...]) -> str:
+def ensure_kb_agents_instructions() -> str:
+    """Load the Local KB Instructions, materializing the file if missing.
+
+    `data/kb/AGENTS.md` is generated from an in-git template, so it can be
+    written without the KB bundle download. Returns "" (with a loud log)
+    only when even the template is unavailable.
+    """
+    instructions = load_kb_agents_instructions()
+    if instructions:
+        return instructions
+    try:
+        from .config import ensure_kb_agents_md
+
+        ensure_kb_agents_md()
+    except OSError as exc:
+        logger.warning("Could not materialize KB agent instructions: %s", exc)
+    instructions = load_kb_agents_instructions()
+    if not instructions:
+        logger.warning(
+            "KB agent instructions unavailable; the system prompt will omit "
+            "the Local KB section for this request."
+        )
+    return instructions
+
+
+def build_system_prompt(
+    model_name: str,
+    enabled_tools: tuple[str, ...],
+    kb_agents_instructions: str | None = None,
+) -> str:
     provider = _provider_key(model_name)
     enabled = set(enabled_tools)
     tool_lines = [RETRIEVAL_TOOL_LINE, *KB_TOOL_LINES]
@@ -215,7 +247,8 @@ def build_system_prompt(model_name: str, enabled_tools: tuple[str, ...]) -> str:
             "course material. Combine tools when it helps (e.g. retrieve corpus\n"
             "context, then search the web for the latest update)."
         )
-    kb_agents_instructions = load_kb_agents_instructions()
+    if kb_agents_instructions is None:
+        kb_agents_instructions = load_kb_agents_instructions()
     if kb_agents_instructions:
         parts.append(
             "## Local KB Instructions\n\n"
