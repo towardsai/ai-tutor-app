@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shlex
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from threading import Lock
@@ -63,6 +64,27 @@ from .config import (
 logger = logging.getLogger(__name__)
 
 CHECKPOINTER = InMemorySaver()
+# Visible transcript per thread, recorded as each turn finishes streaming.
+# The checkpointed messages stop mirroring the visible transcript once
+# SummarizationMiddleware rewrites thread state, so thread reuse is decided
+# against this record first; the checkpoint-derived transcript is only a
+# fallback for threads with no record (e.g. created before a restart).
+_THREAD_TRANSCRIPTS: dict[str, tuple[ChatTurn, ...]] = {}
+# Fork points per thread: visible turn count -> checkpoint_id of the thread
+# state at that turn boundary. When the client edits or regenerates, its
+# history is an exact prefix of the tracked transcript; running the agent
+# with that checkpoint_id forks the thread from the prefix's real state
+# (tool outputs and summaries included) instead of a plain-text rebuild.
+_THREAD_FORK_POINTS: dict[str, dict[int, str]] = {}
+# Threads live in process memory only, so idle ones (abandoned tabs, "New
+# chat") must be evicted or the saver grows forever. Eviction is graceful:
+# if the client comes back, the request restores its visible history into
+# the same thread id as plain text.
+THREAD_IDLE_TTL_SECONDS = 60.0 * 60.0
+_THREAD_SWEEP_INTERVAL_SECONDS = 5.0 * 60.0
+_THREAD_LAST_USED: dict[str, float] = {}
+_THREAD_SWEEP_STATE = {"last": 0.0}
+_THREAD_TRANSCRIPT_LOCK = Lock()
 _RETRIEVER_INIT_LOCK = Lock()
 DEFAULT_KB_COMMAND_LIMIT = 20
 _KB_COMMAND_COUNTS: dict[str, int] = {}
@@ -93,6 +115,93 @@ def _clear_kb_command_budget(session_id: str) -> None:
         return
     with _KB_COMMAND_COUNT_LOCK:
         _KB_COMMAND_COUNTS.pop(session_id, None)
+
+
+def _get_thread_transcript(thread_id: str) -> tuple[ChatTurn, ...] | None:
+    with _THREAD_TRANSCRIPT_LOCK:
+        return _THREAD_TRANSCRIPTS.get(thread_id)
+
+
+def _record_thread_transcript(thread_id: str, transcript: tuple[ChatTurn, ...]) -> None:
+    with _THREAD_TRANSCRIPT_LOCK:
+        _THREAD_TRANSCRIPTS[thread_id] = transcript
+
+
+def _get_fork_point(thread_id: str, turn_count: int) -> str:
+    with _THREAD_TRANSCRIPT_LOCK:
+        return _THREAD_FORK_POINTS.get(thread_id, {}).get(turn_count, "")
+
+
+def _record_fork_point(thread_id: str, turn_count: int, checkpoint_id: str) -> None:
+    if not checkpoint_id:
+        return
+    with _THREAD_TRANSCRIPT_LOCK:
+        _THREAD_FORK_POINTS.setdefault(thread_id, {})[turn_count] = checkpoint_id
+
+
+def _prune_fork_points(thread_id: str, keep_up_to: int) -> None:
+    """Forget fork points past a fork: they map turn counts of the abandoned
+    branch, and the new branch records its own as turns complete."""
+    with _THREAD_TRANSCRIPT_LOCK:
+        points = _THREAD_FORK_POINTS.get(thread_id)
+        if not points:
+            return
+        for turn_count in [count for count in points if count > keep_up_to]:
+            del points[turn_count]
+
+
+def _drop_thread_record(thread_id: str) -> None:
+    with _THREAD_TRANSCRIPT_LOCK:
+        _THREAD_TRANSCRIPTS.pop(thread_id, None)
+        _THREAD_FORK_POINTS.pop(thread_id, None)
+        _THREAD_LAST_USED.pop(thread_id, None)
+
+
+def _touch_thread(thread_id: str, now: float | None = None) -> None:
+    with _THREAD_TRANSCRIPT_LOCK:
+        _THREAD_LAST_USED[thread_id] = time.monotonic() if now is None else now
+
+
+def _evict_idle_threads(now: float | None = None, *, force: bool = False) -> list[str]:
+    """Delete checkpoints and records of threads idle past the TTL.
+
+    Called opportunistically per request; the actual scan runs at most once
+    per sweep interval unless ``force`` is set.
+    """
+    if now is None:
+        now = time.monotonic()
+    with _THREAD_TRANSCRIPT_LOCK:
+        if not force and now - _THREAD_SWEEP_STATE["last"] < (
+            _THREAD_SWEEP_INTERVAL_SECONDS
+        ):
+            return []
+        _THREAD_SWEEP_STATE["last"] = now
+        expired = [
+            thread_id
+            for thread_id, last_used in _THREAD_LAST_USED.items()
+            if now - last_used > THREAD_IDLE_TTL_SECONDS
+        ]
+        for thread_id in expired:
+            _THREAD_LAST_USED.pop(thread_id, None)
+            _THREAD_TRANSCRIPTS.pop(thread_id, None)
+            _THREAD_FORK_POINTS.pop(thread_id, None)
+    for thread_id in expired:
+        CHECKPOINTER.delete_thread(thread_id)
+    if expired:
+        logger.info("Evicted %d idle thread(s).", len(expired))
+    return expired
+
+
+def _latest_checkpoint_id(agent, thread_id: str) -> str:
+    state = agent.get_state(thread_config(thread_id))
+    config = getattr(state, "config", None) or {}
+    return str(config.get("configurable", {}).get("checkpoint_id", "") or "")
+
+
+def _seed_checkpoint_id(update_config: Any) -> str:
+    if not isinstance(update_config, dict):
+        return ""
+    return str(update_config.get("configurable", {}).get("checkpoint_id", "") or "")
 
 
 @lru_cache(maxsize=1)
@@ -241,18 +350,26 @@ def message_content_to_text(content: Any) -> str:
 
 
 def normalize_history(history: tuple[ChatTurn, ...]) -> tuple[ChatTurn, ...]:
-    """Keep user/assistant turns, trimming assistant whitespace so incoming
-    history compares equal to checkpoint-derived history."""
+    """Keep user/assistant turns, trimming whitespace so incoming history
+    compares equal to checkpoint-derived history."""
     normalized: list[ChatTurn] = []
     for turn in history:
         if turn.role not in {"user", "assistant"}:
             continue
-        content = turn.content.strip() if turn.role == "assistant" else turn.content
-        normalized.append(ChatTurn(role=turn.role, content=content))
+        normalized.append(ChatTurn(role=turn.role, content=turn.content.strip()))
     return tuple(normalized)
 
 
 def checkpoint_messages_to_history(messages: list[BaseMessage]) -> tuple[ChatTurn, ...]:
+    """Collapse a checkpointed message list into the user-visible transcript.
+
+    A tool-using turn is checkpointed as several AI messages (one per
+    tool-call round, then the final answer) with ToolMessages in between,
+    while the frontend renders the whole turn as a single assistant message
+    whose text parts join without a separator. Mirror that here, merging
+    each run of AI messages into one assistant turn before trimming, so the
+    result compares equal to the history the client sends back.
+    """
     history: list[ChatTurn] = []
     for message in messages:
         message_type = getattr(message, "type", None)
@@ -260,13 +377,12 @@ def checkpoint_messages_to_history(messages: list[BaseMessage]) -> tuple[ChatTur
             history.append(ChatTurn("user", message_content_to_text(message.content)))
             continue
         if message_type == "ai":
-            history.append(
-                ChatTurn(
-                    "assistant",
-                    message_content_to_text(message.content).strip(),
-                )
-            )
-    return tuple(history)
+            text = message_content_to_text(message.content)
+            if history and history[-1].role == "assistant":
+                history[-1] = ChatTurn("assistant", history[-1].content + text)
+            else:
+                history.append(ChatTurn("assistant", text))
+    return tuple(ChatTurn(turn.role, turn.content.strip()) for turn in history)
 
 
 def history_to_langgraph_messages(history: tuple[ChatTurn, ...]) -> list[BaseMessage]:
@@ -291,31 +407,65 @@ def sync_thread_with_history(
     agent,
     thread_id: str,
     history: tuple[ChatTurn, ...],
-) -> str:
-    state = agent.get_state(thread_config(thread_id))
-    checkpoint_history = checkpoint_messages_to_history(
-        state.values.get("messages", [])
-    )
+) -> tuple[str, str]:
+    """Pick the thread (and optional fork checkpoint) for this request.
 
-    if checkpoint_history == history:
-        return thread_id
+    Returns ``(thread_id, fork_checkpoint_id)``. A non-empty checkpoint id
+    means the run must fork the thread from that checkpoint (LangGraph
+    time travel) instead of continuing from its latest state.
+    """
+    tracked = _get_thread_transcript(thread_id)
+    if tracked == history:
+        # The client sent back exactly what this thread streamed to it, so
+        # continue the thread even when summarization or context editing has
+        # rewritten the checkpointed messages.
+        return thread_id, ""
 
-    if not checkpoint_history:
-        restored_messages = history_to_langgraph_messages(history)
-        if restored_messages:
-            agent.update_state(
-                thread_config(thread_id), {"messages": restored_messages}
-            )
-        return thread_id
+    if tracked is None:
+        state = agent.get_state(thread_config(thread_id))
+        checkpoint_history = checkpoint_messages_to_history(
+            state.values.get("messages", [])
+        )
 
+        if checkpoint_history == history:
+            return thread_id, ""
+
+        if not checkpoint_history:
+            restored_messages = history_to_langgraph_messages(history)
+            if restored_messages:
+                update_config = agent.update_state(
+                    thread_config(thread_id), {"messages": restored_messages}
+                )
+                _record_fork_point(
+                    thread_id, len(history), _seed_checkpoint_id(update_config)
+                )
+            return thread_id, ""
+    elif history == tracked[: len(history)]:
+        # The client kept an exact prefix of this thread's transcript (edit
+        # or regenerate). Fork from the checkpoint at that turn boundary so
+        # the prefix keeps its real state: tool outputs, summaries, etc.
+        fork_checkpoint_id = _get_fork_point(thread_id, len(history))
+        if fork_checkpoint_id:
+            _prune_fork_points(thread_id, keep_up_to=len(history))
+            return thread_id, fork_checkpoint_id
+
+    # No checkpoint maps to the history the client kept: branch to a fresh
+    # thread seeded with the visible messages as plain text.
     branched_thread_id = new_thread_id()
     restored_messages = history_to_langgraph_messages(history)
     if restored_messages:
-        agent.update_state(
+        update_config = agent.update_state(
             thread_config(branched_thread_id),
             {"messages": restored_messages},
         )
-    return branched_thread_id
+        _record_fork_point(
+            branched_thread_id, len(history), _seed_checkpoint_id(update_config)
+        )
+    # The client follows thread_started to the branched id, so the superseded
+    # thread is unreachable; drop it or it lives in the in-memory saver forever.
+    CHECKPOINTER.delete_thread(thread_id)
+    _drop_thread_record(thread_id)
+    return branched_thread_id, ""
 
 
 def collect_retrieval_source_matches(payload: str) -> list[SourceMatch]:
@@ -815,11 +965,18 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
         enabled_tools=tuple(request.enabled_tools),
         include_thoughts=include_reasoning,
     )
-    active_thread_id = sync_thread_with_history(
+    _evict_idle_threads()
+    active_thread_id, fork_checkpoint_id = sync_thread_with_history(
         agent,
         request.thread_id.strip() or new_thread_id(),
         normalized_history,
     )
+    _touch_thread(active_thread_id)
+    run_config = agent_run_config(request, active_thread_id, message_id)
+    if fork_checkpoint_id:
+        # Time travel: run from the checkpoint matching the history the
+        # client kept; the turns after it become an abandoned branch.
+        run_config["configurable"]["checkpoint_id"] = fork_checkpoint_id
 
     yield ChatEvent("thread_started", {"thread_id": active_thread_id})
     yield ChatEvent("message_started", {"message_id": message_id})
@@ -827,7 +984,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     try:
         async for chunk in agent.astream(
             {"messages": [{"role": "user", "content": request.query}]},
-            agent_run_config(request, active_thread_id, message_id),
+            run_config,
             context=AppContext(
                 allowed_sources=request.source_keys,
                 kb_session_id=message_id,
@@ -1017,12 +1174,26 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 completed_answer = message_content_to_text(message.content)
     finally:
         _clear_kb_command_budget(message_id)
+        answer = "".join(answer_chunks).strip() or completed_answer.strip()
+        # Record the turn as the client renders it (including a partial answer
+        # from an aborted stream) so the next request can be matched back to
+        # this thread even after summarization rewrites the checkpoint.
+        transcript = normalized_history + (
+            ChatTurn("user", request.query.strip()),
+            ChatTurn("assistant", answer),
+        )
+        _record_thread_transcript(active_thread_id, transcript)
+        _record_fork_point(
+            active_thread_id,
+            len(transcript),
+            _latest_checkpoint_id(agent, active_thread_id),
+        )
+        _touch_thread(active_thread_id)
 
     search_completed = google_search.completed_event()
     if search_completed:
         yield search_completed
 
-    answer = "".join(answer_chunks).strip() or completed_answer.strip()
     matched_sources = list(
         resolve_answer_citations(
             answer,

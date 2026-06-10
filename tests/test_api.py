@@ -9,6 +9,8 @@ import subprocess
 import threading
 import time
 import unittest
+from contextlib import contextmanager
+from typing import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -289,7 +291,8 @@ def require_live_api_e2e_prereqs() -> None:
         pytest.skip("data/kb artifacts must exist before running the live smoke test.")
 
 
-def run_live_api_chat(prompt: str) -> list[dict]:
+@contextmanager
+def live_api_server() -> Iterator[int]:
     port = free_port()
     config = uvicorn.Config(
         app,
@@ -316,47 +319,72 @@ def run_live_api_chat(prompt: str) -> list[dict]:
             time.sleep(0.25)
         else:
             pytest.fail("API server did not become healthy")
-
-        payload = {
-            "messages": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {
-                            "type": "text",
-                            "text": prompt,
-                        }
-                    ],
-                }
-            ],
-            "sourceKeys": ["peft", "transformers"],
-            "enabledTools": [],
-            "model": os.getenv("LIVE_API_E2E_MODEL", "google-genai:gemini-3.5-flash"),
-            "includeReasoning": False,
-            "threadId": "",
-        }
-        response = subprocess.run(
-            [
-                "curl",
-                "-sN",
-                f"http://127.0.0.1:{port}/api/chat",
-                "-H",
-                "Content-Type: application/json",
-                "-d",
-                json.dumps(payload),
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=240,
-        )
+        yield port
     finally:
         server.should_exit = True
         thread.join(timeout=10)
 
+
+def live_chat_payload(messages: list[dict], thread_id: str = "") -> dict:
+    return {
+        "messages": messages,
+        "sourceKeys": ["peft", "transformers"],
+        "enabledTools": [],
+        "model": os.getenv("LIVE_API_E2E_MODEL", "google-genai:gemini-3.5-flash"),
+        "includeReasoning": False,
+        "threadId": thread_id,
+    }
+
+
+def post_live_api_chat(port: int, payload: dict) -> list[dict]:
+    response = subprocess.run(
+        [
+            "curl",
+            "-sN",
+            f"http://127.0.0.1:{port}/api/chat",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            json.dumps(payload),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=240,
+    )
     payloads = parse_sse_payloads(response.stdout)
     assert payloads[-1] == "[DONE]"
     return [json.loads(item) for item in payloads[:-1]]
+
+
+def run_live_api_chat(prompt: str) -> list[dict]:
+    with live_api_server() as port:
+        return post_live_api_chat(port, live_chat_payload([live_user_message(prompt)]))
+
+
+def live_user_message(text: str) -> dict:
+    return {"role": "user", "parts": [{"type": "text", "text": text}]}
+
+
+def live_assistant_message(parts: list[dict]) -> dict:
+    """Rebuild the assistant UIMessage the AI SDK keeps from streamed parts:
+    one text part per text block id, deltas concatenated in arrival order."""
+    text_blocks: dict[str, str] = {}
+    for part in parts:
+        if part["type"] == "text-delta":
+            block_id = part["id"]
+            text_blocks[block_id] = text_blocks.get(block_id, "") + part["delta"]
+    return {
+        "role": "assistant",
+        "parts": [{"type": "text", "text": text} for text in text_blocks.values()],
+    }
+
+
+def live_thread_id(parts: list[dict]) -> str:
+    for part in parts:
+        if part["type"] == "data-thread":
+            return str(part["data"].get("threadId", ""))
+    return ""
 
 
 def live_part_types(parts: list[dict]) -> list[str]:
@@ -406,6 +434,105 @@ def test_live_api_stream_exposes_frontend_parts() -> None:
     assert "### Sources" not in final_text
     sources = live_sources(parts)
     assert any(source["sourceKey"] in {"peft", "transformers"} for source in sources)
+
+
+@LIVE_API_E2E
+def test_live_api_follow_up_reuses_thread_after_tool_turn() -> None:
+    """A follow-up that echoes the streamed turn back must keep the thread id.
+
+    This is the continuity regression: tool-using turns checkpoint as several
+    AI messages, and a naive transcript comparison branched to a new thread on
+    every follow-up, discarding checkpointed tool context and summaries.
+    """
+    require_live_api_e2e_prereqs()
+
+    first_prompt = (
+        "Use retrieve_tutor_context to answer: how does PEFT configure LoRA "
+        "with LoraConfig?"
+    )
+    follow_up_prompt = (
+        "Thanks. In one sentence, restate the key point of your previous answer."
+    )
+
+    with live_api_server() as port:
+        first_parts = post_live_api_chat(
+            port, live_chat_payload([live_user_message(first_prompt)])
+        )
+        first_thread = live_thread_id(first_parts)
+        assert first_thread
+        assert live_tool_names(first_parts), "first turn must exercise a tool"
+        assert "finish" in live_part_types(first_parts)
+
+        follow_up_messages = [
+            live_user_message(first_prompt),
+            live_assistant_message(first_parts),
+            live_user_message(follow_up_prompt),
+        ]
+        second_parts = post_live_api_chat(
+            port, live_chat_payload(follow_up_messages, thread_id=first_thread)
+        )
+
+        assert "finish" in live_part_types(second_parts)
+        assert live_answer_text(second_parts)
+        second_thread = live_thread_id(second_parts)
+        assert second_thread == first_thread, (
+            f"follow-up branched to a new thread: {first_thread} -> {second_thread}"
+        )
+
+
+@LIVE_API_E2E
+def test_live_api_edit_forks_thread_from_checkpoint() -> None:
+    """Editing a non-first message must fork the thread, not branch it.
+
+    The history the client keeps is an exact prefix of the thread's tracked
+    transcript, so sync resolves it to the checkpoint at that turn boundary
+    (LangGraph time travel) and the thread id stays stable. A plain rebuild
+    would surface as a fresh thread id in data-thread.
+    """
+    require_live_api_e2e_prereqs()
+
+    first_prompt = (
+        "Use retrieve_tutor_context to answer briefly: how does PEFT configure "
+        "LoRA with LoraConfig?"
+    )
+    second_prompt = "In one sentence, what does the r parameter control?"
+    edited_second_prompt = "In one sentence, what does lora_alpha control?"
+
+    with live_api_server() as port:
+        first_parts = post_live_api_chat(
+            port, live_chat_payload([live_user_message(first_prompt)])
+        )
+        thread_id = live_thread_id(first_parts)
+        assert thread_id
+
+        history = [
+            live_user_message(first_prompt),
+            live_assistant_message(first_parts),
+        ]
+        second_parts = post_live_api_chat(
+            port,
+            live_chat_payload(
+                [*history, live_user_message(second_prompt)],
+                thread_id=thread_id,
+            ),
+        )
+        assert live_thread_id(second_parts) == thread_id
+
+        # Edit the second question: the client keeps only the first turn.
+        edited_parts = post_live_api_chat(
+            port,
+            live_chat_payload(
+                [*history, live_user_message(edited_second_prompt)],
+                thread_id=thread_id,
+            ),
+        )
+
+        assert "finish" in live_part_types(edited_parts)
+        assert live_answer_text(edited_parts)
+        edited_thread = live_thread_id(edited_parts)
+        assert edited_thread == thread_id, (
+            f"edit branched instead of forking: {thread_id} -> {edited_thread}"
+        )
 
 
 @LIVE_API_E2E

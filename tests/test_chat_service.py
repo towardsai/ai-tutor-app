@@ -8,10 +8,19 @@ from unittest.mock import MagicMock, patch
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from app.chat_service import (
+    THREAD_IDLE_TTL_SECONDS,
     _claim_kb_command_budget,
     _clear_kb_command_budget,
+    _drop_thread_record,
+    _evict_idle_threads,
+    _get_fork_point,
+    _get_thread_transcript,
+    _record_fork_point,
+    _record_thread_transcript,
+    _touch_thread,
     agent_run_config,
     build_agent,
+    checkpoint_messages_to_history,
     effective_tool_names,
     resolve_answer_citations,
     retrieve_tutor_context,
@@ -22,19 +31,28 @@ from app.chat_types import ChatRequest, ChatTurn, SourceMatch
 
 
 class FakeAgent:
-    def __init__(self, messages):
+    def __init__(self, messages, checkpoint_id="ckpt_latest"):
         self._messages = list(messages)
+        self.checkpoint_id = checkpoint_id
         self.updated_states: list[tuple[dict[str, object], dict[str, object]]] = []
 
     def get_state(self, _config):
-        return types.SimpleNamespace(values={"messages": list(self._messages)})
+        return types.SimpleNamespace(
+            values={"messages": list(self._messages)},
+            config={"configurable": {"checkpoint_id": self.checkpoint_id}},
+        )
 
     def update_state(self, config, payload):
         self.updated_states.append((config, payload))
+        return {
+            "configurable": {"checkpoint_id": f"ckpt_seed_{len(self.updated_states)}"}
+        }
 
 
 class FakeStreamingAgent(FakeAgent):
-    async def astream(self, *_args, **_kwargs):
+    async def astream(self, *args, **kwargs):
+        self.astream_configs = getattr(self, "astream_configs", [])
+        self.astream_configs.append(args[1] if len(args) > 1 else kwargs.get("config"))
         yield {
             "type": "messages",
             "data": (
@@ -334,6 +352,7 @@ class ChatServiceTestCase(unittest.TestCase):
 
     def test_stream_chat_resolves_shell_citation_after_final_answer(self) -> None:
         agent = FakeStreamingAgent([])
+        self.addCleanup(_drop_thread_record, "thread_rg")
         request = ChatRequest(
             query="Use rg to find LoraConfig",
             source_keys=("peft",),
@@ -387,6 +406,359 @@ class ChatServiceTestCase(unittest.TestCase):
         self.assertEqual(source_matches[0].data["source_key"], "peft")
         self.assertNotIn("call_id", source_matches[0].data)
 
+    def test_checkpoint_history_collapses_tool_using_turn(self) -> None:
+        # A tool-using turn checkpoints as [Human, AI(tool_calls, empty text),
+        # ToolMessage, AI(answer)]; the visible transcript has one assistant
+        # turn, so the collapsed history must match that shape.
+        messages = [
+            HumanMessage(content="What is LoRA?"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "name": "retrieve_tutor_context",
+                        "args": {"query": "LoRA"},
+                    }
+                ],
+            ),
+            ToolMessage(
+                content="payload",
+                name="retrieve_tutor_context",
+                tool_call_id="call_1",
+            ),
+            AIMessage(content="LoRA is a parameter-efficient fine-tuning method."),
+        ]
+
+        self.assertEqual(
+            checkpoint_messages_to_history(messages),
+            (
+                ChatTurn(role="user", content="What is LoRA?"),
+                ChatTurn(
+                    role="assistant",
+                    content="LoRA is a parameter-efficient fine-tuning method.",
+                ),
+            ),
+        )
+
+    def test_checkpoint_history_merges_preamble_like_ui_text_parts(self) -> None:
+        # The AI SDK UIMessage joins its text parts with no separator, so a
+        # preamble streamed before the tool call must concatenate raw (inner
+        # whitespace preserved, only the merged turn trimmed).
+        messages = [
+            HumanMessage(content="What is LoRA?"),
+            AIMessage(
+                content="Let me check the docs.\n\n",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "name": "retrieve_tutor_context",
+                        "args": {"query": "LoRA"},
+                    }
+                ],
+            ),
+            ToolMessage(
+                content="payload",
+                name="retrieve_tutor_context",
+                tool_call_id="call_1",
+            ),
+            AIMessage(content="LoRA is a fine-tuning method."),
+        ]
+
+        self.assertEqual(
+            checkpoint_messages_to_history(messages),
+            (
+                ChatTurn(role="user", content="What is LoRA?"),
+                ChatTurn(
+                    role="assistant",
+                    content="Let me check the docs.\n\nLoRA is a fine-tuning method.",
+                ),
+            ),
+        )
+
+    def test_tool_using_turn_reuses_checkpointed_thread(self) -> None:
+        agent = FakeAgent(
+            [
+                HumanMessage(content="What is LoRA?"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "name": "retrieve_tutor_context",
+                            "args": {"query": "LoRA"},
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content="payload",
+                    name="retrieve_tutor_context",
+                    tool_call_id="call_1",
+                ),
+                AIMessage(content="LoRA is a fine-tuning method."),
+            ]
+        )
+        history = (
+            ChatTurn(role="user", content="What is LoRA?"),
+            ChatTurn(role="assistant", content="LoRA is a fine-tuning method."),
+        )
+
+        active_thread_id, fork_checkpoint_id = sync_thread_with_history(
+            agent, "thread_0", history
+        )
+
+        self.assertEqual(active_thread_id, "thread_0")
+        self.assertEqual(agent.updated_states, [])
+
+    def test_summarized_thread_reuses_tracked_transcript(self) -> None:
+        # After SummarizationMiddleware rewrites thread state, the checkpoint
+        # transcript (summary-as-user-turn + tail) can never equal the visible
+        # history again; the tracked transcript must keep the thread alive.
+        agent = FakeAgent(
+            [
+                HumanMessage(content="Here is a summary of the conversation so far."),
+                AIMessage(content="a2"),
+            ]
+        )
+        history = (
+            ChatTurn(role="user", content="q1"),
+            ChatTurn(role="assistant", content="a1"),
+            ChatTurn(role="user", content="q2"),
+            ChatTurn(role="assistant", content="a2"),
+        )
+        self.addCleanup(_drop_thread_record, "thread_sum")
+        _record_thread_transcript("thread_sum", history)
+
+        active_thread_id, fork_checkpoint_id = sync_thread_with_history(
+            agent, "thread_sum", history
+        )
+
+        self.assertEqual(active_thread_id, "thread_sum")
+        self.assertEqual(agent.updated_states, [])
+
+    def test_edit_branches_despite_tracked_transcript_and_drops_it(self) -> None:
+        agent = FakeAgent(
+            [
+                HumanMessage(content="q1"),
+                AIMessage(content="a1"),
+            ]
+        )
+        self.addCleanup(_drop_thread_record, "thread_0")
+        _record_thread_transcript(
+            "thread_0",
+            (
+                ChatTurn(role="user", content="q1"),
+                ChatTurn(role="assistant", content="a1"),
+            ),
+        )
+        edited_history = (ChatTurn(role="user", content="q1 edited"),)
+
+        with (
+            patch("app.chat_service.new_thread_id", return_value="thread_fork"),
+            patch("app.chat_service.CHECKPOINTER") as checkpointer,
+        ):
+            active_thread_id, fork_checkpoint_id = sync_thread_with_history(
+                agent,
+                "thread_0",
+                edited_history,
+            )
+
+        self.assertEqual(active_thread_id, "thread_fork")
+        checkpointer.delete_thread.assert_called_once_with("thread_0")
+        self.assertIsNone(_get_thread_transcript("thread_0"))
+
+    def test_edit_forks_thread_from_recorded_checkpoint(self) -> None:
+        # Editing q2 sends history = transcript[:2]; the thread must fork
+        # from the end-of-turn-1 checkpoint instead of branching to a new
+        # thread, and fork points past the fork must be pruned.
+        agent = FakeAgent([])
+        tracked = (
+            ChatTurn(role="user", content="q1"),
+            ChatTurn(role="assistant", content="a1"),
+            ChatTurn(role="user", content="q2"),
+            ChatTurn(role="assistant", content="a2"),
+        )
+        self.addCleanup(_drop_thread_record, "thread_tt")
+        _record_thread_transcript("thread_tt", tracked)
+        _record_fork_point("thread_tt", 2, "ckpt_turn_1")
+        _record_fork_point("thread_tt", 4, "ckpt_turn_2")
+
+        active_thread_id, fork_checkpoint_id = sync_thread_with_history(
+            agent,
+            "thread_tt",
+            tracked[:2],
+        )
+
+        self.assertEqual(active_thread_id, "thread_tt")
+        self.assertEqual(fork_checkpoint_id, "ckpt_turn_1")
+        self.assertEqual(agent.updated_states, [])
+        self.assertEqual(_get_fork_point("thread_tt", 2), "ckpt_turn_1")
+        self.assertEqual(_get_fork_point("thread_tt", 4), "")
+
+    def test_edit_without_fork_point_falls_back_to_branch(self) -> None:
+        agent = FakeAgent([])
+        tracked = (
+            ChatTurn(role="user", content="q1"),
+            ChatTurn(role="assistant", content="a1"),
+            ChatTurn(role="user", content="q2"),
+            ChatTurn(role="assistant", content="a2"),
+        )
+        self.addCleanup(_drop_thread_record, "thread_nofp")
+        self.addCleanup(_drop_thread_record, "thread_plain")
+        _record_thread_transcript("thread_nofp", tracked)
+
+        with (
+            patch("app.chat_service.new_thread_id", return_value="thread_plain"),
+            patch("app.chat_service.CHECKPOINTER") as checkpointer,
+        ):
+            active_thread_id, fork_checkpoint_id = sync_thread_with_history(
+                agent,
+                "thread_nofp",
+                tracked[:2],
+            )
+
+        self.assertEqual(active_thread_id, "thread_plain")
+        self.assertEqual(fork_checkpoint_id, "")
+        self.assertEqual(len(agent.updated_states), 1)
+        checkpointer.delete_thread.assert_called_once_with("thread_nofp")
+        self.assertIsNone(_get_thread_transcript("thread_nofp"))
+
+    def test_stream_chat_forks_from_checkpoint_on_edit(self) -> None:
+        agent = FakeStreamingAgent([])
+        tracked = (
+            ChatTurn(role="user", content="q1"),
+            ChatTurn(role="assistant", content="a1"),
+            ChatTurn(role="user", content="q2"),
+            ChatTurn(role="assistant", content="a2"),
+        )
+        self.addCleanup(_drop_thread_record, "thread_live")
+        _record_thread_transcript("thread_live", tracked)
+        _record_fork_point("thread_live", 2, "ckpt_turn_1")
+        request = ChatRequest(
+            query="q2 edited",
+            history=tracked[:2],
+            source_keys=("peft",),
+            model_name="google-genai:gemini-3.5-flash",
+            include_reasoning=False,
+            thread_id="thread_live",
+            enabled_tools=(),
+        )
+
+        async def collect_events():
+            return [event async for event in stream_chat(request)]
+
+        with (
+            patch("app.chat_service.build_agent", return_value=agent),
+            patch("app.chat_service.resolve_manifest_reference", return_value=None),
+        ):
+            events = asyncio.run(collect_events())
+
+        run_config = agent.astream_configs[0]
+        self.assertEqual(run_config["configurable"]["thread_id"], "thread_live")
+        self.assertEqual(run_config["configurable"]["checkpoint_id"], "ckpt_turn_1")
+        thread_started = next(e for e in events if e.type == "thread_started")
+        self.assertEqual(thread_started.data["thread_id"], "thread_live")
+        self.assertEqual(
+            _get_thread_transcript("thread_live"),
+            tracked[:2]
+            + (
+                ChatTurn(role="user", content="q2 edited"),
+                ChatTurn(
+                    role="assistant",
+                    content=(
+                        "LoraConfig is documented in LoRA "
+                        "[LoRA](raw/docs/peft/lora.md)."
+                    ),
+                ),
+            ),
+        )
+        # The new branch records its own fork point at the new turn boundary.
+        self.assertEqual(_get_fork_point("thread_live", 4), "ckpt_latest")
+
+    def test_stream_chat_records_thread_transcript(self) -> None:
+        agent = FakeStreamingAgent([])
+        request = ChatRequest(
+            query="Use rg to find LoraConfig",
+            source_keys=("peft",),
+            model_name="google-genai:gemini-3.5-flash",
+            include_reasoning=False,
+            enabled_tools=(),
+        )
+        self.addCleanup(_drop_thread_record, "thread_transcript")
+
+        async def collect_events():
+            return [event async for event in stream_chat(request)]
+
+        with (
+            patch("app.chat_service.build_agent", return_value=agent),
+            patch("app.chat_service.new_thread_id", return_value="thread_transcript"),
+            patch("app.chat_service.resolve_manifest_reference", return_value=None),
+        ):
+            asyncio.run(collect_events())
+
+        self.assertEqual(
+            _get_thread_transcript("thread_transcript"),
+            (
+                ChatTurn(role="user", content="Use rg to find LoraConfig"),
+                ChatTurn(
+                    role="assistant",
+                    content=(
+                        "LoraConfig is documented in LoRA "
+                        "[LoRA](raw/docs/peft/lora.md)."
+                    ),
+                ),
+            ),
+        )
+
+    def test_idle_threads_evicted_with_checkpoints_and_records(self) -> None:
+        self.addCleanup(_drop_thread_record, "thread_stale")
+        self.addCleanup(_drop_thread_record, "thread_fresh")
+        stale_history = (
+            ChatTurn(role="user", content="q"),
+            ChatTurn(role="assistant", content="a"),
+        )
+        _record_thread_transcript("thread_stale", stale_history)
+        _record_fork_point("thread_stale", 2, "ckpt_stale")
+        _touch_thread("thread_stale", now=0.0)
+        _record_thread_transcript("thread_fresh", stale_history)
+        _touch_thread("thread_fresh", now=1000.0)
+
+        with patch("app.chat_service.CHECKPOINTER") as checkpointer:
+            evicted = _evict_idle_threads(now=THREAD_IDLE_TTL_SECONDS + 1.0, force=True)
+
+        self.assertEqual(evicted, ["thread_stale"])
+        checkpointer.delete_thread.assert_called_once_with("thread_stale")
+        self.assertIsNone(_get_thread_transcript("thread_stale"))
+        self.assertEqual(_get_fork_point("thread_stale", 2), "")
+        # The fresh thread was used within the TTL and survives untouched.
+        self.assertEqual(_get_thread_transcript("thread_fresh"), stale_history)
+
+    def test_branching_deletes_superseded_thread(self) -> None:
+        agent = FakeAgent(
+            [
+                HumanMessage(content="How do I create an agent?"),
+                AIMessage(content="Use a model and tools."),
+            ]
+        )
+        edited_history = (
+            ChatTurn(role="user", content="How do I create a RAG agent?"),
+        )
+        self.addCleanup(_drop_thread_record, "thread_edit")
+
+        with (
+            patch("app.chat_service.new_thread_id", return_value="thread_edit"),
+            patch("app.chat_service.CHECKPOINTER") as checkpointer,
+        ):
+            active_thread_id, fork_checkpoint_id = sync_thread_with_history(
+                agent,
+                "thread_0",
+                edited_history,
+            )
+
+        self.assertEqual(active_thread_id, "thread_edit")
+        self.assertEqual(fork_checkpoint_id, "")
+        checkpointer.delete_thread.assert_called_once_with("thread_0")
+
     def test_shorter_history_branches_to_fresh_thread(self) -> None:
         agent = FakeAgent(
             [
@@ -396,7 +768,9 @@ class ChatServiceTestCase(unittest.TestCase):
         )
 
         with patch("app.chat_service.new_thread_id", return_value="thread_regen"):
-            active_thread_id = sync_thread_with_history(agent, "thread_0", ())
+            active_thread_id, fork_checkpoint_id = sync_thread_with_history(
+                agent, "thread_0", ()
+            )
 
         self.assertEqual(active_thread_id, "thread_regen")
         self.assertEqual(agent.updated_states, [])
@@ -412,9 +786,10 @@ class ChatServiceTestCase(unittest.TestCase):
             ChatTurn(role="user", content="How do I create a RAG agent?"),
             ChatTurn(role="assistant", content="Use retrieval and a model."),
         )
+        self.addCleanup(_drop_thread_record, "thread_edit")
 
         with patch("app.chat_service.new_thread_id", return_value="thread_edit"):
-            active_thread_id = sync_thread_with_history(
+            active_thread_id, fork_checkpoint_id = sync_thread_with_history(
                 agent,
                 "thread_0",
                 edited_history,
