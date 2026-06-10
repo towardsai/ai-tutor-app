@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -1007,14 +1008,22 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
         _record_evidence(web_evidence, url_context_evidence(request.query))
 
     logger.info("Running query: %s", request.query)
-    agent = build_agent(
-        request.model_name,
-        enabled_tools=tuple(request.enabled_tools),
-        include_thoughts=include_reasoning,
-        kb_agents_instructions=ensure_kb_agents_instructions(),
-    )
+
+    # Agent construction (model client + middlewares on a cache miss) and the
+    # checkpointer sync are synchronous; run them off the event loop so one
+    # request's setup doesn't stall every other in-flight SSE stream.
+    def _build_agent_for_request():
+        return build_agent(
+            request.model_name,
+            enabled_tools=tuple(request.enabled_tools),
+            include_thoughts=include_reasoning,
+            kb_agents_instructions=ensure_kb_agents_instructions(),
+        )
+
+    agent = await asyncio.to_thread(_build_agent_for_request)
     _evict_idle_threads()
-    active_thread_id, fork_checkpoint_id = sync_thread_with_history(
+    active_thread_id, fork_checkpoint_id = await asyncio.to_thread(
+        sync_thread_with_history,
         agent,
         request.thread_id.strip() or new_thread_id(),
         normalized_history,
@@ -1125,11 +1134,10 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                         getattr(message, "tool_call_id", "") or uuid4().hex
                     )
                     tool_name = str(getattr(message, "name", "tool"))
+                    call_matches: list[SourceMatch] = []
                     if tool_name == "retrieve_tutor_context":
-                        _record_evidence(
-                            retrieval_evidence,
-                            collect_retrieval_source_matches(payload),
-                        )
+                        call_matches = collect_retrieval_source_matches(payload)
+                        _record_evidence(retrieval_evidence, call_matches)
 
                     tool_call = tool_calls_by_id.get(
                         tool_call_id,
@@ -1140,10 +1148,8 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                         command = str(
                             args.get("command") if isinstance(args, dict) else ""
                         )
-                        _record_evidence(
-                            shell_evidence,
-                            extract_shell_source_matches(command, payload),
-                        )
+                        call_matches = extract_shell_source_matches(command, payload)
+                        _record_evidence(shell_evidence, call_matches)
                     yield ChatEvent(
                         "tool_call_completed",
                         {
@@ -1159,6 +1165,14 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                             "args": tool_call.get("args"),
                             "args_text": format_tool_args(tool_call.get("args")),
                             "output_text": payload,
+                            "matches": [
+                                source_match_payload(
+                                    match,
+                                    message_id=message_id,
+                                    call_id=tool_call_id,
+                                )
+                                for match in call_matches
+                            ],
                         },
                     )
                     continue
@@ -1217,6 +1231,14 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                                 "args": tool_call.get("args"),
                                 "args_text": format_tool_args(tool_call.get("args")),
                                 "output_text": output_text,
+                                "matches": [
+                                    source_match_payload(
+                                        match,
+                                        message_id=message_id,
+                                        call_id=tool_use_id,
+                                    )
+                                    for match in new_matches
+                                ],
                             },
                         )
 
@@ -1251,18 +1273,20 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     if search_completed:
         yield search_completed
 
-    matched_sources = list(
-        resolve_answer_citations(
-            answer,
-            retrieval_evidence=retrieval_evidence,
-            shell_evidence=shell_evidence,
-            web_evidence=web_evidence,
-            # url_context is the only tool whose fetches are invisible to the
-            # stream (the other web tools report results into web_evidence),
-            # so only then is a cited-but-unmatched URL plausibly a fetched
-            # page rather than a memory link: keep it as a low-trust Web chip.
-            keep_unresolved_sources="url_context" in effective_tools,
-        )
+    # Run citation resolution off the loop: it can shell out to the KB
+    # sandbox per unresolved reference and, on first use, parse the whole
+    # corpus manifest.
+    matched_sources = await asyncio.to_thread(
+        resolve_answer_citations,
+        answer,
+        retrieval_evidence=retrieval_evidence,
+        shell_evidence=shell_evidence,
+        web_evidence=web_evidence,
+        # url_context is the only tool whose fetches are invisible to the
+        # stream (the other web tools report results into web_evidence),
+        # so only then is a cited-but-unmatched URL plausibly a fetched
+        # page rather than a memory link: keep it as a low-trust Web chip.
+        keep_unresolved_sources="url_context" in effective_tools,
     )
 
     # Fallback when the model writes no inline `[label](url)` (Gemini grounds

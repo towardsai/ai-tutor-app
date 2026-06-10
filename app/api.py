@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -9,11 +10,11 @@ from typing import Any, AsyncIterator
 from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .chat_service import (
     is_anthropic_model,
@@ -23,6 +24,7 @@ from .chat_service import (
     warm_up_retriever,
 )
 from .chat_types import ChatEvent, ChatRequest, ChatTurn
+from .kb_manifest import load_manifest_entries
 from .config import (
     AVAILABLE_MODELS,
     AVAILABLE_SOURCES,
@@ -37,20 +39,49 @@ from .config import (
 logger = logging.getLogger(__name__)
 
 
+# Request-size bounds. The public Space takes anonymous traffic, and every
+# accepted byte flows into the model call and the in-memory checkpointer, so
+# absurd payloads must die at validation. The caps are generous for real use:
+# a query is one pasted question/snippet, a turn is one rendered message, and
+# an AI SDK message can carry several tool outputs (each token-budgeted).
+MAX_QUERY_CHARS = 32_000
+MAX_TURN_CHARS = 32_000
+MAX_HISTORY_TURNS = 100
+MAX_CLIENT_MESSAGES = 100
+MAX_MESSAGE_JSON_CHARS = 200_000
+MAX_BODY_BYTES = 2 * 1024 * 1024
+
+
 class ApiChatTurn(BaseModel):
-    role: str
-    content: str
+    role: str = Field(max_length=32)
+    content: str = Field(max_length=MAX_TURN_CHARS)
 
 
 class ApiChatRequest(BaseModel):
-    query: str | None = None
-    history: list[ApiChatTurn] = Field(default_factory=list)
-    messages: list[dict[str, Any]] | None = None
-    sourceKeys: list[str] | None = None
-    enabledTools: list[str] | None = None
-    model: str | None = None
+    query: str | None = Field(default=None, max_length=MAX_QUERY_CHARS)
+    history: list[ApiChatTurn] = Field(
+        default_factory=list, max_length=MAX_HISTORY_TURNS
+    )
+    messages: list[dict[str, Any]] | None = Field(
+        default=None, max_length=MAX_CLIENT_MESSAGES
+    )
+    sourceKeys: list[str] | None = Field(default=None, max_length=100)
+    enabledTools: list[str] | None = Field(default=None, max_length=50)
+    model: str | None = Field(default=None, max_length=200)
     includeReasoning: bool = True
-    threadId: str = ""
+    threadId: str = Field(default="", max_length=128)
+
+    @field_validator("messages")
+    @classmethod
+    def _cap_message_size(
+        cls, value: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        for message in value or []:
+            if len(json.dumps(message, ensure_ascii=False)) > MAX_MESSAGE_JSON_CHARS:
+                raise ValueError(
+                    f"message exceeds {MAX_MESSAGE_JSON_CHARS} serialized characters"
+                )
+        return value
 
 
 def parse_cors_origins() -> list[str]:
@@ -79,16 +110,44 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     at the same time on the first turn. That race occasionally surfaces
     `Could not connect to tenant default_tenant`. Touching the retriever
     at startup forces single-threaded tenant init.
+
+    Also pre-parse the KB corpus manifest (lru-cached): citation resolution
+    reads it on first use, and warming it here keeps that synchronous parse
+    off the event loop during the first answer.
     """
     warm_up_retriever()
+    load_manifest_entries()
     yield
 
 
 app = FastAPI(title="AI Tutor API", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def reject_oversized_bodies(request: Request, call_next):
+    """Refuse multi-megabyte bodies before parsing them. Pydantic caps bound
+    the fields, but only after the whole body is read and JSON-decoded."""
+    content_length = request.headers.get("content-length")
+    try:
+        too_large = content_length is not None and int(content_length) > MAX_BODY_BYTES
+    except ValueError:
+        too_large = False
+    if too_large:
+        return JSONResponse(
+            {"detail": "Request body too large"},
+            status_code=413,
+        )
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=parse_cors_origins(),
-    allow_credentials=True,
+    # Nothing uses cookies or HTTP auth, and credentials combined with the
+    # default wildcard origin makes Starlette reflect any Origin with
+    # Access-Control-Allow-Credentials: true, which would silently undermine
+    # any future cookie-based auth.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -134,9 +193,21 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
             history = message_turns[:-1]
         elif message_turns:
             history = message_turns
+            # A client sending the full AI-SDK message list AND query set to
+            # its trailing user turn means them as the same question; keeping
+            # the turn in history would make the model see it twice.
+            if history[-1].role == "user" and history[-1].content.strip() == query:
+                history = history[:-1]
 
     if not query:
         raise HTTPException(status_code=422, detail="query is required")
+    # The Field cap only bounds payload.query; a query extracted from the
+    # trailing message must obey the same model-input bound.
+    if len(query) > MAX_QUERY_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"query exceeds {MAX_QUERY_CHARS} characters",
+        )
 
     allowed_source_keys = set(AVAILABLE_SOURCES)
     requested_source_keys = payload.sourceKeys or list(DEFAULT_SELECTED_SOURCE_KEYS)
@@ -185,9 +256,10 @@ class UIMessageStreamEncoder:
         self.thread_id = ""
         self.text_block_id = ""
         self.text_block_count = 0
+        self.emitted_text = False
         self.active_reasoning_id = ""
-        self.source_matches_by_call_id: dict[str, list[dict[str, Any]]] = {}
         self.open_tool_call_ids: list[str] = []
+        self.announced_tool_call_ids: set[str] = set()
         self.closed = False
 
     def close_reasoning_block(self) -> list[dict[str, Any]]:
@@ -209,6 +281,18 @@ class UIMessageStreamEncoder:
     def next_text_block_id(self) -> str:
         self.text_block_count += 1
         return f"text_{self.message_id or uuid4().hex}_{self.text_block_count}"
+
+    @staticmethod
+    def source_data(data: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "docId": str(data.get("doc_id", "")),
+            "title": str(data.get("title", "")),
+            "url": str(data.get("url", "")),
+            "sourceKey": str(data.get("source_key", "")),
+            "sourceLabel": str(data.get("source_label", "")),
+            "score": float(data.get("score", 0.0)),
+            "group": str(data.get("group", "")),
+        }
 
     def encode(self, event: ChatEvent) -> list[dict[str, Any]]:
         parts: list[dict[str, Any]] = []
@@ -242,6 +326,7 @@ class UIMessageStreamEncoder:
                     "delta": str(event.data.get("text", "")),
                 }
             )
+            self.emitted_text = True
             return parts
 
         if event.type == "reasoning_delta":
@@ -275,6 +360,7 @@ class UIMessageStreamEncoder:
             tool_name = str(event.data.get("tool_name", "tool"))
             if call_id not in self.open_tool_call_ids:
                 self.open_tool_call_ids.append(call_id)
+            self.announced_tool_call_ids.add(call_id)
             parts.append(
                 {
                     "type": "tool-input-start",
@@ -305,20 +391,7 @@ class UIMessageStreamEncoder:
             return parts
 
         if event.type == "source_match":
-            call_id = str(event.data.get("call_id", ""))
-            source_data = {
-                "docId": str(event.data.get("doc_id", "")),
-                "title": str(event.data.get("title", "")),
-                "url": str(event.data.get("url", "")),
-                "sourceKey": str(event.data.get("source_key", "")),
-                "sourceLabel": str(event.data.get("source_label", "")),
-                "score": float(event.data.get("score", 0.0)),
-                "group": str(event.data.get("group", "")),
-            }
-            if call_id:
-                self.source_matches_by_call_id.setdefault(call_id, []).append(
-                    source_data
-                )
+            source_data = self.source_data(event.data)
             parts.append(
                 {
                     "type": "source-url",
@@ -341,21 +414,32 @@ class UIMessageStreamEncoder:
             parts.extend(self.close_reasoning_block())
             call_id = str(event.data.get("call_id", uuid4().hex))
             args = event.data.get("args")
-            if isinstance(args, dict) and args:
+            if (
+                isinstance(args, dict) and args
+            ) or call_id not in self.announced_tool_call_ids:
                 # Providers that stream tool calls incrementally announce the
                 # call before its args are parsed; refresh the input now that
-                # the full args are known.
+                # the full args are known. A call id the stream never
+                # announced (e.g. a ToolMessage with a missing id) must also
+                # get an input part first: the AI SDK client throws on an
+                # output for an unknown tool call and drops the rest of the
+                # stream.
                 parts.append(
                     {
                         "type": "tool-input-available",
                         "toolCallId": call_id,
                         "toolName": str(event.data.get("tool_name", "tool")),
-                        "input": args,
+                        "input": args if isinstance(args, dict) else {},
                     }
                 )
+                self.announced_tool_call_ids.add(call_id)
             output = {
                 "text": str(event.data.get("output_text", "")),
-                "matches": self.source_matches_by_call_id.get(call_id, []),
+                "matches": [
+                    self.source_data(match)
+                    for match in event.data.get("matches") or []
+                    if isinstance(match, dict)
+                ],
             }
             if call_id in self.open_tool_call_ids:
                 self.open_tool_call_ids.remove(call_id)
@@ -371,7 +455,11 @@ class UIMessageStreamEncoder:
         if event.type == "message_completed":
             parts.extend(self.close_reasoning_block())
             answer = str(event.data.get("answer", "")).strip()
-            if answer and not self.text_block_id:
+            # `answer` is every delta of the whole turn joined: when any text
+            # already streamed (even in a block a tool call closed), emitting
+            # it again would duplicate the rendered text. The fallback is only
+            # for answers that never streamed.
+            if answer and not self.text_block_id and not self.emitted_text:
                 self.text_block_id = self.next_text_block_id()
                 parts.append({"type": "text-start", "id": self.text_block_id})
                 parts.append(
@@ -419,18 +507,38 @@ def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
 
 
-SOURCE_VERSIONS_PATH = Path("data/source_versions.json")
+# Anchored to the repo root (like FRONTEND_OUT_DIR), not the process CWD:
+# the server must find it regardless of where uvicorn was started from.
+SOURCE_VERSIONS_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "source_versions.json"
+)
 
 
 def _load_source_versions() -> dict[str, dict[str, Any]]:
     if not SOURCE_VERSIONS_PATH.exists():
+        logger.warning(
+            "source versions file missing; docs sources get version=null. path=%s",
+            SOURCE_VERSIONS_PATH,
+        )
         return {}
     try:
         with SOURCE_VERSIONS_PATH.open("r", encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
+        logger.warning(
+            "source versions file unreadable; docs sources get version=null. path=%s",
+            SOURCE_VERSIONS_PATH,
+            exc_info=True,
+        )
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        logger.warning(
+            "source versions file is not a JSON object; docs sources get "
+            "version=null. path=%s",
+            SOURCE_VERSIONS_PATH,
+        )
+        return {}
+    return data
 
 
 _SOURCE_VERSIONS: dict[str, dict[str, Any]] = _load_source_versions()
@@ -512,18 +620,89 @@ def list_tools(model: str | None = None) -> dict[str, Any]:
     }
 
 
+# Reverse proxies (HF Spaces' router included) enforce idle timeouts; a slow
+# provider step or a long tool batch can keep the wire silent past them. SSE
+# comment frames are ignored by clients but count as traffic.
+SSE_HEARTBEAT_SECONDS = 15.0
+
+
+class _ThreadRunSlot:
+    __slots__ = ("lock", "refs")
+
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.refs = 0
+
+
+# Concurrent runs on the same client-supplied thread id race the
+# read-compare-write in sync_thread_with_history and interleave checkpoint
+# writes on the shared InMemorySaver; serialize them per thread. Slots are
+# refcounted so the dict only holds ids with an active or queued run.
+_THREAD_RUN_SLOTS: dict[str, _ThreadRunSlot] = {}
+
+
+def _claim_thread_slot(thread_id: str) -> _ThreadRunSlot | None:
+    if not thread_id:
+        return None
+    slot = _THREAD_RUN_SLOTS.setdefault(thread_id, _ThreadRunSlot())
+    slot.refs += 1
+    return slot
+
+
+def _release_thread_slot(thread_id: str, slot: _ThreadRunSlot) -> None:
+    slot.refs -= 1
+    if slot.refs <= 0 and _THREAD_RUN_SLOTS.get(thread_id) is slot:
+        del _THREAD_RUN_SLOTS[thread_id]
+
+
 @app.post("/api/chat")
 async def chat(payload: ApiChatRequest) -> StreamingResponse:
     chat_request = build_chat_request(payload)
 
     async def event_stream():
         encoder = UIMessageStreamEncoder()
+        slot = _claim_thread_slot(chat_request.thread_id)
+        holds_lock = False
+        events = stream_chat(chat_request)
+        next_event: asyncio.Task | None = None
         try:
-            async for event in stream_chat(chat_request):
+            if slot is not None:
+                # Wait for any in-flight run on this thread, heartbeating so
+                # the queued request isn't idled out by proxies meanwhile.
+                acquire = asyncio.ensure_future(slot.lock.acquire())
+                try:
+                    while True:
+                        done, _pending = await asyncio.wait(
+                            {acquire}, timeout=SSE_HEARTBEAT_SECONDS
+                        )
+                        if done:
+                            acquire.result()
+                            holds_lock = True
+                            break
+                        yield ": ping\n\n"
+                finally:
+                    if not holds_lock:
+                        acquire.cancel()
+
+            next_event = asyncio.ensure_future(anext(events))
+            while True:
+                # asyncio.wait (not wait_for): a timeout must leave the
+                # pending anext running — cancelling it would unwind the
+                # generator mid-turn.
+                done, _pending = await asyncio.wait(
+                    {next_event}, timeout=SSE_HEARTBEAT_SECONDS
+                )
+                if not done:
+                    yield ": ping\n\n"
+                    continue
+                task, next_event = next_event, None
+                try:
+                    event = task.result()
+                except StopAsyncIteration:
+                    break
                 for part in encoder.encode(event):
                     yield sse_frame(part)
-        except HTTPException:
-            raise
+                next_event = asyncio.ensure_future(anext(events))
         except Exception:
             ref = encoder.message_id or uuid4().hex
             logger.exception(
@@ -541,6 +720,15 @@ async def chat(payload: ApiChatRequest) -> StreamingResponse:
             if not encoder.closed:
                 for part in encoder.finish_error("stream ended without completion"):
                     yield sse_frame(part)
+        finally:
+            # Client disconnect (or any exit) must unwind stream_chat so its
+            # cleanup (KB budget, transcript recording) runs promptly.
+            if next_event is not None:
+                next_event.cancel()
+            if holds_lock:
+                slot.lock.release()
+            if slot is not None:
+                _release_thread_slot(chat_request.thread_id, slot)
         yield sse_frame("[DONE]")
 
     return StreamingResponse(

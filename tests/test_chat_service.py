@@ -435,6 +435,12 @@ class ChatServiceTestCase(unittest.TestCase):
 
         self.assertEqual(started[0].data["args_text"], "rg LoraConfig raw")
         self.assertIn("rg LoraConfig raw", completed[0].data["output_text"])
+        # The completion event carries its own evidence so the encoder can
+        # populate output.matches (the tool row's source count in the UI).
+        completed_matches = completed[0].data["matches"]
+        self.assertEqual(len(completed_matches), 1)
+        self.assertEqual(completed_matches[0]["doc_id"], "peft:lora")
+        self.assertEqual(completed_matches[0]["call_id"], "call_rg")
         self.assertEqual(source_matches[0].data["source_key"], "peft")
         self.assertNotIn("call_id", source_matches[0].data)
 

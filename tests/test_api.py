@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -80,6 +81,14 @@ class ApiTestCase(unittest.TestCase):
         self.assertIn("web_search", tool_keys)
         self.assertIn("web_fetch", tool_keys)
         self.assertNotIn("url_context", tool_keys)
+
+    def test_source_versions_path_is_repo_anchored(self) -> None:
+        """The versions file must resolve regardless of the process CWD;
+        a CWD-relative path silently yields version=null for every source."""
+        from app.api import SOURCE_VERSIONS_PATH
+
+        self.assertTrue(SOURCE_VERSIONS_PATH.is_absolute())
+        self.assertTrue(SOURCE_VERSIONS_PATH.exists())
 
     def test_chat_stream_returns_ai_sdk_parts(self) -> None:
         async def fake_stream_chat(request):
@@ -217,6 +226,31 @@ class ApiTestCase(unittest.TestCase):
         # ...but the correlation ref (message_id) is surfaced for support.
         self.assertIn("message_1", error_text)
 
+    def test_mid_stream_http_exception_still_gets_error_frame(self) -> None:
+        """Once the 200 + headers are sent, an HTTPException cannot become a
+        4xx; it must produce the same graceful error frame + [DONE] as any
+        other mid-stream failure instead of aborting the connection."""
+        from fastapi import HTTPException
+
+        async def broken_stream_chat(_request):
+            yield ChatEvent("message_started", {"message_id": "message_1"})
+            raise HTTPException(status_code=400, detail="late validation")
+
+        with patch("app.api.stream_chat", broken_stream_chat):
+            with TestClient(app) as client:
+                with client.stream(
+                    "POST", "/api/chat", json={"query": "Hello"}
+                ) as response:
+                    body = "".join(response.iter_text())
+
+        self.assertEqual(response.status_code, 200)
+        payloads = parse_sse_payloads(body)
+        self.assertEqual(payloads[-1], "[DONE]")
+        parts = [json.loads(item) for item in payloads[:-1]]
+        part_types = [part["type"] for part in parts]
+        self.assertIn("error", part_types)
+        self.assertIn("finish", part_types)
+
     def test_chat_stream_restarts_reasoning_after_tool_activity(self) -> None:
         async def fake_stream_chat(_request):
             yield ChatEvent("message_started", {"message_id": "message_1"})
@@ -317,6 +351,318 @@ class ApiTestCase(unittest.TestCase):
         self.assertLess(
             part_types.index("tool-output-error"), part_types.index("finish")
         )
+
+    def test_unannounced_tool_completion_announces_before_output(self) -> None:
+        """A completion for a call id the stream never announced must create
+        the tool part before the output, or the AI SDK client throws and
+        drops the rest of the stream."""
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+
+        parts = encoder.encode(
+            ChatEvent(
+                "tool_call_completed",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_orphan",
+                    "tool_name": "run_kb_command",
+                    "args": None,
+                    "output_text": "ok",
+                },
+            )
+        )
+
+        part_types = [p["type"] for p in parts]
+        self.assertIn("tool-input-available", part_types)
+        self.assertLess(
+            part_types.index("tool-input-available"),
+            part_types.index("tool-output-available"),
+        )
+        input_part = next(p for p in parts if p["type"] == "tool-input-available")
+        self.assertEqual(input_part["toolCallId"], "call_orphan")
+        self.assertEqual(input_part["input"], {})
+
+    def test_announced_tool_completion_without_args_skips_input_refresh(self) -> None:
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+        encoder.encode(
+            ChatEvent(
+                "tool_call_started",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_1",
+                    "tool_name": "run_kb_command",
+                    "args": {"command": "ls"},
+                    "args_text": "ls",
+                },
+            )
+        )
+
+        parts = encoder.encode(
+            ChatEvent(
+                "tool_call_completed",
+                {"message_id": "m1", "call_id": "call_1", "output_text": "ok"},
+            )
+        )
+
+        part_types = [p["type"] for p in parts]
+        self.assertNotIn("tool-input-available", part_types)
+        self.assertIn("tool-output-available", part_types)
+
+    def test_completed_answer_is_not_reemitted_after_streamed_preamble(self) -> None:
+        """When the only streamed text was a preamble before a tool call,
+        message_completed (whose answer is all deltas joined) must not
+        re-emit it as a duplicate block."""
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+        encoder.encode(
+            ChatEvent("text_delta", {"message_id": "m1", "text": "Let me check..."})
+        )
+        encoder.encode(
+            ChatEvent(
+                "tool_call_started",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_1",
+                    "tool_name": "retrieve_tutor_context",
+                    "args": {"query": "x"},
+                    "args_text": "x",
+                },
+            )
+        )
+        encoder.encode(
+            ChatEvent(
+                "tool_call_completed",
+                {"message_id": "m1", "call_id": "call_1", "output_text": "ok"},
+            )
+        )
+
+        parts = encoder.encode(
+            ChatEvent(
+                "message_completed",
+                {"message_id": "m1", "answer": "Let me check..."},
+            )
+        )
+
+        part_types = [p["type"] for p in parts]
+        self.assertNotIn("text-start", part_types)
+        self.assertNotIn("text-delta", part_types)
+        self.assertIn("finish", part_types)
+
+    def test_completed_answer_fallback_still_emits_unstreamed_answer(self) -> None:
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+
+        parts = encoder.encode(
+            ChatEvent(
+                "message_completed",
+                {"message_id": "m1", "answer": "Full answer, never streamed."},
+            )
+        )
+
+        part_types = [p["type"] for p in parts]
+        self.assertIn("text-start", part_types)
+        self.assertIn("text-delta", part_types)
+        self.assertIn("text-end", part_types)
+
+    def test_tool_completion_matches_populate_output(self) -> None:
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+        encoder.encode(
+            ChatEvent(
+                "tool_call_started",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_1",
+                    "tool_name": "retrieve_tutor_context",
+                    "args": {"query": "lora"},
+                    "args_text": "lora",
+                },
+            )
+        )
+
+        parts = encoder.encode(
+            ChatEvent(
+                "tool_call_completed",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_1",
+                    "tool_name": "retrieve_tutor_context",
+                    "args": {"query": "lora"},
+                    "output_text": "payload",
+                    "matches": [
+                        {
+                            "doc_id": "peft:lora",
+                            "title": "LoRA",
+                            "url": "https://example.com/lora",
+                            "source_key": "peft",
+                            "source_label": "PEFT Docs",
+                            "score": 0.9,
+                            "group": "docs",
+                        }
+                    ],
+                },
+            )
+        )
+
+        output_part = next(p for p in parts if p["type"] == "tool-output-available")
+        matches = output_part["output"]["matches"]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["docId"], "peft:lora")
+        self.assertEqual(matches[0]["sourceKey"], "peft")
+        self.assertEqual(matches[0]["score"], 0.9)
+
+    def test_chat_rejects_oversized_query(self) -> None:
+        from app.api import MAX_QUERY_CHARS
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/chat", json={"query": "x" * (MAX_QUERY_CHARS + 1)}
+            )
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_chat_rejects_oversized_query_from_messages(self) -> None:
+        from app.api import MAX_QUERY_CHARS
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/chat",
+                json={
+                    "messages": [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "type": "text",
+                                    "text": "x" * (MAX_QUERY_CHARS + 1),
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_chat_rejects_too_many_messages(self) -> None:
+        from app.api import MAX_CLIENT_MESSAGES
+
+        messages = [
+            {"role": "user", "parts": [{"type": "text", "text": "hi"}]}
+            for _ in range(MAX_CLIENT_MESSAGES + 1)
+        ]
+        with TestClient(app) as client:
+            response = client.post("/api/chat", json={"messages": messages})
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_chat_rejects_oversized_body(self) -> None:
+        from app.api import MAX_BODY_BYTES
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/chat", json={"query": "x" * (MAX_BODY_BYTES + 1)}
+            )
+
+        self.assertEqual(response.status_code, 413)
+
+    def test_chat_stream_emits_heartbeat_during_quiet_gap(self) -> None:
+        """A silent stretch between events must put SSE comment frames on the
+        wire so reverse proxies don't idle the connection out."""
+
+        async def slow_stream_chat(_request):
+            yield ChatEvent("message_started", {"message_id": "m1"})
+            await asyncio.sleep(0.3)
+            yield ChatEvent("message_completed", {"message_id": "m1", "answer": "hi"})
+
+        with (
+            patch("app.api.SSE_HEARTBEAT_SECONDS", 0.05),
+            patch("app.api.stream_chat", slow_stream_chat),
+        ):
+            with TestClient(app) as client:
+                with client.stream(
+                    "POST", "/api/chat", json={"query": "Hello"}
+                ) as response:
+                    body = "".join(response.iter_text())
+
+        self.assertIn(": ping", body)
+        payloads = parse_sse_payloads(body)
+        self.assertEqual(payloads[-1], "[DONE]")
+        parts = [json.loads(item) for item in payloads[:-1]]
+        self.assertIn("finish", [part["type"] for part in parts])
+
+    def test_same_thread_requests_are_serialized(self) -> None:
+        """Two concurrent runs on one threadId race the checkpointer; the
+        per-thread lock must run them one at a time (and only same-thread)."""
+        import httpx
+
+        concurrency = {"active": 0, "max": 0}
+
+        async def tracked_stream_chat(_request):
+            concurrency["active"] += 1
+            concurrency["max"] = max(concurrency["max"], concurrency["active"])
+            await asyncio.sleep(0.05)
+            yield ChatEvent("message_started", {"message_id": "m"})
+            yield ChatEvent("message_completed", {"message_id": "m", "answer": "ok"})
+            concurrency["active"] -= 1
+
+        async def post_pair(thread_ids: tuple[str, str]):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                return await asyncio.gather(
+                    *(
+                        client.post(
+                            "/api/chat",
+                            json={"query": "hi", "threadId": thread_id},
+                        )
+                        for thread_id in thread_ids
+                    )
+                )
+
+        with patch("app.api.stream_chat", tracked_stream_chat):
+            same = asyncio.run(post_pair(("tid_1", "tid_1")))
+            self.assertEqual([r.status_code for r in same], [200, 200])
+            self.assertEqual(concurrency["max"], 1)
+
+            concurrency["max"] = 0
+            different = asyncio.run(post_pair(("tid_a", "tid_b")))
+            self.assertEqual([r.status_code for r in different], [200, 200])
+            self.assertEqual(concurrency["max"], 2)
+
+        from app.api import _THREAD_RUN_SLOTS
+
+        self.assertEqual(_THREAD_RUN_SLOTS, {})
+
+    def test_query_matching_trailing_message_is_not_double_counted(self) -> None:
+        captured: dict[str, object] = {}
+
+        async def capture_stream_chat(request):
+            captured["history"] = request.history
+            captured["query"] = request.query
+            yield ChatEvent("message_started", {"message_id": "m1"})
+            yield ChatEvent("message_completed", {"message_id": "m1", "answer": "ok"})
+
+        payload = {
+            "query": "What is RAG?",
+            "messages": [
+                {"role": "assistant", "content": "Previous answer"},
+                {"role": "user", "parts": [{"type": "text", "text": "What is RAG?"}]},
+            ],
+        }
+
+        with patch("app.api.stream_chat", capture_stream_chat):
+            with TestClient(app) as client:
+                with client.stream("POST", "/api/chat", json=payload) as response:
+                    "".join(response.iter_text())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["query"], "What is RAG?")
+        history = captured["history"]
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0].role, "assistant")
 
     def test_chat_rejects_unknown_model(self) -> None:
         with TestClient(app) as client:
