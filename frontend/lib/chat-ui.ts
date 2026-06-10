@@ -180,29 +180,159 @@ export function getMessageCitations(message: TutorMessage): MessageCitation[] {
   return citations;
 }
 
-const MARKDOWN_LINK_PATTERN = /(!?)\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g;
-
 function normalizeCitationUrl(url: string) {
-  // Mirror the server's normalize_url so inline links and data-source parts
-  // resolve to the same key.
-  return url.replace(/#.*$/, "").replace(/\/+$/, "");
+  // Mirror the server's normalize_url (drop fragment and trailing slash),
+  // then canonicalize percent-encoding: react-markdown renders hrefs through
+  // micromark's normalizeUri, so the rendered href may be an encoded variant
+  // of the raw answer text. Decode-then-encode maps both to one form (it is
+  // idempotent across that encoding); URLs that fail to decode stay as-is.
+  const base = url.replace(/#.*$/, "").replace(/\/+$/, "");
+  try {
+    return encodeURI(decodeURI(base));
+  } catch {
+    return base;
+  }
+}
+
+// Drop fenced code blocks and inline code spans before scanning for links:
+// rendered code never produces anchors, so a markdown link inside code must
+// not consume a citation number. The $ alternates keep a streaming,
+// not-yet-closed fence from leaking back in.
+function stripCodeSegments(text: string) {
+  return text
+    .replace(/```[\s\S]*?(?:```|$)/g, " ")
+    .replace(/~~~[\s\S]*?(?:~~~|$)/g, " ")
+    .replace(/`[^`\n]*`/g, " ");
+}
+
+// micromark parses balanced parens inside a link destination, so a regex that
+// stops at the first ")" truncates URLs like .../Spring_(framework). Scan the
+// destination the way the parser does: <...> form, or up to whitespace / the
+// first unbalanced closing paren.
+function scanLinkDestination(text: string, start: number): string {
+  let index = start;
+  while (index < text.length && /\s/.test(text[index])) {
+    index += 1;
+  }
+  if (text[index] === "<") {
+    const end = text.indexOf(">", index + 1);
+    return end === -1 ? "" : text.slice(index + 1, end);
+  }
+  let depth = 0;
+  let end = index;
+  while (end < text.length) {
+    const char = text[end];
+    if (/\s/.test(char)) {
+      break;
+    }
+    if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      if (depth === 0) {
+        break;
+      }
+      depth -= 1;
+    }
+    end += 1;
+  }
+  return text.slice(index, end);
+}
+
+const LINK_OPENER_PATTERN = /(!?)\[[^\]]*\]\(/g;
+
+function extractMarkdownLinkUrls(text: string): string[] {
+  const urls: string[] = [];
+  const scannable = stripCodeSegments(text);
+  for (const match of scannable.matchAll(LINK_OPENER_PATTERN)) {
+    if (match[1] === "!") {
+      continue;
+    }
+    const url = scanLinkDestination(scannable, match.index + match[0].length);
+    if (url) {
+      urls.push(url);
+    }
+  }
+  return urls;
+}
+
+export function isHttpUrl(url: string | undefined): boolean {
+  return Boolean(url && /^https?:\/\//i.test(url.trim()));
+}
+
+// The system prompt lets the model cite KB-browsed files as kb://doc/<id> or
+// KB-root paths like raw/docs/peft/lora.md; normalize the path variants the
+// model may produce to the KB-root-relative form the server sends.
+function normalizeKbPath(ref: string) {
+  let value = ref.trim();
+  if (value.startsWith("./")) {
+    value = value.slice(2);
+  }
+  if (value.startsWith("data/kb/")) {
+    value = value.slice("data/kb/".length);
+  }
+  return value;
+}
+
+// Map inline KB references (kb://doc/<id>, raw/... paths) to the resolved
+// https URL of the matching data-source part, so inline citations of
+// KB-browsed files link to the real page instead of rendering as a dead
+// kb:// or relative href.
+export function buildCitationResolutions(
+  message: TutorMessage,
+): Map<string, string> {
+  const resolutions = new Map<string, string>();
+  for (const part of message.parts) {
+    if (!("type" in part) || part.type !== "data-source") {
+      continue;
+    }
+    const data = (part as TutorMessagePart).data as SourcePartData | undefined;
+    const url = data?.url?.trim();
+    if (!data || !isHttpUrl(url)) {
+      continue;
+    }
+    if (data.docId) {
+      resolutions.set(`kb://doc/${data.docId}`, url as string);
+    }
+    const path = normalizeKbPath(data.path ?? "");
+    if (path) {
+      resolutions.set(path, url as string);
+    }
+  }
+  return resolutions;
+}
+
+export function resolveCitationHref(
+  href: string | undefined,
+  resolutions: Map<string, string> | undefined,
+): string | undefined {
+  if (!href || !resolutions || resolutions.size === 0) {
+    return undefined;
+  }
+  return resolutions.get(href.trim()) ?? resolutions.get(normalizeKbPath(href));
 }
 
 // Number the citation links in a message's answer text by order of first
-// appearance, deduped by normalized URL. The same map drives the inline
-// citation chips and the numbers on the sources row.
-export function buildCitationNumbers(message: TutorMessage): Map<string, number> {
+// appearance, deduped by normalized URL. KB references are keyed under their
+// resolved https URL so the inline chip and the source card share a number;
+// references that resolve to nothing navigable get no number (the renderer
+// shows them as plain text instead of a broken chip). The same map drives the
+// inline citation chips and the numbers on the sources row.
+export function buildCitationNumbers(
+  message: TutorMessage,
+  resolutions?: Map<string, string>,
+): Map<string, number> {
   const numbers = new Map<string, number>();
   for (const part of message.parts) {
     if (!("type" in part) || part.type !== "text") {
       continue;
     }
     const text = (part as TutorMessagePart).text ?? "";
-    for (const match of text.matchAll(MARKDOWN_LINK_PATTERN)) {
-      if (match[1] === "!") {
+    for (const url of extractMarkdownLinkUrls(text)) {
+      const resolved = resolveCitationHref(url, resolutions) ?? url;
+      if (!isHttpUrl(resolved)) {
         continue;
       }
-      const key = normalizeCitationUrl(match[3] ?? "");
+      const key = normalizeCitationUrl(resolved);
       if (key && !numbers.has(key)) {
         numbers.set(key, numbers.size + 1);
       }

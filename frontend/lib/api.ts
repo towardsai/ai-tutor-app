@@ -1,6 +1,9 @@
 export type TutorSource = {
   key: string;
   label: string;
+  shortLabel: string;
+  description?: string | null;
+  infoUrl?: string | null;
   group: "courses" | "docs";
   selectedByDefault: boolean;
   version?: string | null;
@@ -43,6 +46,8 @@ export type SourcePartData = {
   sourceLabel: string;
   score: number;
   group: string;
+  // KB-root-relative file path ("raw/docs/...") when the source is a KB file.
+  path?: string;
 };
 
 const FALLBACK_API_BASE_URL = "http://127.0.0.1:8000";

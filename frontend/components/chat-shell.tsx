@@ -9,7 +9,6 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  useTransition,
 } from "react";
 import { ChatMessage } from "@/components/chat-message";
 import { SourceSidebar } from "@/components/source-sidebar";
@@ -76,7 +75,6 @@ export function ChatShell() {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
-  const [, startTransition] = useTransition();
   const threadViewportRef = useRef<HTMLDivElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const pendingScrollRef = useRef(false);
@@ -97,7 +95,10 @@ export function ChatShell() {
       if (part.type === "data-thread") {
         const nextThreadId = (part as ThreadDataPart).data.threadId;
         if (nextThreadId) {
-          startTransition(() => setThreadId(nextThreadId));
+          // Urgent update on purpose: deferring it (startTransition) lets a
+          // concurrent "New chat" reset finish first and then be overwritten
+          // by the stale thread id.
+          setThreadId(nextThreadId);
         }
       }
     },
@@ -190,7 +191,10 @@ export function ChatShell() {
   }, [selectedModel]);
 
   const isStreaming = status === "submitted" || status === "streaming";
-  const isReady = status === "ready";
+  // After a stream error the SDK parks status on "error" until clearError()
+  // or the next request; handleSubmit clears it, so the error state must
+  // stay sendable or the Send button locks out mouse users for good.
+  const canSend = status === "ready" || status === "error";
   const typedMessages = messages as TutorMessage[];
   const latestMessage = typedMessages[typedMessages.length - 1];
   const streamingAssistantId =
@@ -495,7 +499,7 @@ export function ChatShell() {
                     selectedModel={selectedModel}
                   />
                   <ComposerActionButton
-                    disabled={!isStreaming && (!input.trim() || !isReady)}
+                    disabled={!isStreaming && (!input.trim() || !canSend)}
                     isStreaming={isStreaming}
                     streamingLabel={streamingWord}
                     onClick={

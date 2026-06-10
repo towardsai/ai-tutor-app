@@ -23,8 +23,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { TutorSource, TutorTool } from "@/lib/api";
-import { COURSE_METADATA } from "@/lib/course-metadata";
-import { DOC_METADATA } from "@/lib/doc-metadata";
 
 type SourceSidebarProps = {
   onNewChat: () => void;
@@ -486,23 +484,22 @@ function formatIndexedMonth(isoDate: string | null | undefined): string | null {
 }
 
 function getPopoverInfo(source: TutorSource): PopoverInfo | undefined {
+  // Description and link come from the registry via /api/tools; the frontend
+  // renders them verbatim so adding a source needs no UI edit.
+  if (!source.description || !source.infoUrl) return undefined;
   if (source.group === "courses") {
-    const meta = COURSE_METADATA[source.key];
-    if (!meta) return undefined;
     return {
-      description: meta.description,
-      linkUrl: meta.academyUrl,
+      description: source.description,
+      linkUrl: source.infoUrl,
       linkLabel: "View on Academy",
     };
   }
-  const meta = DOC_METADATA[source.key];
-  if (!meta) return undefined;
   const indexedMonth = formatIndexedMonth(source.indexedAt);
   const metaParts = [source.version, indexedMonth ? `indexed ${indexedMonth}` : null]
     .filter((part): part is string => Boolean(part));
   return {
-    description: meta.description,
-    linkUrl: meta.docsUrl,
+    description: source.description,
+    linkUrl: source.infoUrl,
     linkLabel: "View docs",
     meta: metaParts.length > 0 ? metaParts.join(" · ") : undefined,
   };
@@ -565,9 +562,11 @@ function SourceRow({
         <button
           type="button"
           onClick={() => onToggle(source.key)}
+          aria-pressed={selected}
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
           <span
+            aria-hidden="true"
             className={clsx(
               "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[9px] font-bold",
               selected
@@ -580,7 +579,7 @@ function SourceRow({
             ✓
           </span>
           <span className="min-w-0 truncate text-[12.5px] font-medium tracking-[-0.01em]">
-            {formatSourceLabel(source.label)}
+            {source.shortLabel || source.label}
           </span>
         </button>
         {popover ? (
@@ -780,8 +779,4 @@ function ToggleToolRow({
         : null}
     </div>
   );
-}
-
-function formatSourceLabel(label: string) {
-  return label.replace(/\s+Docs$/, "");
 }

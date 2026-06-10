@@ -38,9 +38,11 @@ import type {
 import {
   buildActivityItems,
   buildCitationNumbers,
+  buildCitationResolutions,
   citationNumberFor,
   getMessageCitations,
   getOrderedMessageBlocks,
+  isHttpUrl,
   prettifyToolName,
   toolInputSummary,
 } from "@/lib/chat-ui";
@@ -79,7 +81,12 @@ export function ChatMessage({
   const isAssistant = message.role === "assistant";
   const contentBlocks = getOrderedMessageBlocks(message);
   const citations = isAssistant && !isStreaming ? getMessageCitations(message) : [];
-  const citationNumbers = isAssistant ? buildCitationNumbers(message) : undefined;
+  const citationResolutions = isAssistant
+    ? buildCitationResolutions(message)
+    : undefined;
+  const citationNumbers = isAssistant
+    ? buildCitationNumbers(message, citationResolutions)
+    : undefined;
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -149,6 +156,7 @@ export function ChatMessage({
                   block={block}
                   isActive={isActive}
                   citationNumbers={citationNumbers}
+                  citationResolutions={citationResolutions}
                 />
               );
             })}
@@ -290,15 +298,23 @@ function ContentBlock({
   block,
   isActive = false,
   citationNumbers,
+  citationResolutions,
 }: {
   block: TutorMessageBlock;
   isActive?: boolean;
   citationNumbers?: Map<string, number>;
+  citationResolutions?: Map<string, string>;
 }) {
   if (block.kind === "activity") {
     return <ActivityPanel parts={block.parts} isActive={isActive} />;
   }
-  return <TextBlock parts={block.parts} citationNumbers={citationNumbers} />;
+  return (
+    <TextBlock
+      parts={block.parts}
+      citationNumbers={citationNumbers}
+      citationResolutions={citationResolutions}
+    />
+  );
 }
 
 function ActivityPanel({
@@ -323,9 +339,11 @@ function ActivityPanel({
   );
   const sourceCount = getToolPartSourceCount(parts);
 
+  // Only a genuinely unfinished tool earns a "Running ..." header; when all
+  // calls have returned (e.g. the model is reasoning after its last tool),
+  // fall through to the generic activity summary.
   const liveTool = isActive
     ? toolItems.find((item) => item.part.state !== "output-available")
-      ?? toolItems[toolItems.length - 1]
     : undefined;
 
   const summary = buildActivitySummary({
@@ -615,9 +633,11 @@ function formatToolResultSummary({
 function TextBlock({
   parts,
   citationNumbers,
+  citationResolutions,
 }: {
   parts: TutorMessagePart[];
   citationNumbers?: Map<string, number>;
+  citationResolutions?: Map<string, string>;
 }) {
   return (
     <div className="space-y-3 text-[15px] leading-[1.72] tracking-[-0.012em] text-[var(--ink)]">
@@ -626,6 +646,7 @@ function TextBlock({
           key={`text-${index}`}
           className="text-[15px] leading-[1.72] tracking-[-0.012em] text-[var(--ink)]"
           citationNumbers={citationNumbers}
+          citationResolutions={citationResolutions}
         >
           {part.text ?? ""}
         </MarkdownBlock>
@@ -690,15 +711,12 @@ function CitationRow({
           const meta = CITATION_KIND_META[citation.kind];
           const Icon = meta.icon;
           const number = citationNumberFor(citationNumbers, citation.url);
-          return (
-            <a
-              key={`${citation.kind}-${citation.url}-${index}`}
-              href={citation.url}
-              target="_blank"
-              rel="noreferrer"
-              title={`${meta.label}${citation.sublabel ? ` · ${citation.sublabel}` : ""}`}
-              className="group inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--line-strong)] bg-[var(--accent-faint)] px-2.5 py-1.5 text-xs font-medium text-[var(--accent)] transition hover:border-[var(--accent)] hover:bg-[var(--surface-strong)]"
-            >
+          // Server-resolved URLs are trusted data but external input
+          // (corpus frontmatter, web results, manifest path fallbacks);
+          // only http(s) gets a navigable anchor.
+          const navigable = isHttpUrl(citation.url);
+          const cardChildren = (
+            <>
               {number !== undefined ? (
                 <span className="shrink-0 rounded-full bg-[var(--surface)] px-1.5 text-[10px] font-semibold text-[var(--accent)]">
                   {number}
@@ -706,7 +724,32 @@ function CitationRow({
               ) : null}
               <Icon className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">{citation.label}</span>
-              <ExternalLink className="h-3 w-3 shrink-0 opacity-60 transition group-hover:opacity-100" />
+              {navigable ? (
+                <ExternalLink className="h-3 w-3 shrink-0 opacity-60 transition group-hover:opacity-100" />
+              ) : null}
+            </>
+          );
+          const cardKey = `${citation.kind}-${citation.url}-${index}`;
+          const cardTitle = `${meta.label}${citation.sublabel ? ` · ${citation.sublabel}` : ""}`;
+          const cardClassName =
+            "group inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--line-strong)] bg-[var(--accent-faint)] px-2.5 py-1.5 text-xs font-medium text-[var(--accent)] transition hover:border-[var(--accent)] hover:bg-[var(--surface-strong)]";
+          if (!navigable) {
+            return (
+              <span key={cardKey} title={cardTitle} className={cardClassName}>
+                {cardChildren}
+              </span>
+            );
+          }
+          return (
+            <a
+              key={cardKey}
+              href={citation.url}
+              target="_blank"
+              rel="noreferrer"
+              title={cardTitle}
+              className={cardClassName}
+            >
+              {cardChildren}
             </a>
           );
         })}
