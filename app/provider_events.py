@@ -234,6 +234,12 @@ def extract_anthropic_source_matches(
             source_key, source_label = mapping
             tool_use_id = str(block.get("tool_use_id") or "")
             results = block.get("content") or []
+            if hasattr(results, "get"):
+                # web_search returns a list of results; web_fetch returns one
+                # web_fetch_result object (its title nested in the fetched
+                # document). Error payloads are dicts too, but carry no url
+                # and fall out of the loop below.
+                results = [results]
             if not isinstance(results, list):
                 continue
             for result in results:
@@ -242,7 +248,12 @@ def extract_anthropic_source_matches(
                 url = str(result.get("url") or "").strip()
                 if not url:
                     continue
-                title = str(result.get("title") or url).strip()
+                title = str(result.get("title") or "").strip()
+                if not title:
+                    document = result.get("content")
+                    if hasattr(document, "get"):
+                        title = str(document.get("title") or "").strip()
+                title = title or url
                 doc_id = f"{source_key}::{url}"
                 if doc_id in matches_by_doc_id:
                     continue

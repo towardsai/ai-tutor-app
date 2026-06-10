@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import types
 import unittest
 from unittest.mock import MagicMock, patch
@@ -20,6 +21,7 @@ from app.chat_service import (
     _touch_thread,
     agent_run_config,
     build_agent,
+    build_chat_model,
     checkpoint_messages_to_history,
     effective_tool_names,
     extract_query_urls,
@@ -248,6 +250,21 @@ class ChatServiceTestCase(unittest.TestCase):
         self.assertNotIn("GeminiServerSideToolsMiddleware", plain_middleware)
         self.assertEqual(len(web_middleware), len(plain_middleware) + 1)
         self.assertGreater(len(plain_middleware), 0)
+
+    def test_anthropic_reasoning_keeps_profile_output_budget(self) -> None:
+        # Thinking shares the response's max_tokens; a hardcoded low cap made
+        # reasoning mode (the frontend default) silently truncate long
+        # answers mid-stream while the non-reasoning path got the model
+        # profile's 64k. Both paths must use the same profile default.
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            plain = build_chat_model("anthropic:claude-haiku-4-5")
+            reasoning = build_chat_model(
+                "anthropic:claude-haiku-4-5", include_thoughts=True
+            )
+
+        self.assertEqual(reasoning.max_tokens, plain.max_tokens)
+        self.assertGreater(reasoning.max_tokens, 8192)
+        self.assertEqual(reasoning.thinking, {"type": "enabled", "budget_tokens": 2048})
 
     def test_kb_command_budget_blocks_after_limit(self) -> None:
         session_id = "test_budget_session"
@@ -689,6 +706,64 @@ class ChatServiceTestCase(unittest.TestCase):
         )
         # The new branch records its own fork point at the new turn boundary.
         self.assertEqual(_get_fork_point("thread_live", 4), "ckpt_latest")
+
+    def test_summarization_rewrite_does_not_reemit_tool_completion(self) -> None:
+        # SummarizationMiddleware.before_model replaces thread state with
+        # [summary, *preserved]; when that fires mid-turn the preserved tail
+        # ends in the already-reported ToolMessage. Only the tools node may
+        # report completions.
+        tool_message = ToolMessage(
+            content="$ rg LoraConfig raw\nstdout:\nraw/docs/peft/lora.md:3",
+            name="run_kb_command",
+            tool_call_id="call_rg",
+        )
+
+        class FakeSummarizingAgent(FakeAgent):
+            async def astream(self, *_args, **_kwargs):
+                yield {
+                    "type": "updates",
+                    "data": {"tools": {"messages": [tool_message]}},
+                }
+                yield {
+                    "type": "updates",
+                    "data": {
+                        "SummarizationMiddleware.before_model": {
+                            "messages": [
+                                HumanMessage(content="Summary of the conversation."),
+                                tool_message,
+                            ]
+                        }
+                    },
+                }
+                yield {
+                    "type": "updates",
+                    "data": {"model": {"messages": [AIMessage(content="answer")]}},
+                }
+
+        agent = FakeSummarizingAgent([])
+        request = ChatRequest(
+            query="long tool-heavy question",
+            source_keys=("peft",),
+            model_name="google-genai:gemini-3.5-flash",
+            include_reasoning=False,
+            enabled_tools=(),
+        )
+        self.addCleanup(_drop_thread_record, "thread_sumdup")
+
+        async def collect_events():
+            return [event async for event in stream_chat(request)]
+
+        with (
+            patch("app.chat_service.build_agent", return_value=agent),
+            patch("app.chat_service.new_thread_id", return_value="thread_sumdup"),
+            patch("app.chat_service.resolve_manifest_reference", return_value=None),
+        ):
+            events = asyncio.run(collect_events())
+
+        completed = [e for e in events if e.type == "tool_call_completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].data["call_id"], "call_rg")
+        self.assertEqual(completed[0].data["step"], "tools")
 
     def test_stream_chat_records_thread_transcript(self) -> None:
         agent = FakeStreamingAgent([])

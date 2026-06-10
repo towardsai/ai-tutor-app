@@ -704,10 +704,12 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
             # (adaptive thinking is unsupported); the interleaved beta lets
             # thinking blocks appear between tool calls within a turn.
             # Thinking requires temperature=1 and budget_tokens >= 1024.
+            # max_tokens stays at the model-profile default (64k for Haiku
+            # 4.5), same as the non-thinking path: thinking shares the
+            # response's max_tokens, so a low cap silently truncates answers.
             return ChatAnthropic(
                 model=actual_model,
                 temperature=1,
-                max_tokens=8192,
                 thinking={"type": "enabled", "budget_tokens": 2048},
                 betas=["interleaved-thinking-2025-05-14"],
             )
@@ -1113,7 +1115,11 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 if not messages:
                     continue
                 message = messages[-1]
-                if getattr(message, "type", None) == "tool":
+                # Only the tools node reports fresh completions. Middleware
+                # state rewrites (e.g. SummarizationMiddleware replacing
+                # history mid-turn) also end in the preserved most-recent
+                # ToolMessage and must not re-emit it as new tool activity.
+                if step == "tools" and getattr(message, "type", None) == "tool":
                     payload = message_content_to_text(message.content)
                     tool_call_id = str(
                         getattr(message, "tool_call_id", "") or uuid4().hex
