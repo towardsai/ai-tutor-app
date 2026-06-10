@@ -5,8 +5,10 @@ import re
 import shlex
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 DEFAULT_KB_DIR = Path(os.getenv("AI_TUTOR_KB_DIR", "data/kb"))
 DEFAULT_TIMEOUT_SECONDS = 8
@@ -44,6 +46,7 @@ RG_FLAG_OPTIONS = frozenset(
 GREP_FLAG_OPTIONS = frozenset(
     {"-i", "--ignore-case", "-w", "--word-regexp", "-F", "-E"}
 )
+GREP_VALUE_OPTIONS = frozenset({"-m", "--max-count"})
 LS_FLAG_OPTIONS = frozenset({"-1", "-a", "-l", "-la", "-al"})
 WC_FLAG_OPTIONS = frozenset({"-l", "-w", "-c", "-m"})
 
@@ -170,12 +173,16 @@ def _build_rg(tokens: list[str], root: Path) -> list[str]:
     pattern = positionals[0]
     paths = [_relative_path_arg(value, root) for value in positionals[1:]] or ["."]
     _reject_unbounded_raw_search("rg", paths, has_max_count)
+    # `--` ends option parsing so a pattern beginning with `-`/`--` (e.g.
+    # `--pre=/bin/sh`, `--hostname-bin`) can never be re-interpreted by rg as a
+    # flag that spawns an external process or escapes the read-only jail.
     return [
         "rg",
         "--color=never",
         "--line-number",
         "--no-heading",
         *options,
+        "--",
         pattern,
         *paths,
     ]
@@ -184,6 +191,7 @@ def _build_rg(tokens: list[str], root: Path) -> list[str]:
 def _build_grep(tokens: list[str], root: Path) -> list[str]:
     options: list[str] = []
     positionals: list[str] = []
+    has_max_count = False
     idx = 1
     parsing_options = True
     while idx < len(tokens):
@@ -196,6 +204,13 @@ def _build_grep(tokens: list[str], root: Path) -> list[str]:
             options.append(token)
             idx += 1
             continue
+        if parsing_options and token in GREP_VALUE_OPTIONS:
+            if idx + 1 >= len(tokens):
+                raise KbCommandError(f"{token} requires a value")
+            options.extend([token, _numeric_value(tokens[idx + 1], token)])
+            has_max_count = True
+            idx += 2
+            continue
         positionals.append(token)
         parsing_options = False
         idx += 1
@@ -203,7 +218,14 @@ def _build_grep(tokens: list[str], root: Path) -> list[str]:
         raise KbCommandError("`grep` requires a search pattern")
     pattern = positionals[0]
     paths = [_relative_path_arg(value, root) for value in positionals[1:]] or ["."]
-    return ["grep", "-R", "-n", "--color=never", *options, pattern, *paths]
+    # Bound grep the same way as rg: a broad `raw/` recursion needs an explicit
+    # -m/--max-count (or a narrower path) so it can't emit unbounded output.
+    _reject_unbounded_raw_search("grep", paths, has_max_count)
+    # Lowercase `-r` follows only command-line symlinks (not symlinks discovered
+    # during the walk), unlike `-R`; per-file paths found during recursion are
+    # not re-validated by the jail, so the more permissive `-R` is avoided.
+    # `--` ends option parsing so a `-`/`--` pattern can't be re-read as a flag.
+    return ["grep", "-r", "-n", "--color=never", *options, "--", pattern, *paths]
 
 
 def _build_find(tokens: list[str], root: Path) -> list[str]:
@@ -329,11 +351,46 @@ def build_kb_command_argv(
     return builders[executable](tokens, resolved_root), resolved_root
 
 
-def _truncate(text: str, max_chars: int) -> tuple[str, bool]:
-    if len(text) <= max_chars:
-        return text, False
+def _drain_stream(stream: Any, cap: int) -> tuple[str, bool]:
+    """Read a child pipe to EOF but retain at most ``cap`` characters.
+
+    Reading continues past the cap (discarding the overflow) so the child never
+    blocks on a full pipe, but peak memory is bounded by ``cap`` instead of the
+    command's full output size.
+    """
+    chunks: list[str] = []
+    retained = 0
+    truncated = False
+    try:
+        while True:
+            data = stream.read(8192)
+            if not data:
+                break
+            if retained >= cap:
+                # Already full; this read is pure overflow we discard.
+                truncated = True
+                continue
+            room = cap - retained
+            if len(data) <= room:
+                chunks.append(data)
+                retained += len(data)
+            else:
+                chunks.append(data[:room])
+                retained = cap
+                truncated = True
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+    return "".join(chunks), truncated
+
+
+def _apply_truncation_marker(text: str, truncated: bool, max_chars: int) -> str:
+    if not truncated:
+        return text
     marker = f"\n... output truncated to {max_chars} characters ..."
-    return text[: max(0, max_chars - len(marker))] + marker, True
+    return text[: max(0, max_chars - len(marker))] + marker
 
 
 def run_kb_command(
@@ -346,6 +403,7 @@ def run_kb_command(
     argv, resolved_root = build_kb_command_argv(command, root=root)
     timeout = max(1, min(int(timeout_seconds), 30))
     output_limit = max(1_000, min(int(max_output_chars), 80_000))
+    stderr_limit = min(output_limit, 8_000)
     env = {
         "HOME": os.getenv("HOME", ""),
         "LANG": os.getenv("LANG", "C.UTF-8"),
@@ -353,30 +411,55 @@ def run_kb_command(
         "PATH": os.getenv("PATH", ""),
     }
     timed_out = False
+    stdout_box: dict[str, Any] = {"text": "", "truncated": False}
+    stderr_box: dict[str, Any] = {"text": "", "truncated": False}
+
+    # Stream both pipes through capped reader threads so a command that emits a
+    # lot (e.g. `cat` of a large file) cannot spike memory to its full output
+    # size before truncation: capture_output buffers everything, this does not.
+    # argv is fully validated/allowlisted by build_kb_command_argv above.
+    process = subprocess.Popen(
+        argv,
+        cwd=resolved_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    def _read(stream: Any, cap: int, box: dict[str, Any]) -> None:
+        box["text"], box["truncated"] = _drain_stream(stream, cap)
+
+    readers = [
+        threading.Thread(target=_read, args=(process.stdout, output_limit, stdout_box)),
+        threading.Thread(target=_read, args=(process.stderr, stderr_limit, stderr_box)),
+    ]
+    for reader in readers:
+        reader.start()
+
     try:
-        completed = subprocess.run(
-            argv,
-            cwd=resolved_root,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-            check=False,
-        )
-        exit_code = int(completed.returncode)
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
-    except subprocess.TimeoutExpired as exc:
+        process.wait(timeout=timeout)
+        exit_code = int(process.returncode)
+    except subprocess.TimeoutExpired:
         timed_out = True
         exit_code = 124
-        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
-        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        process.kill()
+        process.wait()
+    for reader in readers:
+        reader.join()
+
+    stdout = _apply_truncation_marker(
+        stdout_box["text"], bool(stdout_box["truncated"]), output_limit
+    )
+    stdout_truncated = bool(stdout_box["truncated"])
+    stderr = _apply_truncation_marker(
+        stderr_box["text"], bool(stderr_box["truncated"]), stderr_limit
+    )
+    stderr_truncated = bool(stderr_box["truncated"])
+    if timed_out:
         stderr = (
             stderr + "\n" if stderr else ""
         ) + f"Command timed out after {timeout}s."
-
-    stdout, stdout_truncated = _truncate(stdout, output_limit)
-    stderr, stderr_truncated = _truncate(stderr, min(output_limit, 8_000))
     return KbCommandResult(
         command=command,
         argv=argv,

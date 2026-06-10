@@ -158,6 +158,24 @@ ANSWERING_RULES = """## Answering rules
 
 The retrieval tool returns JSON with matched passages and source metadata."""
 
+NO_KB_NOTE = """## Knowledge base disabled
+
+The user deselected every knowledge-base source for this conversation, so the
+corpus retrieval and KB browsing tools are unavailable. Answer from general
+knowledge (and the web tools above, when available). Do not claim to have
+searched the course corpus; mention briefly when an answer would be stronger
+with course sources enabled."""
+
+NO_KB_ANSWERING_RULES = """## Answering rules
+
+- When you use web tools, cite sources with inline Markdown links: place a
+  `[short source title](url)` citation in the same sentence, immediately
+  after the claim it supports.
+- Synthesize a clear teaching explanation. Prefer a few solid paragraphs over
+  shallow bullet lists.
+- Include complete, runnable code blocks when code is relevant.
+- End with a short invitation for a follow-up question."""
+
 
 def _provider_key(model_name: str) -> str:
     normalized = (model_name or "").strip()
@@ -215,10 +233,11 @@ def build_system_prompt(
     model_name: str,
     enabled_tools: tuple[str, ...],
     kb_agents_instructions: str | None = None,
+    include_local_tools: bool = True,
 ) -> str:
     provider = _provider_key(model_name)
     enabled = set(enabled_tools)
-    tool_lines = [RETRIEVAL_TOOL_LINE, *KB_TOOL_LINES]
+    tool_lines = [RETRIEVAL_TOOL_LINE, *KB_TOOL_LINES] if include_local_tools else []
     usage_sections: list[str] = []
     provider_web_tools = WEB_TOOL_LINES.get(provider, {})
     provider_web_usage = WEB_USAGE_SECTIONS.get(provider, {})
@@ -227,26 +246,33 @@ def build_system_prompt(
             tool_lines.append(provider_web_tools[key])
             usage_sections.append(provider_web_usage[key])
 
-    if len(tool_lines) == 1:
-        intro = "You have one tool available:"
-    else:
-        intro = f"You have {len(tool_lines)} tools available:"
+    parts = [BASE_PROMPT_HEADER]
+    if tool_lines:
+        if len(tool_lines) == 1:
+            intro = "You have one tool available:"
+        else:
+            intro = f"You have {len(tool_lines)} tools available:"
+        parts.append(f"{intro}\n\n" + "\n".join(tool_lines))
 
-    parts = [
-        BASE_PROMPT_HEADER,
-        f"{intro}\n\n" + "\n".join(tool_lines),
-        RETRIEVAL_USAGE_SECTION,
-        KB_USAGE_SECTION,
-    ]
+    if include_local_tools:
+        parts.append(RETRIEVAL_USAGE_SECTION)
+        parts.append(KB_USAGE_SECTION)
     if usage_sections:
         parts.append(
             "## When to use web search / URL reading\n\n" + "\n\n".join(usage_sections)
         )
-        parts.append(
-            "Prefer `retrieve_tutor_context` first when the question is clearly about\n"
-            "course material. Combine tools when it helps (e.g. retrieve corpus\n"
-            "context, then search the web for the latest update)."
-        )
+        if include_local_tools:
+            parts.append(
+                "Prefer `retrieve_tutor_context` first when the question is clearly about\n"
+                "course material. Combine tools when it helps (e.g. retrieve corpus\n"
+                "context, then search the web for the latest update)."
+            )
+    if not include_local_tools:
+        # The user deselected every source: the prompt must not describe or
+        # instruct tools the agent does not have this turn.
+        parts.append(NO_KB_NOTE)
+        parts.append(NO_KB_ANSWERING_RULES)
+        return "\n\n".join(parts) + "\n"
     if kb_agents_instructions is None:
         kb_agents_instructions = load_kb_agents_instructions()
     if kb_agents_instructions:

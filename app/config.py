@@ -11,6 +11,7 @@ from data.scraping_scripts.source_registry import (
     COURSE_SOURCE_KEYS,
     DEFAULT_SELECTED_SOURCE_KEYS,
     DEFAULT_SELECTED_SOURCES_UI,
+    SOURCE_DISPLAY_INFO,
     SOURCE_KEY_TO_LABEL,
     SOURCE_UI_TO_KEY,
 )
@@ -151,6 +152,7 @@ __all__ = [
     "KB_DIR",
     "KB_INDEX_PATH",
     "KB_MANIFEST_PATH",
+    "SOURCE_DISPLAY_INFO",
     "SOURCE_KEY_TO_LABEL",
     "SOURCE_UI_TO_KEY",
     "VECTOR_COLLECTION_NAME",

@@ -64,6 +64,17 @@ class ApiTestCase(unittest.TestCase):
                 for source in retrieval["sources"]
             )
         )
+        # Display metadata is registry-owned and served per source so the
+        # frontend renders it verbatim (no client-side maps or label edits).
+        for source in retrieval["sources"]:
+            self.assertTrue(source["shortLabel"])
+            self.assertTrue(source["description"])
+            self.assertTrue(str(source["infoUrl"]).startswith("https://"))
+        transformers = next(
+            source for source in retrieval["sources"] if source["key"] == "transformers"
+        )
+        self.assertEqual(transformers["label"], "Transformers Docs")
+        self.assertEqual(transformers["shortLabel"], "Transformers")
         # Gemini is the default model, so web search + url reading are present.
         tool_keys = {tool["key"] for tool in tools}
         self.assertIn("web_search", tool_keys)
@@ -184,6 +195,10 @@ class ApiTestCase(unittest.TestCase):
         part_types = [part["type"] for part in parts]
 
         self.assertIn("data-thread", part_types)
+        data_thread = next(part for part in parts if part["type"] == "data-thread")
+        # Transient: consumed via onData only; must not land in message.parts
+        # (it would also rely on undocumented ordering when emitted pre-start).
+        self.assertTrue(data_thread.get("transient"))
         self.assertIn("start", part_types)
         self.assertIn("start-step", part_types)
         self.assertIn("reasoning-start", part_types)
@@ -499,6 +514,7 @@ class ApiTestCase(unittest.TestCase):
                             "source_label": "PEFT Docs",
                             "score": 0.9,
                             "group": "docs",
+                            "path": "raw/docs/peft/lora.md",
                         }
                     ],
                 },
@@ -511,6 +527,7 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(matches[0]["docId"], "peft:lora")
         self.assertEqual(matches[0]["sourceKey"], "peft")
         self.assertEqual(matches[0]["score"], 0.9)
+        self.assertEqual(matches[0]["path"], "raw/docs/peft/lora.md")
 
     def test_chat_rejects_oversized_query(self) -> None:
         from app.api import MAX_QUERY_CHARS
@@ -677,6 +694,21 @@ class ApiTestCase(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 422)
+
+    def test_explicit_empty_source_keys_disable_retrieval(self) -> None:
+        from app.api import ApiChatRequest, build_chat_request
+        from app.config import DEFAULT_SELECTED_SOURCE_KEYS
+
+        # Explicit [] is the user turning the knowledge base off; it must not
+        # silently coerce to the defaults (the UI shows it as "off").
+        explicit_empty = build_chat_request(
+            ApiChatRequest(query="What is RAG?", sourceKeys=[])
+        )
+        self.assertEqual(explicit_empty.source_keys, ())
+
+        # An omitted field still means "use the defaults".
+        omitted = build_chat_request(ApiChatRequest(query="What is RAG?"))
+        self.assertEqual(omitted.source_keys, tuple(DEFAULT_SELECTED_SOURCE_KEYS))
 
 
 LIVE_API_E2E = pytest.mark.skipif(

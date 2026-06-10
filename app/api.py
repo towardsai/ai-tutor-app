@@ -33,6 +33,7 @@ from .config import (
     DEFAULT_MODEL_NAME,
     DEFAULT_SELECTED_SOURCE_KEYS,
     DEFAULT_SELECTED_SOURCES_UI,
+    SOURCE_DISPLAY_INFO,
     SOURCE_UI_TO_KEY,
 )
 
@@ -210,15 +211,25 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
         )
 
     allowed_source_keys = set(AVAILABLE_SOURCES)
-    requested_source_keys = payload.sourceKeys or list(DEFAULT_SELECTED_SOURCE_KEYS)
-    source_keys = (
-        tuple(
-            dict.fromkeys(
-                key for key in requested_source_keys if key in allowed_source_keys
-            )
+    if payload.sourceKeys is not None and not payload.sourceKeys:
+        # An explicit empty selection is the user turning the knowledge base
+        # off; it must not silently coerce to the defaults. Only an *omitted*
+        # field means "use the defaults".
+        source_keys: tuple[str, ...] = ()
+    else:
+        requested_source_keys = (
+            payload.sourceKeys
+            if payload.sourceKeys is not None
+            else list(DEFAULT_SELECTED_SOURCE_KEYS)
         )
-        or DEFAULT_SELECTED_SOURCE_KEYS
-    )
+        source_keys = (
+            tuple(
+                dict.fromkeys(
+                    key for key in requested_source_keys if key in allowed_source_keys
+                )
+            )
+            or DEFAULT_SELECTED_SOURCE_KEYS
+        )
     model_name = (payload.model or DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
     if model_name not in {model["id"] for model in AVAILABLE_MODELS}:
         raise HTTPException(status_code=422, detail="Unknown model")
@@ -292,6 +303,10 @@ class UIMessageStreamEncoder:
             "sourceLabel": str(data.get("source_label", "")),
             "score": float(data.get("score", 0.0)),
             "group": str(data.get("group", "")),
+            # KB-root-relative path ("raw/docs/...") when the source is a KB
+            # file; the client uses it to resolve inline `raw/...` citations
+            # to this source's real URL.
+            "path": str(data.get("path", "")),
         }
 
     def encode(self, event: ChatEvent) -> list[dict[str, Any]]:
@@ -303,6 +318,11 @@ class UIMessageStreamEncoder:
                 {
                     "type": "data-thread",
                     "data": {"threadId": self.thread_id},
+                    # Delivered to onData only, never stored in message.parts:
+                    # nothing renders it, and a non-transient part emitted
+                    # before "start" relies on undocumented AI SDK ordering
+                    # behavior (the in-flight message is stored by reference).
+                    "transient": True,
                 }
             )
             return parts
@@ -550,8 +570,15 @@ def _source_entries() -> list[dict[str, Any]]:
     for label in AVAILABLE_SOURCES_UI:
         key = SOURCE_UI_TO_KEY[label]
         group = "courses" if key in COURSE_SOURCE_KEYS else "docs"
+        display = SOURCE_DISPLAY_INFO.get(key, {})
         entry: dict[str, Any] = {
             "label": label,
+            # Display metadata is registry-owned (single source of truth);
+            # the frontend renders these verbatim instead of keeping its own
+            # per-source maps or reshaping the label.
+            "shortLabel": display.get("ui_label") or label,
+            "description": display.get("description"),
+            "infoUrl": display.get("url"),
             "key": key,
             "group": group,
             "selectedByDefault": label in defaults,

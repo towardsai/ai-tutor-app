@@ -818,15 +818,17 @@ def build_agent(
     enabled_tools: tuple[str, ...] = (),
     include_thoughts: bool = False,
     kb_agents_instructions: str | None = None,
+    include_local_tools: bool = True,
 ):
     # kb_agents_instructions is part of the cache key on purpose: an agent
     # built before data/kb/AGENTS.md existed must not pin its degraded
     # system prompt for the process lifetime.
     model = build_chat_model(model_name, include_thoughts=include_thoughts)
-    tools: list[Any] = [
-        retrieve_tutor_context,
-        run_kb_command,
-    ]
+    # An explicit empty source selection turns the knowledge base off: no
+    # retrieval, no KB browsing, and a system prompt that says so.
+    tools: list[Any] = (
+        [retrieve_tutor_context, run_kb_command] if include_local_tools else []
+    )
     middleware: list[AgentMiddleware] = [
         ContextEditingMiddleware(
             edits=[
@@ -876,7 +878,10 @@ def build_agent(
         model=model,
         tools=tools,
         system_prompt=build_system_prompt(
-            model_name, enabled_tools, kb_agents_instructions
+            model_name,
+            enabled_tools,
+            kb_agents_instructions,
+            include_local_tools=include_local_tools,
         ),
         context_schema=AppContext,
         checkpointer=CHECKPOINTER,
@@ -893,8 +898,9 @@ def model_provider_and_name(model_name: str) -> tuple[str, str]:
 def effective_tool_names(
     model_name: str,
     enabled_tools: tuple[str, ...],
+    include_local_tools: bool = True,
 ) -> tuple[str, ...]:
-    names = ["retrieve_tutor_context", "run_kb_command"]
+    names = ["retrieve_tutor_context", "run_kb_command"] if include_local_tools else []
     enabled = set(enabled_tools)
     if is_google_genai_model(model_name):
         if "web_search" in enabled:
@@ -950,7 +956,11 @@ def agent_run_config(
     message_id: str,
 ) -> dict[str, Any]:
     provider, actual_model = model_provider_and_name(request.model_name)
-    tools = effective_tool_names(request.model_name, request.enabled_tools)
+    tools = effective_tool_names(
+        request.model_name,
+        request.enabled_tools,
+        include_local_tools=bool(request.source_keys),
+    )
     source_labels = [
         SOURCE_KEY_TO_LABEL.get(source_key, source_key)
         for source_key in request.source_keys
@@ -1003,7 +1013,12 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     # decide whether consecutive deltas need a paragraph break between them.
     reasoning_deltas_are_blocks = is_google_genai_model(request.model_name)
     google_search = GoogleSearchActivity(message_id, web_evidence)
-    effective_tools = effective_tool_names(request.model_name, request.enabled_tools)
+    include_local_tools = bool(request.source_keys)
+    effective_tools = effective_tool_names(
+        request.model_name,
+        request.enabled_tools,
+        include_local_tools=include_local_tools,
+    )
     if "url_context" in effective_tools:
         _record_evidence(web_evidence, url_context_evidence(request.query))
 
@@ -1017,7 +1032,10 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
             request.model_name,
             enabled_tools=tuple(request.enabled_tools),
             include_thoughts=include_reasoning,
-            kb_agents_instructions=ensure_kb_agents_instructions(),
+            kb_agents_instructions=(
+                ensure_kb_agents_instructions() if include_local_tools else None
+            ),
+            include_local_tools=include_local_tools,
         )
 
     agent = await asyncio.to_thread(_build_agent_for_request)

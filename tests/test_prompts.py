@@ -48,6 +48,37 @@ def test_load_kb_agents_instructions_returns_empty_for_missing_path(
     assert load_kb_agents_instructions(tmp_path / "missing.md") == ""
 
 
+def test_build_system_prompt_without_local_tools_describes_none_of_them(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    # Explicit empty source selection: the prompt must not describe or
+    # instruct retrieval/KB tools the agent does not have this turn.
+    agents_path = tmp_path / "AGENTS.md"
+    agents_path.write_text("# From disk\n", encoding="utf-8")
+    monkeypatch.setenv("AI_TUTOR_KB_AGENTS_PATH", str(agents_path))
+
+    prompt = build_system_prompt(
+        "google-genai:gemini-3.5-flash",
+        ("web_search",),
+        include_local_tools=False,
+    )
+
+    assert "retrieve_tutor_context" not in prompt
+    assert "run_kb_command" not in prompt
+    assert "## Local KB Instructions" not in prompt
+    assert "## Knowledge base disabled" in prompt
+    assert "google_search" in prompt
+
+    no_tools = build_system_prompt(
+        "google-genai:gemini-3.5-flash",
+        (),
+        include_local_tools=False,
+    )
+    assert "tools available" not in no_tools
+    assert "one tool available" not in no_tools
+
+
 def test_build_system_prompt_uses_explicit_instructions_without_file_read(
     tmp_path: Path,
     monkeypatch,

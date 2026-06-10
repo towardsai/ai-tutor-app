@@ -17,6 +17,7 @@ from app.chroma_rag import (
     heading_aware_markdown_chunks,
     reciprocal_rank_fusion,
     load_bm25_index,
+    rerank_results,
     SearchResult,
 )
 
@@ -169,6 +170,74 @@ After the example.
         self.assertIn("Title: Guide", setup_record.text)
         self.assertIn("Heading path: Guide > Setup", setup_record.text)
         self.assertIn("Context: Situated", setup_record.text)
+
+    def test_rerank_scores_matched_chunk_for_retrieve_doc_results(self) -> None:
+        # retrieve_doc results carry the whole document in `content`; the
+        # reranker must score the matched chunk (`chunk_content`) instead, so
+        # relevance is not diluted toward the doc average and the payload stays
+        # within Cohere's per-document token limit.
+        full_doc = "Intro paragraph.\n" * 500
+        results = [
+            SearchResult(
+                chunk_id="doc-chunk",
+                doc_id="doc-1",
+                title="Doc",
+                url="",
+                source="test",
+                retrieve_doc=True,
+                tokens=4000,
+                score=0.5,
+                content=full_doc,
+                chunk_content="the matched chunk about AutoModel",
+                heading_path="section",
+                retrieval_method="dense",
+            ),
+            SearchResult(
+                chunk_id="plain-chunk",
+                doc_id="doc-2",
+                title="Plain",
+                url="",
+                source="test",
+                retrieve_doc=False,
+                tokens=100,
+                score=0.4,
+                content="formatted chunk body",
+                chunk_content="raw chunk body",
+                heading_path="section",
+                retrieval_method="dense",
+            ),
+        ]
+
+        captured: dict[str, list[str]] = {}
+
+        class _FakeItem:
+            def __init__(self, index: int, score: float) -> None:
+                self.index = index
+                self.relevance_score = score
+
+        class _FakeResponse:
+            def __init__(self, items: list["_FakeItem"]) -> None:
+                self.results = items
+
+        class _FakeCohere:
+            def rerank(self, *, model, query, documents, top_n):  # type: ignore[no-untyped-def]
+                captured["documents"] = list(documents)
+                return _FakeResponse(
+                    [
+                        _FakeItem(i, 1.0 - i * 0.1)
+                        for i in range(min(top_n, len(documents)))
+                    ]
+                )
+
+        reranked = rerank_results(_FakeCohere(), "AutoModel", results)
+
+        # The full document never reaches the reranker; the matched chunk does.
+        self.assertEqual(
+            captured["documents"],
+            ["the matched chunk about AutoModel", "formatted chunk body"],
+        )
+        # The returned result still carries the full document for the answer.
+        self.assertEqual(reranked[0].content, full_doc)
 
     def test_rrf_prefers_overlap_across_ranked_lists(self) -> None:
         dense_only = self._result("dense-only", 0.9, "dense")

@@ -268,6 +268,120 @@ SOURCE_KEY_TO_LABEL = {
     "agentic_ai_engineering": "Agentic AI Engineering",
 }
 
+# Display metadata served to the UI via /api/tools. The frontend renders these
+# verbatim (single source of truth: adding a source here means no separate UI
+# edit). `ui_label` is the short sidebar name; `label` in SOURCE_KEY_TO_LABEL
+# stays the full name used on source cards and in prompts. Keep descriptions
+# free of em-dashes (frontend user-facing text convention).
+SOURCE_DISPLAY_INFO: dict[str, dict[str, str]] = {
+    "transformers": {
+        "ui_label": "Transformers",
+        "description": (
+            "Hugging Face library for state-of-the-art NLP and multimodal "
+            "models. Load, run, and train pretrained transformers."
+        ),
+        "url": "https://huggingface.co/docs/transformers",
+    },
+    "peft": {
+        "ui_label": "PEFT",
+        "description": (
+            "Parameter-Efficient Fine-Tuning: LoRA, prefix tuning, and other "
+            "methods for adapting large models with minimal compute."
+        ),
+        "url": "https://huggingface.co/docs/peft",
+    },
+    "trl": {
+        "ui_label": "TRL",
+        "description": (
+            "Train language models with reinforcement learning. Covers SFT, "
+            "DPO, PPO, and other alignment techniques."
+        ),
+        "url": "https://huggingface.co/docs/trl",
+    },
+    "llama_index": {
+        "ui_label": "LlamaIndex",
+        "description": (
+            "Framework for building RAG apps: ingestion, indexing, "
+            "retrievers, and query engines over your own data."
+        ),
+        "url": "https://docs.llamaindex.ai",
+    },
+    "langchain": {
+        "ui_label": "LangChain",
+        "description": (
+            "Framework for building LLM apps: chains, agents, tool-calling, "
+            "and production observability."
+        ),
+        "url": "https://docs.langchain.com/oss/python/langchain/overview",
+    },
+    "langgraph": {
+        "ui_label": "LangGraph",
+        "description": (
+            "Graph-based runtime for reliable, stateful AI agents with "
+            "persistence, streaming, human review, and deployment patterns."
+        ),
+        "url": "https://docs.langchain.com/oss/python/langgraph/overview",
+    },
+    "deep_agents": {
+        "ui_label": "Deep Agents",
+        "description": (
+            "LangChain's deep agent harness for planning, delegation, "
+            "filesystem context, and longer-running agent workflows."
+        ),
+        "url": "https://docs.langchain.com/oss/python/deepagents/overview",
+    },
+    "openai_docs": {
+        "ui_label": "OpenAI",
+        "description": (
+            "Official OpenAI API, Agents SDK, and Codex documentation from "
+            "the developer docs Markdown index."
+        ),
+        "url": "https://developers.openai.com",
+    },
+    "claude_code_docs": {
+        "ui_label": "Claude Code",
+        "description": (
+            "Official Claude Code and Claude Agent SDK documentation from "
+            "Anthropic's Markdown index."
+        ),
+        "url": "https://code.claude.com/docs/en/overview",
+    },
+    "full_stack_ai_engineering": {
+        "ui_label": "Full Stack AI Engineering",
+        "description": (
+            "Full-stack LLM engineering, covering RAG, fine-tuning, "
+            "evaluation, and deploying production systems end-to-end. The "
+            "deepest technical course."
+        ),
+        "url": "https://academy.towardsai.net/courses/beginner-to-advanced-llm-dev",
+    },
+    "beginner_python_for_ai_engineering": {
+        "ui_label": "Beginner Python for AI Engineering",
+        "description": (
+            "Python for the LLM era: API integration, using open-source "
+            "models, and core training/testing workflows. Assumes no prior "
+            "Python."
+        ),
+        "url": "https://academy.towardsai.net/courses/python-for-genai",
+    },
+    "master_ai_for_work": {
+        "ui_label": "Master AI For Work",
+        "description": (
+            "Non-engineer course on using AI tools (ChatGPT, Claude, etc.) "
+            "for workplace productivity and rolling them out across a team."
+        ),
+        "url": "https://academy.towardsai.net/courses/ai-business-professionals",
+    },
+    "agentic_ai_engineering": {
+        "ui_label": "Agentic AI Engineering",
+        "description": (
+            "Designing, building, evaluating, and deploying production-grade "
+            "AI agents end-to-end."
+        ),
+        "url": "https://academy.towardsai.net/courses/agent-engineering",
+    },
+}
+
 UI_SOURCE_KEYS = (
     "openai_docs",
     "claude_code_docs",

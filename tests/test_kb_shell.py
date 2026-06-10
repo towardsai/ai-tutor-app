@@ -8,7 +8,12 @@ import pytest
 
 from data.scraping_scripts.build_kb_artifacts import build_kb_artifacts
 from data.scraping_scripts.update_kb_wiki import update_kb_wiki
-from app.kb_shell import KbCommandError, format_command_payload, run_kb_command
+from app.kb_shell import (
+    KbCommandError,
+    build_kb_command_argv,
+    format_command_payload,
+    run_kb_command,
+)
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -82,6 +87,20 @@ def test_run_kb_command_can_read_all_raw_sources(kb_dir: Path) -> None:
     assert "agentic_ai_engineering" in result.stdout
 
 
+def test_run_kb_command_caps_large_output_without_buffering_all(kb_dir: Path) -> None:
+    # A command that emits far more than the cap must be truncated to the cap;
+    # the streaming reader retains at most `output_limit` chars regardless of how
+    # much the child writes, so peak memory is bounded by the cap, not the file.
+    big = kb_dir / "raw" / "big.txt"
+    big.write_text("A" * 200_000)
+
+    result = run_kb_command("cat raw/big.txt", root=kb_dir, max_output_chars=1000)
+
+    assert result.truncated
+    assert len(result.stdout) <= 1000
+    assert "output truncated" in result.stdout
+
+
 def test_run_kb_command_rejects_shell_chaining(kb_dir: Path) -> None:
     with pytest.raises(KbCommandError):
         run_kb_command("rg LoraConfig | head", root=kb_dir)
@@ -92,11 +111,47 @@ def test_run_kb_command_rejects_path_traversal(kb_dir: Path) -> None:
         run_kb_command("cat ../outside.md", root=kb_dir)
 
 
+def test_rg_pattern_is_separated_by_double_dash(kb_dir: Path) -> None:
+    # A pattern beginning with `-`/`--` (e.g. ripgrep's `--pre`, which spawns an
+    # external preprocessor binary) must be forced into the positional pattern
+    # slot by a `--` separator so it can never be re-parsed by rg as a flag.
+    argv, _ = build_kb_command_argv("rg --pre=/bin/sh raw/docs/peft", root=kb_dir)
+    assert "--" in argv
+    sep = argv.index("--")
+    assert argv[sep + 1 :] == ["--pre=/bin/sh", "raw/docs/peft"]
+    # The dangerous token never precedes the separator (i.e. is never an option).
+    assert "--pre=/bin/sh" not in argv[:sep]
+
+
+def test_grep_pattern_is_separated_by_double_dash(kb_dir: Path) -> None:
+    argv, _ = build_kb_command_argv("grep --label=foo raw/docs/peft", root=kb_dir)
+    assert "--" in argv
+    sep = argv.index("--")
+    assert argv[sep + 1 :] == ["--label=foo", "raw/docs/peft"]
+    assert "--label=foo" not in argv[:sep]
+
+
 def test_run_kb_command_rejects_unbounded_broad_raw_search(kb_dir: Path) -> None:
     with pytest.raises(KbCommandError, match="requires -m"):
         run_kb_command("rg LoraConfig raw", root=kb_dir)
 
     result = run_kb_command("rg -m 20 LoraConfig raw", root=kb_dir)
 
+    assert result.exit_code == 0
+    assert "LoraConfig" in result.stdout
+
+
+def test_grep_is_bounded_like_rg_and_does_not_follow_symlinks(kb_dir: Path) -> None:
+    # grep must reject an unbounded broad raw recursion, mirroring rg.
+    with pytest.raises(KbCommandError, match="requires -m"):
+        run_kb_command("grep LoraConfig raw", root=kb_dir)
+
+    # An explicit -m/--max-count satisfies the bound and works end-to-end.
+    argv, _ = build_kb_command_argv("grep -m 20 LoraConfig raw", root=kb_dir)
+    assert argv[:4] == ["grep", "-r", "-n", "--color=never"]
+    assert "-R" not in argv  # never the symlink-following recursion mode
+    assert "-m" in argv
+
+    result = run_kb_command("grep -m 20 LoraConfig raw/docs/peft", root=kb_dir)
     assert result.exit_code == 0
     assert "LoraConfig" in result.stdout

@@ -19,6 +19,9 @@ class SourceMatch:
     source_label: str
     score: float
     group: str = ""
+    # KB-root-relative file path ("raw/docs/...") for manifest-backed matches;
+    # lets the client map inline `raw/...` citations to this source's real URL.
+    path: str = ""
 
 
 @dataclass(frozen=True, slots=True)

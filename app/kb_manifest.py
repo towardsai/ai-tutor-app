@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from .chat_types import SourceMatch
 from .config import COURSE_SOURCE_KEYS, KB_DIR, SOURCE_KEY_TO_LABEL
+
+logger = logging.getLogger(__name__)
 
 KB_DOC_SCHEME_RE = re.compile(r"^kb://doc/(?P<doc_id>[^)\]\s]+)$")
 RAW_PATH_RE = re.compile(r"(?:data/kb/)?raw/[^\s)\]>,:]+?\.(?:mdx|md)")
@@ -35,18 +37,57 @@ def _normalize_path(value: str) -> str:
     return value
 
 
-@lru_cache(maxsize=4)
+def kb_root_path(value: str) -> str:
+    """KB-root-relative form of a manifest path ("raw/docs/...") — the shape
+    the model is instructed to cite and the client matches against."""
+    value = value.strip()
+    if value.startswith("./"):
+        value = value[2:]
+    if value.startswith(f"{KB_DIR}/"):
+        value = value[len(KB_DIR) + 1 :]
+    return value
+
+
+# Cache parsed manifests per kb_dir, but only once the file actually exists, so
+# a lookup during the first-start download window does not pin an empty result.
+_MANIFEST_CACHE: dict[str, tuple[KbManifestEntry, ...]] = {}
+
+
 def load_manifest_entries(kb_dir: str = KB_DIR) -> tuple[KbManifestEntry, ...]:
+    cached = _MANIFEST_CACHE.get(kb_dir)
+    if cached is not None:
+        return cached
+
     manifest_path = Path(kb_dir) / "generated" / "corpus_manifest.jsonl"
     if not manifest_path.exists():
+        # Do not cache the missing-file case: the KB bundle may still be
+        # downloading on first start, so retry on the next call instead of
+        # pinning an empty manifest (and thus never resolving citations) for
+        # the process lifetime.
         return ()
 
     entries: list[KbManifestEntry] = []
     with manifest_path.open("r", encoding="utf-8") as handle:
-        for line in handle:
+        for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
-            row = json.loads(line)
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "Skipping malformed manifest line %d in %s: %s",
+                    line_number,
+                    manifest_path,
+                    exc,
+                )
+                continue
+            if not isinstance(row, dict):
+                logger.warning(
+                    "Skipping non-object manifest line %d in %s",
+                    line_number,
+                    manifest_path,
+                )
+                continue
             entries.append(
                 KbManifestEntry(
                     doc_id=str(row.get("doc_id") or ""),
@@ -57,7 +98,9 @@ def load_manifest_entries(kb_dir: str = KB_DIR) -> tuple[KbManifestEntry, ...]:
                     path=str(row.get("path") or ""),
                 )
             )
-    return tuple(entries)
+    result = tuple(entries)
+    _MANIFEST_CACHE[kb_dir] = result
+    return result
 
 
 def manifest_indexes(
@@ -72,6 +115,11 @@ def manifest_indexes(
     by_url: dict[str, KbManifestEntry] = {}
     by_path: dict[str, KbManifestEntry] = {}
     by_title: dict[str, KbManifestEntry] = {}
+    # Titles like "Introduction"/"Quickstart" recur across docs; a plain dict
+    # would resolve a bare-label citation to whichever doc was ingested last and
+    # surface a misleading source card. Track collisions and refuse to resolve
+    # an ambiguous title to any single doc.
+    ambiguous_titles: set[str] = set()
     for entry in load_manifest_entries(kb_dir):
         if entry.doc_id:
             by_doc_id[entry.doc_id] = entry
@@ -82,7 +130,15 @@ def manifest_indexes(
             if entry.path.startswith(f"{KB_DIR}/"):
                 by_path[entry.path[len(KB_DIR) + 1 :]] = entry
         if entry.title:
-            by_title[entry.title.strip().lower()] = entry
+            title_key = entry.title.strip().lower()
+            if title_key in ambiguous_titles:
+                continue
+            existing = by_title.get(title_key)
+            if existing is not None and existing.doc_id != entry.doc_id:
+                ambiguous_titles.add(title_key)
+                del by_title[title_key]
+            else:
+                by_title[title_key] = entry
     return by_doc_id, by_url, by_path, by_title
 
 
@@ -99,6 +155,7 @@ def source_match_from_manifest(
         group="courses"
         if entry.source in COURSE_SOURCE_KEYS
         else entry.source_group or "docs",
+        path=kb_root_path(entry.path),
     )
 
 
@@ -188,6 +245,7 @@ def source_match_payload(
         "source_label": match.source_label,
         "score": match.score,
         "group": match.group,
+        "path": match.path,
     }
     if call_id:
         payload["call_id"] = call_id

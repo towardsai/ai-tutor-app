@@ -964,6 +964,20 @@ def embed_texts(
     return vectors
 
 
+def _rerank_document(result: SearchResult) -> str:
+    """Text the reranker scores for a result.
+
+    For ``retrieve_doc`` results ``content`` is the *entire* document, which
+    both dilutes the relevance signal toward the document's average (instead of
+    the chunk that actually matched) and can overflow Cohere's per-document
+    token limit when several full docs are reranked together. Score the matched
+    chunk instead; the full document is still what gets returned for the answer.
+    """
+    if result.retrieve_doc and result.chunk_content:
+        return result.chunk_content
+    return result.content
+
+
 def rerank_results(
     client: cohere.ClientV2,
     query: str,
@@ -977,7 +991,7 @@ def rerank_results(
     response = client.rerank(
         model=model,
         query=query,
-        documents=[result.content for result in results],
+        documents=[_rerank_document(result) for result in results],
         top_n=min(top_n, len(results)),
     )
 

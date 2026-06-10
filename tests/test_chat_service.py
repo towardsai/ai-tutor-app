@@ -444,6 +444,42 @@ class ChatServiceTestCase(unittest.TestCase):
         self.assertEqual(source_matches[0].data["source_key"], "peft")
         self.assertNotIn("call_id", source_matches[0].data)
 
+    def test_stream_chat_disables_local_tools_when_no_sources_selected(self) -> None:
+        # An explicit empty source selection (UI "Knowledge base: off") must
+        # build the agent without retrieval/KB tools instead of silently
+        # retrieving from the defaults.
+        agent = FakeStreamingAgent([])
+        build_agent_mock = MagicMock(return_value=agent)
+        self.addCleanup(_drop_thread_record, "thread_no_sources")
+        request = ChatRequest(
+            query="What is RAG?",
+            source_keys=(),
+            model_name="google-genai:gemini-3.5-flash",
+            include_reasoning=False,
+            enabled_tools=(),
+        )
+
+        async def collect_events():
+            return [event async for event in stream_chat(request)]
+
+        with (
+            patch("app.chat_service.build_agent", build_agent_mock),
+            patch("app.chat_service.new_thread_id", return_value="thread_no_sources"),
+        ):
+            asyncio.run(collect_events())
+
+        build_agent_mock.assert_called_once()
+        self.assertFalse(build_agent_mock.call_args.kwargs["include_local_tools"])
+
+        self.assertEqual(
+            effective_tool_names(
+                "google-genai:gemini-3.5-flash",
+                ("web_search",),
+                include_local_tools=False,
+            ),
+            ("google_search",),
+        )
+
     def test_checkpoint_history_collapses_tool_using_turn(self) -> None:
         # A tool-using turn checkpoints as [Human, AI(tool_calls, empty text),
         # ToolMessage, AI(answer)]; the visible transcript has one assistant
