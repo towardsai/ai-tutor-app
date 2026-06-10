@@ -304,6 +304,7 @@ export function ChatShell() {
       messageId,
       body: {
         sourceKeys: selectedSourceKeys,
+        enabledTools: enabledToolKeys,
         includeReasoning: true,
         threadId,
         model: selectedModel,

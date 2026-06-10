@@ -148,7 +148,9 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
         )
         or DEFAULT_SELECTED_SOURCE_KEYS
     )
-    model_name = (payload.model or DEFAULT_MODEL_NAME).strip()
+    model_name = (payload.model or DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
+    if model_name not in {model["id"] for model in AVAILABLE_MODELS}:
+        raise HTTPException(status_code=422, detail="Unknown model")
     if payload.enabledTools is None:
         enabled_tools = tuple(
             tool["key"]
@@ -185,6 +187,7 @@ class UIMessageStreamEncoder:
         self.text_block_count = 0
         self.active_reasoning_id = ""
         self.source_matches_by_call_id: dict[str, list[dict[str, Any]]] = {}
+        self.open_tool_call_ids: list[str] = []
         self.closed = False
 
     def close_reasoning_block(self) -> list[dict[str, Any]]:
@@ -270,6 +273,8 @@ class UIMessageStreamEncoder:
             parts.extend(self.close_text_block())
             call_id = str(event.data.get("call_id", uuid4().hex))
             tool_name = str(event.data.get("tool_name", "tool"))
+            if call_id not in self.open_tool_call_ids:
+                self.open_tool_call_ids.append(call_id)
             parts.append(
                 {
                     "type": "tool-input-start",
@@ -352,6 +357,8 @@ class UIMessageStreamEncoder:
                 "text": str(event.data.get("output_text", "")),
                 "matches": self.source_matches_by_call_id.get(call_id, []),
             }
+            if call_id in self.open_tool_call_ids:
+                self.open_tool_call_ids.remove(call_id)
             parts.append(
                 {
                     "type": "tool-output-available",
@@ -389,6 +396,17 @@ class UIMessageStreamEncoder:
             parts.extend(self.close_reasoning_block())
             if self.text_block_id:
                 parts.append({"type": "text-end", "id": self.text_block_id})
+            # Close tool calls the turn never finished, or the UI shows
+            # them as running forever.
+            for call_id in self.open_tool_call_ids:
+                parts.append(
+                    {
+                        "type": "tool-output-error",
+                        "toolCallId": call_id,
+                        "errorText": "The response ended before this tool call finished.",
+                    }
+                )
+            self.open_tool_call_ids = []
             if self.message_id:
                 parts.append({"type": "finish-step"})
                 parts.append({"type": "finish"})

@@ -17,7 +17,7 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from app.api import app
+from app.api import UIMessageStreamEncoder, app
 from app.chat_types import ChatEvent
 
 
@@ -272,6 +272,65 @@ class ApiTestCase(unittest.TestCase):
         self.assertLess(
             part_types.index("tool-input-start"), part_types.index("text-start")
         )
+
+    def test_finish_error_closes_open_tool_calls(self) -> None:
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+        encoder.encode(
+            ChatEvent(
+                "tool_call_started",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_open",
+                    "tool_name": "google_search",
+                    "args": {"query": "x"},
+                    "args_text": "x",
+                },
+            )
+        )
+        encoder.encode(
+            ChatEvent(
+                "tool_call_started",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_done",
+                    "tool_name": "run_kb_command",
+                    "args": {"command": "ls"},
+                    "args_text": "ls",
+                },
+            )
+        )
+        encoder.encode(
+            ChatEvent(
+                "tool_call_completed",
+                {"message_id": "m1", "call_id": "call_done", "output_text": "ok"},
+            )
+        )
+
+        parts = encoder.finish_error("boom")
+
+        tool_errors = [p for p in parts if p["type"] == "tool-output-error"]
+        self.assertEqual(len(tool_errors), 1)
+        self.assertEqual(tool_errors[0]["toolCallId"], "call_open")
+        # Stream still terminates cleanly after closing the tool part.
+        part_types = [p["type"] for p in parts]
+        self.assertLess(
+            part_types.index("tool-output-error"), part_types.index("finish")
+        )
+
+    def test_chat_rejects_unknown_model(self) -> None:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/chat",
+                json={
+                    "messages": [
+                        {"role": "user", "parts": [{"type": "text", "text": "hi"}]}
+                    ],
+                    "model": "anthropic:claude-opus-4-8",
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
 
 
 LIVE_API_E2E = pytest.mark.skipif(

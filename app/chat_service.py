@@ -1051,7 +1051,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 if metadata.get("lc_source") == "summarization":
                     continue
 
-                step = str(metadata.get("langgraph_step", ""))
+                step = str(metadata.get("langgraph_node", ""))
                 if include_reasoning:
                     thought_text = "\n\n".join(extract_thought_summaries(token.content))
                     if thought_text:
@@ -1171,6 +1171,11 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 )
                 if search_started:
                     yield search_started
+                # This model step is complete, so any search it ran is done:
+                # close the activity now instead of when the whole turn ends.
+                search_step_completed = google_search.completed_event()
+                if search_step_completed:
+                    yield search_step_completed
 
                 if is_anthropic_model(request.model_name):
                     anthropic_updates, anthropic_tool_uses = (

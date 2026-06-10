@@ -1,6 +1,52 @@
 from __future__ import annotations
 
-from app.provider_events import extract_anthropic_source_matches
+from app.provider_events import (
+    GoogleSearchActivity,
+    extract_anthropic_source_matches,
+)
+
+
+def _grounding_metadata(query: str, uri: str, title: str) -> dict:
+    return {
+        "grounding_metadata": {
+            "web_search_queries": [query],
+            "grounding_chunks": [{"web": {"uri": uri, "title": title}}],
+            "grounding_supports": [],
+        }
+    }
+
+
+def test_google_search_activity_completes_once_per_cycle() -> None:
+    evidence: dict = {}
+    activity = GoogleSearchActivity("msg_1", evidence)
+
+    started = activity.observe(_grounding_metadata("q1", "https://a.example", "A"))
+    assert started is not None
+    assert started.data["tool_name"] == "google_search"
+
+    completed = activity.completed_event()
+    assert completed is not None
+    assert "1 web result" in completed.data["output_text"]
+    assert completed.data["call_id"] == started.data["call_id"]
+    # Idempotent: the post-turn fallback must not duplicate the event.
+    assert activity.completed_event() is None
+
+
+def test_google_search_activity_restarts_after_completion() -> None:
+    # A later model step running another search gets its own activity cycle
+    # instead of being swallowed by the completed one.
+    activity = GoogleSearchActivity("msg_1", {})
+    first = activity.observe(_grounding_metadata("q1", "https://a.example", "A"))
+    assert activity.completed_event() is not None
+
+    second = activity.observe(_grounding_metadata("q2", "https://b.example", "B"))
+    assert second is not None
+    assert second.data["call_id"] != first.data["call_id"]
+    assert second.data["args_text"] == "q2"
+
+    completed = activity.completed_event()
+    assert completed is not None
+    assert "1 web result" in completed.data["output_text"]
 
 
 def test_web_fetch_result_object_recorded_as_evidence() -> None:

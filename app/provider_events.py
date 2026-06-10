@@ -112,11 +112,17 @@ class GoogleSearchActivity:
         self._message_id = message_id
         self._web_evidence = web_evidence
         self._call_id = ""
+        self._completed = False
         self._queries: list[str] = []
         self._match_count = 0
 
     def observe(self, response_metadata: Any) -> ChatEvent | None:
-        """Record metadata; return a tool_call_started event on first activity."""
+        """Record metadata; return a tool_call_started event on new activity.
+
+        Activity after a completed cycle starts a fresh synthetic call (a
+        later model step ran another search), so completion timing per step
+        stays accurate.
+        """
         new_queries = [
             q
             for q in extract_web_search_queries(response_metadata)
@@ -127,8 +133,11 @@ class GoogleSearchActivity:
             self._web_evidence,
         )
         started: ChatEvent | None = None
-        if (new_queries or new_grounding) and not self._call_id:
+        if (new_queries or new_grounding) and (not self._call_id or self._completed):
             self._call_id = uuid4().hex
+            self._completed = False
+            self._queries = []
+            self._match_count = 0
             joined = "; ".join(new_queries)
             started = ChatEvent(
                 "tool_call_started",
@@ -145,8 +154,10 @@ class GoogleSearchActivity:
         return started
 
     def completed_event(self) -> ChatEvent | None:
-        if not self._call_id:
+        """Close the active cycle; idempotent until new activity arrives."""
+        if not self._call_id or self._completed:
             return None
+        self._completed = True
         joined = "; ".join(self._queries)
         if self._match_count == 0:
             output_text = "Google search ran but returned no grounding results."

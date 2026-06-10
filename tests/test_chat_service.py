@@ -69,7 +69,7 @@ class FakeStreamingAgent(FakeAgent):
                         }
                     ],
                 ),
-                {"langgraph_step": "model"},
+                {"langgraph_node": "model"},
             ),
         }
         yield {
