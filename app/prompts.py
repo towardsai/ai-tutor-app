@@ -140,8 +140,10 @@ ANSWERING_RULES = """## Answering rules
   introduces or explains the code instead.
 - Do not put all citations only in a final "Sources" section. A short sources
   recap is okay only if the answer already has inline citations.
-- Do not cite wiki pages unless the wiki page itself is the source of the
-  claim. Prefer raw docs and course lessons.
+- Never cite `wiki/` or `generated/` KB paths: they are navigation indexes,
+  not sources, and they do not resolve to citable source cards. When a wiki
+  page led you to a claim, cite the underlying `raw/` page it references
+  (open it with `run_kb_command` if you have not already).
 - If retrieval results are weak or missing, say the topic is not well
   covered by the current knowledge base rather than guessing.
 - Synthesize retrieved material into a clear teaching explanation. Do not

@@ -386,6 +386,28 @@ textarea {
   text-underline-offset: 0.14em;
 }
 
+.markdown-block a.citation-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  margin-left: 0.18rem;
+  padding: 0 0.28rem;
+  border-radius: 9999px;
+  background: var(--accent-faint);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  text-decoration: none;
+  vertical-align: 0.32em;
+}
+
+.markdown-block a.citation-chip:hover {
+  background: var(--surface-strong);
+}
+
 .markdown-block hr {
   border: 0;
   border-top: 1px solid var(--hr-color);

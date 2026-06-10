@@ -37,6 +37,8 @@ import type {
 } from "@/lib/chat-ui";
 import {
   buildActivityItems,
+  buildCitationNumbers,
+  citationNumberFor,
   getMessageCitations,
   getOrderedMessageBlocks,
   prettifyToolName,
@@ -77,6 +79,7 @@ export function ChatMessage({
   const isAssistant = message.role === "assistant";
   const contentBlocks = getOrderedMessageBlocks(message);
   const citations = isAssistant && !isStreaming ? getMessageCitations(message) : [];
+  const citationNumbers = isAssistant ? buildCitationNumbers(message) : undefined;
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -145,10 +148,16 @@ export function ChatMessage({
                   key={block.key}
                   block={block}
                   isActive={isActive}
+                  citationNumbers={citationNumbers}
                 />
               );
             })}
-            {citations.length > 0 ? <CitationRow citations={citations} /> : null}
+            {citations.length > 0 ? (
+              <CitationRow
+                citations={citations}
+                citationNumbers={citationNumbers}
+              />
+            ) : null}
           </div>
         )}
       </article>
@@ -280,14 +289,16 @@ function MessageActionButton({
 function ContentBlock({
   block,
   isActive = false,
+  citationNumbers,
 }: {
   block: TutorMessageBlock;
   isActive?: boolean;
+  citationNumbers?: Map<string, number>;
 }) {
   if (block.kind === "activity") {
     return <ActivityPanel parts={block.parts} isActive={isActive} />;
   }
-  return <TextBlock parts={block.parts} />;
+  return <TextBlock parts={block.parts} citationNumbers={citationNumbers} />;
 }
 
 function ActivityPanel({
@@ -601,13 +612,20 @@ function formatToolResultSummary({
   return "";
 }
 
-function TextBlock({ parts }: { parts: TutorMessagePart[] }) {
+function TextBlock({
+  parts,
+  citationNumbers,
+}: {
+  parts: TutorMessagePart[];
+  citationNumbers?: Map<string, number>;
+}) {
   return (
     <div className="space-y-3 text-[15px] leading-[1.72] tracking-[-0.012em] text-[var(--ink)]">
       {parts.map((part, index) => (
         <MarkdownBlock
           key={`text-${index}`}
           className="text-[15px] leading-[1.72] tracking-[-0.012em] text-[var(--ink)]"
+          citationNumbers={citationNumbers}
         >
           {part.text ?? ""}
         </MarkdownBlock>
@@ -651,7 +669,13 @@ const CITATION_KIND_META: Record<
   doc: { icon: BookOpen, label: "Docs" },
 };
 
-function CitationRow({ citations }: { citations: MessageCitation[] }) {
+function CitationRow({
+  citations,
+  citationNumbers,
+}: {
+  citations: MessageCitation[];
+  citationNumbers?: Map<string, number>;
+}) {
   return (
     <section className="mt-2 space-y-2 border-t border-[var(--line)] pt-3">
       <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
@@ -665,6 +689,7 @@ function CitationRow({ citations }: { citations: MessageCitation[] }) {
         {citations.map((citation, index) => {
           const meta = CITATION_KIND_META[citation.kind];
           const Icon = meta.icon;
+          const number = citationNumberFor(citationNumbers, citation.url);
           return (
             <a
               key={`${citation.kind}-${citation.url}-${index}`}
@@ -674,6 +699,11 @@ function CitationRow({ citations }: { citations: MessageCitation[] }) {
               title={`${meta.label}${citation.sublabel ? ` · ${citation.sublabel}` : ""}`}
               className="group inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--line-strong)] bg-[var(--accent-faint)] px-2.5 py-1.5 text-xs font-medium text-[var(--accent)] transition hover:border-[var(--accent)] hover:bg-[var(--surface-strong)]"
             >
+              {number !== undefined ? (
+                <span className="shrink-0 rounded-full bg-[var(--surface)] px-1.5 text-[10px] font-semibold text-[var(--accent)]">
+                  {number}
+                </span>
+              ) : null}
               <Icon className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">{citation.label}</span>
               <ExternalLink className="h-3 w-3 shrink-0 opacity-60 transition group-hover:opacity-100" />

@@ -180,6 +180,47 @@ export function getMessageCitations(message: TutorMessage): MessageCitation[] {
   return citations;
 }
 
+const MARKDOWN_LINK_PATTERN = /(!?)\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g;
+
+function normalizeCitationUrl(url: string) {
+  // Mirror the server's normalize_url so inline links and data-source parts
+  // resolve to the same key.
+  return url.replace(/#.*$/, "").replace(/\/+$/, "");
+}
+
+// Number the citation links in a message's answer text by order of first
+// appearance, deduped by normalized URL. The same map drives the inline
+// citation chips and the numbers on the sources row.
+export function buildCitationNumbers(message: TutorMessage): Map<string, number> {
+  const numbers = new Map<string, number>();
+  for (const part of message.parts) {
+    if (!("type" in part) || part.type !== "text") {
+      continue;
+    }
+    const text = (part as TutorMessagePart).text ?? "";
+    for (const match of text.matchAll(MARKDOWN_LINK_PATTERN)) {
+      if (match[1] === "!") {
+        continue;
+      }
+      const key = normalizeCitationUrl(match[3] ?? "");
+      if (key && !numbers.has(key)) {
+        numbers.set(key, numbers.size + 1);
+      }
+    }
+  }
+  return numbers;
+}
+
+export function citationNumberFor(
+  numbers: Map<string, number> | undefined,
+  url: string | undefined,
+) {
+  if (!numbers || !url) {
+    return undefined;
+  }
+  return numbers.get(normalizeCitationUrl(url));
+}
+
 function cleanTitle(raw: string | undefined) {
   const trimmed = raw?.trim();
   if (!trimmed) {
