@@ -26,12 +26,15 @@ ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-confi
 | Paths, models, startup downloads | `app/config.py` |
 | **Sources — single source of truth** | `data/scraping_scripts/source_registry.py` |
 | Agent tracing (LangSmith) + server logging (stdlib `logging` → stdout) | `app/agent_tracing.py`, `app/config.py` |
+| Memory/context presets + per-turn telemetry (`context_stats`) | `app/memory_presets.py`, `app/telemetry.py` |
+| Eval harness (run/grade/report batteries) | `evals/`, entry doc `evals.md` |
+| Eval dataset schemas + glossary | `data/eval/README.md` |
 | Data pipeline / workflows (deep guide) | `data/scraping_scripts/README.md` |
 | KB design + wiki maintainer workflow (deep guide) | `data/kb/MAINTAINER.md` |
 
 ## Architecture in brief
 
-The agent is built with `langchain.agents.create_agent()` (LangGraph), an `InMemorySaver` checkpointer keyed by `thread_id`, and middlewares for context-editing, summarization, and source preference. `stream_chat()` is the single entry point the API calls; it yields typed `ChatEvent`s that `app/api.py` encodes into the AI SDK UI-message stream. It always exposes two custom tools, plus provider-native web tools when enabled:
+The agent is built with `langchain.agents.create_agent()` (LangGraph), an `InMemorySaver` checkpointer keyed by `thread_id`, and middlewares assembled from the selected **memory preset** (`app/memory_presets.py`: context-editing, summarization, optional long-term student-profile memory) plus source preference. `stream_chat()` is the single entry point the API calls; it yields typed `ChatEvent`s that `app/api.py` encodes into the AI SDK UI-message stream, ending each turn with a `context_stats` telemetry event (tokens incl. cache buckets, est. cost, TTFT, compaction-trigger counts — independent of LangSmith). It always exposes two custom tools, plus provider-native web tools when enabled:
 
 - **`retrieve_tutor_context(query)`** — hybrid RAG over the corpus, scoped to the user's selected sources.
 - **`run_kb_command(...)`** — read-only KB file browsing (see below).
@@ -86,9 +89,13 @@ uv run -m data.scraping_scripts.retire_source_workflow --sources KEY [--dry-run 
 
 `update_docs_workflow` also performs a from-scratch rebuild if `data/kb` / `data/chroma-db-all_sources` are deleted. Common flags: `--process-all-context` (default is new-content-only), `--skip-kb`, `--skip-vectors`, `--skip-upload`, `--skip-data-upload`.
 
+## Evaluation
+
+**`evals.md` is the entry point** (what we evaluate, the datasets, results, remaining work); `evals/` is the harness (`run_battery` → `grade` → `report`, plus `check_triggers` and the blinded `handgrade_workbook`). Eval datasets and run results contain **real student text**: they are gitignored and ship via the private `ai-tutor-data` HF dataset (`eval/`, `eval_runs/`) — download snippet in `evals.md`. Runs cost real API money (a 4-preset bake-off ≈ $73); grading and reporting re-run offline from saved bundles for free.
+
 ## Environment variables
 
-Chat runtime: `COHERE_API_KEY` (retrieval), one chat-model provider key (`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`), `HF_TOKEN` (first-start download). Optional: `LANGSMITH_*` (tracing), `AI_TUTOR_API_PORT`/`HOST`/`CORS_ALLOW_ORIGINS`, `AI_TUTOR_KB_DIR`, `NEXT_PUBLIC_AI_TUTOR_API_BASE_URL`. Data workflows also need `GITHUB_TOKEN` and `GEMINI_API_KEY`/`GOOGLE_API_KEY` (context generation). See `.env.example`.
+Chat runtime: `COHERE_API_KEY` (retrieval), one chat-model provider key (`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`), `HF_TOKEN` (first-start download). Optional: `LANGSMITH_*` (tracing), `AI_TUTOR_API_PORT`/`HOST`/`CORS_ALLOW_ORIGINS`, `AI_TUTOR_KB_DIR`, `AI_TUTOR_MEMORY_PRESET` (default memory preset; see `app/memory_presets.py`), `NEXT_PUBLIC_AI_TUTOR_API_BASE_URL`. Data workflows also need `GITHUB_TOKEN` and `GEMINI_API_KEY`/`GOOGLE_API_KEY` (context generation). See `.env.example`.
 
 ## Deployment
 
@@ -110,3 +117,4 @@ Both Spaces need the same runtime secrets (`COHERE_API_KEY`, model provider key,
 - `data/kb/` and `data/chroma-db-all_sources/` are build artifacts — never commit or hand-edit; regenerate or re-download.
 - Two `AGENTS.md` files: this root one (repo dev guidance) vs `data/kb/AGENTS.md` (generated runtime KB rules).
 - Source config lives in `source_registry.py`, not `app/config.py` / `process_md_files.py` (older docs were wrong).
+- **Eval data must never enter git.** `data/eval/` and `runs/` contain real student text; pushes to `main` get force-pushed to HF Spaces (prod is **public**), so a committed data file becomes world-readable on the next deploy. The gitignore rules covering `*.jsonl`, `data/eval/review_batches/`, `data/eval/review_log_v1.md`, and `runs/` are load-bearing — never weaken them; share via the private `ai-tutor-data` dataset instead.
