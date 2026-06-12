@@ -30,8 +30,21 @@ from langchain_core.messages import (
 )
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
 
 from .chat_types import ChatEvent, ChatRequest, ChatTurn, SourceMatch
+from .memory_presets import (
+    DEFAULT_MEMORY_PRESET,
+    MEMORY_PRESETS,
+    MemoryConfig,
+    resolve_memory_preset,
+)
+from .telemetry import (
+    TurnUsageHandler,
+    context_window_stats,
+    estimate_cost_usd,
+    usage_totals,
+)
 from .chroma_rag import LocalChromaRetriever, format_tool_payload, parse_tool_payload
 from .kb_shell import (
     KbCommandError,
@@ -66,6 +79,12 @@ from .config import (
 logger = logging.getLogger(__name__)
 
 CHECKPOINTER = InMemorySaver()
+# Long-term memory (student profiles), keyed by namespace ("student", <id>).
+# In-process like the checkpointer: profiles survive across threads/sessions
+# within one server lifetime, which is what the profile-memory experiments
+# need. Swap for a persistent LangGraph store to survive restarts.
+STORE = InMemoryStore()
+CLEARED_TOOL_OUTPUT_PLACEHOLDER = "[tool output cleared to save context]"
 # Visible transcript per thread, recorded as each turn finishes streaming.
 # The checkpointed messages stop mirroring the visible transcript once
 # SummarizationMiddleware rewrites thread state, so thread reuse is decided
@@ -98,6 +117,24 @@ class AppContext:
     allowed_sources: tuple[str, ...]
     kb_session_id: str = ""
     kb_command_limit: int = DEFAULT_KB_COMMAND_LIMIT
+    student_id: str = ""
+
+
+def get_student_profile(student_id: str) -> str:
+    if not student_id:
+        return ""
+    item = STORE.get(("student", student_id), "profile")
+    if item is None:
+        return ""
+    return str((item.value or {}).get("profile", "")).strip()
+
+
+def set_student_profile(student_id: str, profile: str) -> None:
+    """Write a student profile directly; eval runners use this to seed
+    personas without spending a turn on the on-the-fly write path."""
+    if not student_id:
+        return
+    STORE.put(("student", student_id), "profile", {"profile": profile.strip()})
 
 
 def _claim_kb_command_budget(session_id: str, limit: int) -> tuple[bool, int]:
@@ -812,6 +849,82 @@ class SourcePreferenceMiddleware(AgentMiddleware):
         return await handler(self._inject(request))
 
 
+class StudentProfileMiddleware(AgentMiddleware):
+    """Append the stored student profile to the system prompt.
+
+    Long-term semantic memory: the profile lives in the LangGraph store under
+    ``("student", <student_id>)`` and is updated after each turn by
+    ``stream_chat`` (see ``_update_student_profile``). InMemoryStore reads are
+    dict lookups, so the sync ``store.get`` is fine on the async path too.
+    """
+
+    def _inject(self, request):
+        runtime = getattr(request, "runtime", None)
+        ctx = getattr(runtime, "context", None) if runtime else None
+        student_id = getattr(ctx, "student_id", "") if ctx else ""
+        if not student_id:
+            return request
+        store = getattr(runtime, "store", None) or STORE
+        item = store.get(("student", student_id), "profile")
+        profile = ""
+        if item is not None:
+            profile = str((item.value or {}).get("profile", "")).strip()
+        if not profile:
+            return request
+        note = (
+            "## Student profile (long-term memory)\n\n"
+            f"{profile}\n\n"
+            "Use this profile to calibrate level, language, and examples. "
+            "Do not re-ask for information it already answers."
+        )
+        sys_msg = request.system_message
+        if sys_msg is None:
+            new_sys = SystemMessage(content=note)
+        else:
+            new_sys = SystemMessage(content=f"{sys_msg.content}\n\n{note}")
+        return request.override(system_message=new_sys)
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._inject(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._inject(request))
+
+
+def build_agent_middleware(
+    model: Any, memory_config: MemoryConfig
+) -> list[AgentMiddleware]:
+    """Assemble the compaction/memory middleware stack for one preset."""
+    middleware: list[AgentMiddleware] = []
+    if memory_config.context_editing:
+        middleware.append(
+            ContextEditingMiddleware(
+                edits=[
+                    ClearToolUsesEdit(
+                        trigger=memory_config.context_editing_trigger_tokens,
+                        keep=memory_config.context_editing_keep,
+                        # Retrieval results stay; only shell outputs get cleared.
+                        exclude_tools=("retrieve_tutor_context",),
+                        placeholder=CLEARED_TOOL_OUTPUT_PLACEHOLDER,
+                    )
+                ],
+                token_count_method="approximate",
+            )
+        )
+    if memory_config.summarization:
+        middleware.append(
+            SummarizationMiddleware(
+                model=model,
+                trigger=("tokens", memory_config.summarization_trigger_tokens),
+                keep=("messages", memory_config.summarization_keep_messages),
+            )
+        )
+    if memory_config.longterm_memory:
+        middleware.append(StudentProfileMiddleware())
+    middleware.append(SourcePreferenceMiddleware())
+    return middleware
+
+
 @lru_cache(maxsize=32)
 def build_agent(
     model_name: str,
@@ -819,36 +932,19 @@ def build_agent(
     include_thoughts: bool = False,
     kb_agents_instructions: str | None = None,
     include_local_tools: bool = True,
+    memory_config: MemoryConfig = MEMORY_PRESETS[DEFAULT_MEMORY_PRESET],
 ):
     # kb_agents_instructions is part of the cache key on purpose: an agent
     # built before data/kb/AGENTS.md existed must not pin its degraded
-    # system prompt for the process lifetime.
+    # system prompt for the process lifetime. memory_config (frozen, hashable)
+    # is too: each preset gets its own agent.
     model = build_chat_model(model_name, include_thoughts=include_thoughts)
     # An explicit empty source selection turns the knowledge base off: no
     # retrieval, no KB browsing, and a system prompt that says so.
     tools: list[Any] = (
         [retrieve_tutor_context, run_kb_command] if include_local_tools else []
     )
-    middleware: list[AgentMiddleware] = [
-        ContextEditingMiddleware(
-            edits=[
-                ClearToolUsesEdit(
-                    trigger=5_000,
-                    keep=5,
-                    # Retrieval results stay; only shell outputs get cleared.
-                    exclude_tools=("retrieve_tutor_context",),
-                    placeholder="[tool output cleared to save context]",
-                )
-            ],
-            token_count_method="approximate",
-        ),
-        SummarizationMiddleware(
-            model=model,
-            trigger=("tokens", 30_000),
-            keep=("messages", 20),
-        ),
-        SourcePreferenceMiddleware(),
-    ]
+    middleware = build_agent_middleware(model, memory_config)
     enabled = set(enabled_tools)
     if is_google_genai_model(model_name):
         if "web_search" in enabled:
@@ -885,6 +981,7 @@ def build_agent(
         ),
         context_schema=AppContext,
         checkpointer=CHECKPOINTER,
+        store=STORE,
         middleware=middleware,
     )
 
@@ -954,6 +1051,7 @@ def agent_run_config(
     request: ChatRequest,
     active_thread_id: str,
     message_id: str,
+    memory_preset: str = "",
 ) -> dict[str, Any]:
     provider, actual_model = model_provider_and_name(request.model_name)
     tools = effective_tool_names(
@@ -965,6 +1063,7 @@ def agent_run_config(
         SOURCE_KEY_TO_LABEL.get(source_key, source_key)
         for source_key in request.source_keys
     ]
+    preset = memory_preset or DEFAULT_MEMORY_PRESET
     config = thread_config(active_thread_id)
     config.update(
         {
@@ -974,6 +1073,7 @@ def agent_run_config(
                 "knowledge-base-chatbot",
                 f"provider:{provider}",
                 f"model:{actual_model}",
+                f"memory:{preset}",
                 *(f"tool:{tool_name}" for tool_name in tools),
             ],
             "metadata": {
@@ -989,13 +1089,68 @@ def agent_run_config(
                 "source_keys": list(request.source_keys),
                 "source_labels": source_labels,
                 "include_reasoning": bool(request.include_reasoning),
+                "memory_preset": preset,
+                "student_id": request.student_id,
             },
         }
     )
     return config
 
 
+_PROFILE_UPDATE_PROMPT = """\
+You maintain a short profile of a student for an AI tutor.
+
+Current profile (may be empty):
+{profile}
+
+Latest exchange:
+Student: {query}
+Tutor: {answer}
+
+Rewrite the profile in at most 5 short lines. Keep only durable facts useful
+for future tutoring: skill level, goals, preferred language/tools, weak
+topics, current course/lesson. Drop one-off details. Return only the profile
+text; return NONE if nothing durable is known yet."""
+
+
+async def _update_student_profile(
+    request: ChatRequest, answer: str, usage_handler: TurnUsageHandler
+) -> None:
+    """Refresh the stored profile from this turn (one small extra LLM call).
+
+    The call reports into ``usage_handler`` so profile-memory presets pay for
+    their own upkeep in the turn's token/cost numbers.
+    """
+    model = build_chat_model(request.model_name)
+    prompt = _PROFILE_UPDATE_PROMPT.format(
+        profile=get_student_profile(request.student_id) or "(empty)",
+        query=request.query[:1500],
+        answer=answer[:3000],
+    )
+    response = await model.ainvoke(
+        [HumanMessage(content=prompt)],
+        config={
+            "run_name": "student-profile-update",
+            "callbacks": [usage_handler],
+            "metadata": {"lc_source": "student_profile_update"},
+        },
+    )
+    text = message_content_to_text(response.content).strip()
+    if not text or text.upper() == "NONE":
+        return
+    set_student_profile(request.student_id, text[:1200])
+
+
 async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
+    turn_started = time.monotonic()
+    # Raises on unknown preset names: a mislabeled experiment run must fail,
+    # not silently fall back to prod. The API layer pre-validates to a 422.
+    memory_config = resolve_memory_preset(request.memory_preset)
+    # Token usage and call counts come from the model calls themselves
+    # (middleware summarization and profile updates included), so eval runs
+    # never depend on LangSmith being enabled or within plan limits.
+    usage_handler = TurnUsageHandler()
+    first_text_at: float | None = None
     normalized_history = normalize_history(request.history)
     retrieval_evidence: dict[str, SourceMatch] = {}
     shell_evidence: dict[str, SourceMatch] = {}
@@ -1036,6 +1191,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 ensure_kb_agents_instructions() if include_local_tools else None
             ),
             include_local_tools=include_local_tools,
+            memory_config=memory_config,
         )
 
     agent = await asyncio.to_thread(_build_agent_for_request)
@@ -1047,7 +1203,10 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
         normalized_history,
     )
     _touch_thread(active_thread_id)
-    run_config = agent_run_config(request, active_thread_id, message_id)
+    run_config = agent_run_config(
+        request, active_thread_id, message_id, memory_config.name
+    )
+    run_config["callbacks"] = [usage_handler]
     if fork_checkpoint_id:
         # Time travel: run from the checkpoint matching the history the
         # client kept; the turns after it become an abandoned branch.
@@ -1064,6 +1223,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 allowed_sources=request.source_keys,
                 kb_session_id=message_id,
                 kb_command_limit=DEFAULT_KB_COMMAND_LIMIT,
+                student_id=request.student_id,
             ),
             stream_mode=["messages", "updates"],
             version="v2",
@@ -1116,6 +1276,8 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 if not text_delta and token.content:
                     text_delta = message_content_to_text(token.content)
                 if text_delta:
+                    if first_text_at is None:
+                        first_text_at = time.monotonic()
                     answer_chunks.append(text_delta)
                     yield ChatEvent(
                         "text_delta",
@@ -1324,6 +1486,46 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
             "source_match",
             source_match_payload(source_match, message_id=message_id),
         )
+
+    # Long-term memory upkeep happens before the stats event so the profile
+    # update's tokens land in this turn's bill.
+    if memory_config.longterm_memory and request.student_id and answer:
+        try:
+            await _update_student_profile(request, answer, usage_handler)
+        except Exception as exc:
+            logger.warning("Student profile update failed. error=%s", exc)
+
+    # Aborted streams never reach this event; eval runners consume the full
+    # stream, and the UI treats the meter as best-effort.
+    state_messages = agent.get_state(thread_config(active_thread_id)).values.get(
+        "messages", []
+    )
+    totals = usage_totals(usage_handler.usage_metadata)
+    total_ms = int((time.monotonic() - turn_started) * 1000)
+    yield ChatEvent(
+        "context_stats",
+        {
+            "message_id": message_id,
+            "thread_id": active_thread_id,
+            "memory_preset": memory_config.name,
+            "llm_calls": usage_handler.llm_calls,
+            # Per-model breakdown for trace bundles; the totals below are
+            # what the UI meter renders.
+            "usage_by_model": {
+                model_key: dict(usage)
+                for model_key, usage in usage_handler.usage_metadata.items()
+            },
+            **totals,
+            "est_cost_usd": estimate_cost_usd(usage_handler.usage_metadata),
+            "ttft_ms": (
+                int((first_text_at - turn_started) * 1000)
+                if first_text_at is not None
+                else None
+            ),
+            "total_ms": total_ms,
+            **context_window_stats(state_messages, CLEARED_TOOL_OUTPUT_PLACEHOLDER),
+        },
+    )
     yield ChatEvent(
         "message_completed",
         {

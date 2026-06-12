@@ -25,6 +25,7 @@ from .chat_service import (
 )
 from .chat_types import ChatEvent, ChatRequest, ChatTurn
 from .kb_manifest import load_manifest_entries
+from .memory_presets import MEMORY_PRESETS
 from .config import (
     AVAILABLE_MODELS,
     AVAILABLE_SOURCES,
@@ -71,6 +72,11 @@ class ApiChatRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     includeReasoning: bool = True
     threadId: str = Field(default="", max_length=128)
+    # Memory/context-management preset (experiments + workshop toggles).
+    # Omitted means the server-side default resolution order.
+    memoryPreset: str | None = Field(default=None, max_length=64)
+    # Long-term memory key for profile-memory presets.
+    studentId: str = Field(default="", max_length=128)
 
     @field_validator("messages")
     @classmethod
@@ -233,6 +239,9 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
     model_name = (payload.model or DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
     if model_name not in {model["id"] for model in AVAILABLE_MODELS}:
         raise HTTPException(status_code=422, detail="Unknown model")
+    memory_preset = (payload.memoryPreset or "").strip()
+    if memory_preset and memory_preset not in MEMORY_PRESETS:
+        raise HTTPException(status_code=422, detail="Unknown memory preset")
     if payload.enabledTools is None:
         enabled_tools = tuple(
             tool["key"]
@@ -258,6 +267,8 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
         include_reasoning=bool(payload.includeReasoning),
         thread_id=(payload.threadId or "").strip(),
         enabled_tools=enabled_tools,
+        memory_preset=memory_preset,
+        student_id=payload.studentId.strip(),
     )
 
 
@@ -468,6 +479,37 @@ class UIMessageStreamEncoder:
                     "type": "tool-output-available",
                     "toolCallId": call_id,
                     "output": output,
+                }
+            )
+            return parts
+
+        if event.type == "context_stats":
+            data = event.data
+            parts.append(
+                {
+                    "type": "data-context-stats",
+                    "data": {
+                        "messageId": str(data.get("message_id", "")),
+                        "memoryPreset": str(data.get("memory_preset", "")),
+                        "llmCalls": data.get("llm_calls"),
+                        "inputTokens": data.get("input_tokens"),
+                        "outputTokens": data.get("output_tokens"),
+                        "totalTokens": data.get("total_tokens"),
+                        "cacheReadTokens": data.get("cache_read_tokens"),
+                        "cacheCreationTokens": data.get("cache_creation_tokens"),
+                        # None when a used model has no price-table entry;
+                        # the client must render that as unknown, not $0.
+                        "estCostUsd": data.get("est_cost_usd"),
+                        "ttftMs": data.get("ttft_ms"),
+                        "totalMs": data.get("total_ms"),
+                        "contextMessages": data.get("context_messages"),
+                        "contextTokensApprox": data.get("context_tokens_approx"),
+                        "summaryMessages": data.get("summary_messages"),
+                        "clearedToolOutputs": data.get("cleared_tool_outputs"),
+                    },
+                    # Delivered to onData for a live meter; not stored in
+                    # message.parts (nothing renders it as message content).
+                    "transient": True,
                 }
             )
             return parts

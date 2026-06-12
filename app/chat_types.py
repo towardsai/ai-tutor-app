@@ -33,6 +33,12 @@ class ChatRequest:
     include_reasoning: bool = False
     thread_id: str = ""
     enabled_tools: tuple[str, ...] = ()
+    # Memory/context-management preset name (see app/memory_presets.py).
+    # Empty means the env-var/default resolution order.
+    memory_preset: str = ""
+    # Long-term memory key: profile-memory presets read and update the stored
+    # student profile under this id. Empty disables profile memory I/O.
+    student_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)

@@ -710,6 +710,66 @@ class ApiTestCase(unittest.TestCase):
         omitted = build_chat_request(ApiChatRequest(query="What is RAG?"))
         self.assertEqual(omitted.source_keys, tuple(DEFAULT_SELECTED_SOURCE_KEYS))
 
+    def test_memory_preset_and_student_id_mapping(self) -> None:
+        from fastapi import HTTPException
+
+        from app.api import ApiChatRequest, build_chat_request
+
+        request = build_chat_request(
+            ApiChatRequest(
+                query="What is RAG?",
+                memoryPreset="full_history",
+                studentId=" student-1 ",
+            )
+        )
+        self.assertEqual(request.memory_preset, "full_history")
+        self.assertEqual(request.student_id, "student-1")
+
+        # Omitted preset stays empty so the server-side default resolution
+        # (env var, then "prod") applies at stream time.
+        omitted = build_chat_request(ApiChatRequest(query="What is RAG?"))
+        self.assertEqual(omitted.memory_preset, "")
+
+        with self.assertRaises(HTTPException) as raised:
+            build_chat_request(
+                ApiChatRequest(query="What is RAG?", memoryPreset="typo")
+            )
+        self.assertEqual(raised.exception.status_code, 422)
+
+    def test_encoder_emits_transient_context_stats_part(self) -> None:
+        encoder = UIMessageStreamEncoder()
+        parts = encoder.encode(
+            ChatEvent(
+                "context_stats",
+                {
+                    "message_id": "msg_1",
+                    "memory_preset": "prod",
+                    "llm_calls": 3,
+                    "input_tokens": 1200,
+                    "output_tokens": 250,
+                    "total_tokens": 1450,
+                    "cache_read_tokens": 400,
+                    "cache_creation_tokens": 0,
+                    "est_cost_usd": None,
+                    "ttft_ms": 850,
+                    "total_ms": 4200,
+                    "context_messages": 9,
+                    "context_tokens_approx": 5400,
+                    "summary_messages": 1,
+                    "cleared_tool_outputs": 2,
+                },
+            )
+        )
+        self.assertEqual(len(parts), 1)
+        part = parts[0]
+        self.assertEqual(part["type"], "data-context-stats")
+        self.assertTrue(part["transient"])
+        self.assertEqual(part["data"]["memoryPreset"], "prod")
+        self.assertEqual(part["data"]["inputTokens"], 1200)
+        self.assertEqual(part["data"]["summaryMessages"], 1)
+        # Unknown pricing must surface as null, never $0.
+        self.assertIsNone(part["data"]["estCostUsd"])
+
 
 LIVE_API_E2E = pytest.mark.skipif(
     os.getenv("RUN_LIVE_API_E2E") != "1",
