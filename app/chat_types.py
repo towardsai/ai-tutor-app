@@ -39,6 +39,12 @@ class ChatRequest:
     # Long-term memory key: profile-memory presets read and update the stored
     # student profile under this id. Empty disables profile memory I/O.
     student_id: str = ""
+    # Part C / Axis B ablation: drop the run_kb_command tool (and its prompt
+    # section) while keeping retrieval, to measure whether KB browsing helps.
+    disable_kb: bool = False
+    # Part C / Axis B sweep: per-request retrieval token budget (caps the chunks
+    # the retriever returns). None keeps the default 100k budget.
+    retrieval_budget: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

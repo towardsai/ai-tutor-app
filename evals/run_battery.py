@@ -1,4 +1,10 @@
-"""Run an eval battery against the tutor and persist one trace bundle per turn.
+"""Run a test battery against the tutor and save one bundle per turn.
+
+A battery is a JSONL file of related tests, such as one-question chats or
+multi-turn sessions. A bundle is the saved JSON record for one tutor turn:
+the question, answer, tool calls, source matches, timing, token usage, and
+any error. Later commands grade and report from these bundles without calling
+the tutor again.
 
 Examples:
   uv run -m evals.run_battery --battery data/eval/battery_singleturn_v1.jsonl \
@@ -62,6 +68,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--enable-tools", nargs="*", default=[], help="e.g. web_search url_context"
     )
+    parser.add_argument(
+        "--disable-kb",
+        action="store_true",
+        help="Drop the run_kb_command tool + KB prompt (KB on/off ablation).",
+    )
+    parser.add_argument(
+        "--retrieval-budget",
+        type=int,
+        default=0,
+        help="Per-request retrieval token budget (Axis B sweep, e.g. 30000); "
+        "0 keeps the default 100k.",
+    )
     parser.add_argument("--langsmith", action="store_true", help="Enable tracing.")
     return parser.parse_args()
 
@@ -86,7 +104,7 @@ class BundleSink:
 
 
 def prune_incomplete(
-    path: Path, battery_type: str, expected_turns: dict[str, int], trials: int
+    path: Path, expected_turns: dict[str, int]
 ) -> set[tuple[str, int]]:
     """Drop partial work units from a previous run; return completed (id, trial).
 
@@ -236,6 +254,8 @@ def build_request(
         enabled_tools=tuple(args.enable_tools),
         memory_preset=args.preset,
         student_id=student_id,
+        disable_kb=args.disable_kb,
+        retrieval_budget=args.retrieval_budget or None,
     )
 
 
@@ -398,7 +418,7 @@ async def run_all(args: argparse.Namespace) -> Path:
         )
         for unit in units
     }
-    completed = prune_incomplete(sink.path, battery_type, expected_turns, args.trials)
+    completed = prune_incomplete(sink.path, expected_turns)
 
     semaphore = asyncio.Semaphore(args.concurrency)
     # Same-persona questions are serialized: each one re-seeds the canonical

@@ -6,11 +6,16 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 from app.chat_service import CLEARED_TOOL_OUTPUT_PLACEHOLDER
+from app import telemetry
 from app.telemetry import (
     TurnUsageHandler,
     context_window_stats,
     estimate_cost_usd,
+    pop_turn_signals,
     pricing_for_model,
+    record_turn_signal,
+    record_turn_signal_max,
+    reset_turn_signals,
     usage_totals,
 )
 
@@ -67,7 +72,9 @@ class CostEstimateTests(unittest.TestCase):
         self.assertAlmostEqual(estimate_cost_usd(usage), expected)
 
     def test_cache_creation_without_write_rate_bills_as_input(self) -> None:
-        # gemini-3.5-flash has no cache_write entry.
+        # gemini-3.5-flash: input $1.50, cache creation defaults to input rate
+        # because Gemini's hourly explicit-cache storage is not represented in
+        # per-turn usage metadata.
         usage = {
             "gemini-3.5-flash": {
                 "input_tokens": 1_000_000,
@@ -75,7 +82,7 @@ class CostEstimateTests(unittest.TestCase):
                 "input_token_details": {"cache_creation": 200_000},
             }
         }
-        expected = 0.8 * 0.30 + 0.2 * 0.30
+        expected = 0.8 * 1.50 + 0.2 * 1.50
         self.assertAlmostEqual(estimate_cost_usd(usage), expected)
 
     def test_unknown_model_yields_none_not_zero(self) -> None:
@@ -137,6 +144,49 @@ class TurnUsageHandlerTests(unittest.TestCase):
         usage = handler.usage_metadata["gemini-3.5-flash"]
         self.assertEqual(usage["input_tokens"], 150)
         self.assertEqual(usage["output_tokens"], 30)
+
+
+class TurnSignalRegistryTests(unittest.TestCase):
+    def test_accumulates_and_pops_per_turn(self) -> None:
+        reset_turn_signals("turn-a")
+        record_turn_signal("turn-a", "dropped_messages", 3)
+        record_turn_signal("turn-a", "dropped_messages", 2)
+        record_turn_signal("turn-a", "truncated_tool_outputs", 1)
+        signals = pop_turn_signals("turn-a")
+        self.assertEqual(signals["dropped_messages"], 5)
+        self.assertEqual(signals["truncated_tool_outputs"], 1)
+        # Popping clears the entry: a second pop is empty.
+        self.assertEqual(pop_turn_signals("turn-a"), {})
+
+    def test_turns_are_isolated_and_noops_are_ignored(self) -> None:
+        reset_turn_signals("turn-x")
+        reset_turn_signals("turn-y")
+        record_turn_signal("turn-x", "dropped_messages", 4)
+        record_turn_signal("turn-y", "dropped_messages", 0)  # no-op
+        record_turn_signal("", "dropped_messages", 9)  # no turn id -> ignored
+        self.assertEqual(pop_turn_signals("turn-x"), {"dropped_messages": 4})
+        self.assertEqual(pop_turn_signals("turn-y"), {})
+
+    def test_max_records_peak_not_sum(self) -> None:
+        # A middleware fires once per model call within a turn; the max across
+        # calls is the real per-turn figure, not the (overlapping) sum.
+        reset_turn_signals("turn-m")
+        record_turn_signal_max("turn-m", "dropped_messages", 5)
+        record_turn_signal_max("turn-m", "dropped_messages", 8)
+        record_turn_signal_max("turn-m", "dropped_messages", 3)
+        self.assertEqual(pop_turn_signals("turn-m"), {"dropped_messages": 8})
+
+    def test_overflow_evicts_oldest_keeps_recent(self) -> None:
+        # The cap must evict the OLDEST turns, never wipe the freshest in-flight
+        # ones (the concurrency-safety fix).
+        reset_turn_signals("oldest-turn")
+        record_turn_signal_max("oldest-turn", "dropped_messages", 1)
+        for i in range(telemetry._MAX_TRACKED_TURNS + 5):
+            reset_turn_signals(f"filler-{i}")
+        reset_turn_signals("recent-turn")
+        record_turn_signal_max("recent-turn", "dropped_messages", 7)
+        self.assertEqual(pop_turn_signals("recent-turn"), {"dropped_messages": 7})
+        self.assertEqual(pop_turn_signals("oldest-turn"), {})  # evicted
 
 
 if __name__ == "__main__":

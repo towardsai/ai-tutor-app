@@ -234,10 +234,17 @@ def build_system_prompt(
     enabled_tools: tuple[str, ...],
     kb_agents_instructions: str | None = None,
     include_local_tools: bool = True,
+    disable_kb: bool = False,
 ) -> str:
     provider = _provider_key(model_name)
     enabled = set(enabled_tools)
-    tool_lines = [RETRIEVAL_TOOL_LINE, *KB_TOOL_LINES] if include_local_tools else []
+    if not include_local_tools:
+        tool_lines = []
+    elif disable_kb:
+        # KB browsing off: keep retrieval, drop the run_kb_command description.
+        tool_lines = [RETRIEVAL_TOOL_LINE]
+    else:
+        tool_lines = [RETRIEVAL_TOOL_LINE, *KB_TOOL_LINES]
     usage_sections: list[str] = []
     provider_web_tools = WEB_TOOL_LINES.get(provider, {})
     provider_web_usage = WEB_USAGE_SECTIONS.get(provider, {})
@@ -256,7 +263,8 @@ def build_system_prompt(
 
     if include_local_tools:
         parts.append(RETRIEVAL_USAGE_SECTION)
-        parts.append(KB_USAGE_SECTION)
+        if not disable_kb:
+            parts.append(KB_USAGE_SECTION)
     if usage_sections:
         parts.append(
             "## When to use web search / URL reading\n\n" + "\n\n".join(usage_sections)
@@ -273,15 +281,16 @@ def build_system_prompt(
         parts.append(NO_KB_NOTE)
         parts.append(NO_KB_ANSWERING_RULES)
         return "\n\n".join(parts) + "\n"
-    if kb_agents_instructions is None:
-        kb_agents_instructions = load_kb_agents_instructions()
-    if kb_agents_instructions:
-        parts.append(
-            "## Local KB Instructions\n\n"
-            "The following instructions are loaded from `data/kb/AGENTS.md` and "
-            "describe the current local KB schema and workflow.\n\n"
-            f"{kb_agents_instructions}"
-        )
+    if not disable_kb:
+        if kb_agents_instructions is None:
+            kb_agents_instructions = load_kb_agents_instructions()
+        if kb_agents_instructions:
+            parts.append(
+                "## Local KB Instructions\n\n"
+                "The following instructions are loaded from `data/kb/AGENTS.md` and "
+                "describe the current local KB schema and workflow.\n\n"
+                f"{kb_agents_instructions}"
+            )
     parts.append(RETRIEVAL_CALL_STRATEGY)
     parts.append(ANSWERING_RULES)
     return "\n\n".join(parts) + "\n"

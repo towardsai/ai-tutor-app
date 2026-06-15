@@ -1,28 +1,43 @@
-"""Build the comparison report from one or more graded runs.
+"""Build a side-by-side report from one or more graded runs.
 
   uv run -m evals.report --runs runs/bake1_singleturn_prod \
       runs/bake1_singleturn_full_history --out runs/bake1_report
 
-Each run dir = one battery x preset x model. Runs sharing a battery_type are
-shown side by side (columns = presets) — the bake-off table. Also emits
-tokens_by_turn.csv (cumulative input tokens per session turn per preset: the
-signature plot) and tokens_by_turn.png when matplotlib is available.
+Each run directory is one battery run with one model and one memory preset.
+Runs that share a battery type are shown side by side, with presets as
+columns. The command also emits tokens_by_turn.csv, a per-turn session token
+curve, and tokens_by_turn.png when matplotlib is available.
 
-Reads grades_merged.jsonl when present (hand grades included), else
+Reads grades_merged.jsonl when present (human grades included), else
 grades_auto.jsonl; quality rows (key-point coverage, probe accuracy, behavior
-accuracy) appear only once hand grades are merged.
+accuracy) appear only once human grades are merged.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 from collections import defaultdict
 from pathlib import Path
 from statistics import mean
 from typing import Any
 
 from .common import load_jsonl, percentile
+
+
+def run_label(run_dir: Path, preset: str) -> str:
+    """Column label = preset, disambiguated by flag-based arms that share a
+    preset (e.g. retrieval-budget / kb-off both run on preset=prod)."""
+    label = preset
+    cfg_path = run_dir / "run_config.json"
+    if cfg_path.exists():
+        cfg = json.loads(cfg_path.read_text())
+        if cfg.get("disable_kb"):
+            label += "+kb_off"
+        if cfg.get("retrieval_budget"):
+            label += f"+rb{int(cfg['retrieval_budget']) // 1000}k"
+    return label
 
 
 def load_run(run_dir: Path) -> dict[str, Any]:
@@ -34,7 +49,7 @@ def load_run(run_dir: Path) -> dict[str, Any]:
         raise SystemExit(f"No grades in {run_dir}; run evals.grade first.")
     return {
         "dir": run_dir,
-        "label": f"{grades[0]['preset']}",
+        "label": run_label(run_dir, grades[0]["preset"]),
         "battery_type": grades[0]["battery_type"],
         "model": grades[0]["model"],
         "grades": grades,
@@ -75,7 +90,7 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
 
     add("cases run", lambda g: str(len({x["unit_id"] for x in g})))
     add("errors", lambda g: str(sum(1 for x in g if x.get("error"))))
-    add("ttft ms p50/p95", lambda g: fmt_ms(col(g, "ttft_ms")))
+    add("time to first text ms p50/p95", lambda g: fmt_ms(col(g, "ttft_ms")))
     add("turn ms p50/p95", lambda g: fmt_ms(col(g, "total_ms")))
     add("input tok/turn", lambda g: fmt_mean(col(g, "input_tokens")))
     add("output tok/turn", lambda g: fmt_mean(col(g, "output_tokens")))
@@ -100,7 +115,8 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
         add("recall@shown source", lambda g: rate(col(g, "recall_source")))
         add("recall@shown lesson", lambda g: rate(col(g, "recall_lesson")))
         add(
-            "MRR lesson", lambda g: fmt_mean([x.get("mrr_lesson") for x in g], "{:.2f}")
+            "right lesson rank (MRR)",
+            lambda g: fmt_mean([x.get("mrr_lesson") for x in g], "{:.2f}"),
         )
         add(
             "citation present",
@@ -112,9 +128,12 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
                 ]
             ),
         )
-        add("behavior heuristic", lambda g: rate(col(g, "behavior_heuristic")))
-        add("behavior (hand)", lambda g: rate(col(g, "behavior_pass")))
-        add("key-point coverage (hand)", lambda g: _kp_coverage(g))
+        add(
+            "behavior proxy from code checks",
+            lambda g: rate(col(g, "behavior_heuristic")),
+        )
+        add("behavior (human grade)", lambda g: rate(col(g, "behavior_pass")))
+        add("key-point coverage (human grade)", lambda g: _kp_coverage(g))
 
     if battery_type == "sessions":
         add("cumulative input tok (last turn, mean)", _final_cumulative)
@@ -125,7 +144,7 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
             ),
         )
         add(
-            "probe accuracy (hand)",
+            "probe accuracy (human grade)",
             lambda g: rate([x.get("probe_pass") for x in g if x.get("is_probe")]),
         )
         for probe_type in sorted(
@@ -158,7 +177,7 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
         )
 
     if battery_type == "replay":
-        add("replay reply pass (hand)", lambda g: rate(col(g, "replay_pass")))
+        add("replay reply pass (human grade)", lambda g: rate(col(g, "replay_pass")))
     return rows
 
 
@@ -232,7 +251,7 @@ def _plot_token_curves(rows: list[dict[str, Any]], out_dir: Path) -> None:
         ax.plot(turns, [mean(by_turn[t]) for t in turns], marker="o", label=preset)
     ax.set_xlabel("turn")
     ax.set_ylabel("cumulative input tokens (mean across sessions)")
-    ax.set_title("Context cost per turn by memory preset")
+    ax.set_title("Input tokens accumulated by memory preset")
     ax.legend()
     fig.tight_layout()
     fig.savefig(out_dir / "tokens_by_turn.png", dpi=150)
@@ -250,7 +269,7 @@ def main() -> None:
     lines = ["# Eval report", ""]
     models = {run["model"] for run in runs}
     lines.append(
-        f"Model(s): {', '.join(sorted(models))}. Runs missing hand grades show "
+        f"Model(s): {', '.join(sorted(models))}. Runs missing human grades show "
         "— for quality rows (fill handgrade_sheet.csv, re-run evals.grade "
         "with --handgrades)."
     )

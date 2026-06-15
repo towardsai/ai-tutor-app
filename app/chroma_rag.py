@@ -1211,6 +1211,7 @@ class LocalChromaRetriever:
         query: str,
         *,
         allowed_sources: list[str] | None = None,
+        token_budget: int | None = None,
     ) -> list[SearchResult]:
         dense_hits = self._dense_search(query, allowed_sources=allowed_sources)
         bm25_hits = self._bm25_search(query, allowed_sources=allowed_sources)
@@ -1229,7 +1230,7 @@ class LocalChromaRetriever:
             model=self._rerank_model,
             top_n=self._rerank_top_k,
         )
-        return self._apply_token_budget(reranked)
+        return self._apply_token_budget(reranked, token_budget)
 
     def _dense_search(
         self,
@@ -1367,7 +1368,12 @@ class LocalChromaRetriever:
             retrieval_method=retrieval_method,
         )
 
-    def _apply_token_budget(self, results: list[SearchResult]) -> list[SearchResult]:
+    def _apply_token_budget(
+        self, results: list[SearchResult], token_budget: int | None = None
+    ) -> list[SearchResult]:
+        # Per-request override (Part C retrieval-budget sweep) falls back to the
+        # retriever's default when None.
+        budget = self._token_budget if token_budget is None else token_budget
         filtered: list[SearchResult] = []
         total_tokens = 0
         for result in results:
@@ -1378,7 +1384,7 @@ class LocalChromaRetriever:
             result_tokens = len(
                 self._encoding.encode(result.content, disallowed_special=())
             )
-            if total_tokens + result_tokens > self._token_budget:
+            if total_tokens + result_tokens > budget:
                 break
 
             total_tokens += result_tokens

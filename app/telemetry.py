@@ -15,6 +15,7 @@ number.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,6 +23,84 @@ from langchain_core.callbacks.usage import UsageMetadataCallbackHandler
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.outputs import LLMResult
+
+
+# --- Turn-scoped middleware signals ------------------------------------------
+# context_window_stats() can only report markers that survive into the
+# CHECKPOINTED state (summarization tags, cleared-output placeholders). A
+# middleware that only reshapes the per-call view (sliding window, observation
+# truncation, prompt compression, in-context history retrieval, ...) leaves the
+# checkpoint untouched, so it would be invisible both to telemetry and to the
+# probe gate (which would then false-fail: "memory eval where compaction never
+# fired"). Such middlewares instead tally here, keyed by the turn's message_id,
+# and stream_chat merges the tally into the context_stats event for that turn.
+#
+# A module-level dict (not a ContextVar) on purpose: LangChain may run sync
+# wrap_model_call in a worker thread, where a ContextVar update lands on a copy
+# and is lost. A plain global + lock is visible from any thread.
+_TURN_SIGNALS: dict[str, dict[str, int]] = {}
+_TURN_SIGNALS_LOCK = threading.Lock()
+_MAX_TRACKED_TURNS = 256
+
+# Per-call-view turn signals that mean "a context-compaction mechanism fired
+# this turn". The eval gate mirrors this set in evals/common.py
+# (COMPACTION_SIGNAL_KEYS, plus the two checkpoint-only markers) because the
+# harness must not import app code (so old bundles re-grade forever); a unit test
+# enforces the two stay in sync. List ONLY names a middleware actually emits.
+# (selective_retention / context_reset are SummarizationMiddleware variants, so
+# they gate via the summary_messages checkpoint marker and need no entry here.)
+COMPACTION_SIGNAL_NAMES = (
+    "dropped_messages",  # sliding_window (also set by history retrieval)
+    "truncated_tool_outputs",  # observation_truncation
+    "compressed_messages",  # prompt_compression
+    "history_retrievals",  # incontext_history_retrieval
+)
+
+
+def reset_turn_signals(turn_id: str) -> None:
+    """Start a fresh signal tally for a turn (called once, at turn start)."""
+    if not turn_id:
+        return
+    with _TURN_SIGNALS_LOCK:
+        # Bound memory without a race: an aborted turn never pops its entry, so
+        # evict the OLDEST tallies (dict insertion order) once over the cap.
+        # Never clear() the whole dict — that would wipe concurrent in-flight
+        # turns' signals and could mis-grade a probe as "compaction never fired".
+        while len(_TURN_SIGNALS) >= _MAX_TRACKED_TURNS:
+            _TURN_SIGNALS.pop(next(iter(_TURN_SIGNALS)), None)
+        _TURN_SIGNALS[turn_id] = {}
+
+
+def record_turn_signal(turn_id: str, name: str, amount: int = 1) -> None:
+    """Accumulate a middleware signal for one turn (thread-safe)."""
+    if not turn_id or not amount:
+        return
+    with _TURN_SIGNALS_LOCK:
+        bucket = _TURN_SIGNALS.setdefault(turn_id, {})
+        bucket[name] = bucket.get(name, 0) + int(amount)
+
+
+def record_turn_signal_max(turn_id: str, name: str, value: int) -> None:
+    """Record the per-turn MAXIMUM of a signal (thread-safe).
+
+    Use this for per-call-view magnitudes (messages dropped, outputs truncated):
+    a middleware's wrap_model_call fires once per model call within a turn, so
+    summing would re-count overlapping prefixes each call. The largest single
+    call is the meaningful per-turn figure.
+    """
+    if not turn_id:
+        return
+    with _TURN_SIGNALS_LOCK:
+        bucket = _TURN_SIGNALS.setdefault(turn_id, {})
+        bucket[name] = max(bucket.get(name, 0), int(value))
+
+
+def pop_turn_signals(turn_id: str) -> dict[str, int]:
+    """Take and clear a turn's accumulated signals (called when emitting stats)."""
+    if not turn_id:
+        return {}
+    with _TURN_SIGNALS_LOCK:
+        return _TURN_SIGNALS.pop(turn_id, {})
 
 
 class TurnUsageHandler(UsageMetadataCallbackHandler):
@@ -48,12 +127,15 @@ class ModelPricing:
     cache_write: float | None = None
 
 
-# Verify against the provider price sheets before quoting cost numbers
-# anywhere public; prices move. Keys match by longest prefix so dated
-# variants ("claude-haiku-4-5-20251001") hit their family entry.
+# Verify against the provider price sheets before quoting cost numbers anywhere
+# public; prices move. Keys match by longest prefix so dated variants
+# ("claude-haiku-4-5-20251001") hit their family entry.
+#
+# Sources checked 2026-06-13:
+# - https://ai.google.dev/gemini-api/docs/pricing
+# - https://platform.claude.com/docs/en/about-claude/pricing
 MODEL_PRICING: dict[str, ModelPricing] = {
-    # TODO verify: seeded from the gemini-2.5-flash sheet.
-    "gemini-3.5-flash": ModelPricing(input=0.30, output=2.50, cache_read=0.075),
+    "gemini-3.5-flash": ModelPricing(input=1.50, output=9.00, cache_read=0.15),
     "claude-haiku-4-5": ModelPricing(
         input=1.00, output=5.00, cache_read=0.10, cache_write=1.25
     ),

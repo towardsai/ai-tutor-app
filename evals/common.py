@@ -7,6 +7,22 @@ from pathlib import Path
 from typing import Any, Iterable
 
 BATTERY_TYPES = ("singleturn", "sessions", "personas", "replay")
+
+# Context-stats keys that each mean "a compaction mechanism fired this turn".
+# Mirrors app.telemetry.COMPACTION_SIGNAL_NAMES (plus the two original
+# checkpoint-detected markers). The harness deliberately never imports app code
+# so saved bundles re-grade forever; keep the two lists in sync by hand when a
+# new mechanism is added.
+COMPACTION_SIGNAL_KEYS = (
+    "summary_messages",  # SummarizationMiddleware (checkpoint marker)
+    "cleared_tool_outputs",  # ContextEditingMiddleware (checkpoint marker)
+    "dropped_messages",  # sliding_window / history retrieval (turn signal)
+    "truncated_tool_outputs",  # observation_truncation (turn signal)
+    "compressed_messages",  # prompt_compression (turn signal)
+    "history_retrievals",  # incontext_history_retrieval (turn signal)
+)
+# context_reset / selective_retention gate via summary_messages (they are
+# SummarizationMiddleware prompt variants), so they need no dedicated signal.
 # Identifying key per battery type (see data/eval/README.md schemas).
 _TYPE_KEYS = {
     "case_id": "singleturn",
@@ -57,6 +73,18 @@ def normalize_url(url: str | None) -> str:
     url = url.strip().lower().split("#", 1)[0].split("?", 1)[0]
     url = url.split("/discussions/", 1)[0]
     return url.rstrip("/")
+
+
+def compaction_active(stats: dict[str, Any] | None) -> bool:
+    """True if any known compaction mechanism fired this turn.
+
+    Takes a bundle's merged ``context_stats`` dict and recognizes both the
+    checkpoint-detected markers (summary / cleared tool outputs) and the
+    per-call-view middleware signals, so a sliding-window or truncation arm is
+    not mis-read as "never compacted" when the probe gate checks it.
+    """
+    stats = stats or {}
+    return any((stats.get(key) or 0) for key in COMPACTION_SIGNAL_KEYS)
 
 
 def percentile(values: list[float], pct: float) -> float | None:

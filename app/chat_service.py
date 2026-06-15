@@ -43,6 +43,9 @@ from .telemetry import (
     TurnUsageHandler,
     context_window_stats,
     estimate_cost_usd,
+    pop_turn_signals,
+    record_turn_signal_max,
+    reset_turn_signals,
     usage_totals,
 )
 from .chroma_rag import LocalChromaRetriever, format_tool_payload, parse_tool_payload
@@ -118,6 +121,9 @@ class AppContext:
     kb_session_id: str = ""
     kb_command_limit: int = DEFAULT_KB_COMMAND_LIMIT
     student_id: str = ""
+    # Per-request retrieval token budget (Part C / Axis B sweep); None keeps the
+    # retriever's DEFAULT_CONTEXT_TOKEN_BUDGET.
+    retrieval_budget: int | None = None
 
 
 def get_student_profile(student_id: str) -> str:
@@ -294,6 +300,7 @@ def retrieve_tutor_context(query: str, runtime: ToolRuntime[AppContext]) -> str:
         results = get_retriever().search(
             query=query,
             allowed_sources=list(runtime.context.allowed_sources),
+            token_budget=getattr(runtime.context, "retrieval_budget", None),
         )
     except Exception as exc:
         # Degrade instead of killing the turn: retrieval depends on Cohere
@@ -891,6 +898,269 @@ class StudentProfileMiddleware(AgentMiddleware):
         return await handler(self._inject(request))
 
 
+def _turn_id_for(request: Any) -> str:
+    """The current turn's message_id from AppContext (the telemetry key)."""
+    runtime = getattr(request, "runtime", None)
+    ctx = getattr(runtime, "context", None) if runtime else None
+    return getattr(ctx, "kb_session_id", "") if ctx else ""
+
+
+class SlidingWindowMiddleware(AgentMiddleware):
+    """Keep only the last N messages in the model's view; drop older ones.
+
+    Recency-only working memory, no summary (Part C / Axis A). The drop is
+    per-call: the checkpoint keeps the full thread, so this just shrinks each
+    request without mutating stored state. The cut is advanced to the next user
+    message so a kept window never begins with an orphaned tool result (which
+    providers reject). Reports ``dropped_messages`` via the turn-signal registry,
+    since nothing it does survives into the checkpoint for context_window_stats.
+    """
+
+    def __init__(self, keep: int) -> None:
+        super().__init__()
+        self._keep = max(1, int(keep))
+
+    def _trim(self, request: Any) -> Any:
+        messages = request.messages
+        if len(messages) <= self._keep:
+            return request
+        naive_cut = len(messages) - self._keep
+        # Cut at the nearest user message AT OR BEFORE the naive cut: keeps the
+        # last ~N messages aligned to a turn boundary (so the current turn stays
+        # intact and no tool result is orphaned), drops whole older turns, and
+        # never silently no-ops when there is prior history to drop -- the
+        # long-tool-turn case, where the naive cut lands inside the current
+        # turn's tool loop and a forward scan would find no later user message.
+        cut = 0
+        for index in range(naive_cut, -1, -1):
+            if getattr(messages[index], "type", "") == "human":
+                cut = index
+                break
+        if cut <= 0:
+            return request
+        record_turn_signal_max(_turn_id_for(request), "dropped_messages", cut)
+        return request.override(messages=messages[cut:])
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._trim(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._trim(request))
+
+
+class ObservationTruncationMiddleware(AgentMiddleware):
+    """Head/tail-truncate large tool outputs in the model's view (Part C / Axis B).
+
+    The dominant input-token source is tool output, not chat history (F1). This
+    keeps the first and last slice of each oversized tool result so the model
+    keeps the gist and any citation while shedding the bulk. Per-call only (the
+    checkpoint is untouched). Reports ``truncated_tool_outputs`` and
+    ``chars_saved``.
+    """
+
+    def __init__(self, head_chars: int, tail_chars: int, trigger_chars: int) -> None:
+        super().__init__()
+        self._head = max(0, int(head_chars))
+        self._tail = max(0, int(tail_chars))
+        self._trigger = max(self._head + self._tail + 1, int(trigger_chars))
+
+    def _truncate(self, request: Any) -> Any:
+        new_messages: list[Any] = []
+        truncated = 0
+        saved = 0
+        for message in request.messages:
+            content = getattr(message, "content", None)
+            if (
+                getattr(message, "type", "") == "tool"
+                and isinstance(content, str)
+                and len(content) > self._trigger
+            ):
+                dropped = len(content) - self._head - self._tail
+                kept = (
+                    f"{content[: self._head]}\n\n"
+                    f"... [{dropped} chars truncated to save context] ...\n\n"
+                    f"{content[-self._tail :]}"
+                )
+                # The marker boilerplate has a fixed cost; for content only just
+                # over the trigger it can exceed the original. Never inflate.
+                if len(kept) >= len(content):
+                    new_messages.append(message)
+                    continue
+                saved += len(content) - len(kept)
+                truncated += 1
+                new_messages.append(message.model_copy(update={"content": kept}))
+            else:
+                new_messages.append(message)
+        if not truncated:
+            return request
+        turn = _turn_id_for(request)
+        record_turn_signal_max(turn, "truncated_tool_outputs", truncated)
+        record_turn_signal_max(turn, "chars_saved", saved)
+        return request.override(messages=new_messages)
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._truncate(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._truncate(request))
+
+
+_COMPRESS_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"[ \t]+"), " "),  # runs of spaces/tabs -> one space
+    (re.compile(r"\n[ \t]+"), "\n"),  # strip line-leading whitespace
+    (re.compile(r"\n{3,}"), "\n\n"),  # collapse blank-line runs
+)
+
+
+def _compress_text(text: str) -> str:
+    for pattern, repl in _COMPRESS_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text.strip()
+
+
+class PromptCompressionMiddleware(AgentMiddleware):
+    """Deterministic per-call text compaction: a cheap prompt-compression stand-in.
+
+    Collapses redundant whitespace in every message the model sees (Part C /
+    Axis A). No LLM and no checkpoint change; it screens the cost/cache effect
+    (F2) of rewriting the prompt prefix each turn. It is NOT a faithful
+    token-importance compressor (LLMLingua-style), so its savings are a lower
+    bound on what learned compression could achieve. Reports
+    ``compressed_messages`` and ``chars_saved``.
+    """
+
+    def _compress(self, request: Any) -> Any:
+        new_messages: list[Any] = []
+        compressed = 0
+        saved = 0
+        for message in request.messages:
+            content = getattr(message, "content", None)
+            if isinstance(content, str):
+                shrunk = _compress_text(content)
+                if len(shrunk) < len(content):
+                    saved += len(content) - len(shrunk)
+                    compressed += 1
+                    new_messages.append(message.model_copy(update={"content": shrunk}))
+                    continue
+            new_messages.append(message)
+        if not compressed:
+            return request
+        turn = _turn_id_for(request)
+        record_turn_signal_max(turn, "compressed_messages", compressed)
+        record_turn_signal_max(turn, "chars_saved", saved)
+        return request.override(messages=new_messages)
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._compress(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._compress(request))
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(y * y for y in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _history_block_text(block: list[Any]) -> str:
+    """Concatenate the str content of a turn-block for embedding."""
+    parts = [m.content for m in block if isinstance(getattr(m, "content", None), str)]
+    return "\n".join(parts).strip() or " "
+
+
+def _default_history_embedder(texts: list[str]) -> list[list[float]]:
+    """Embed turn-blocks with the same Cohere model retrieval uses (run-time cost)."""
+    from .chroma_rag import DEFAULT_EMBED_MODEL, embed_texts
+
+    retriever = get_retriever()
+    return embed_texts(
+        retriever._cohere,
+        texts,
+        input_type="search_document",
+        model=DEFAULT_EMBED_MODEL,
+    )
+
+
+class InContextHistoryRetrievalMiddleware(AgentMiddleware):
+    """Retrieve the relevant older turns instead of carrying or summarizing all.
+
+    The principled answer to F9/F10 (Part C / Axis A subsystem): keep the last
+    ``keep_recent`` turn-blocks (recency + the current turn) and, for everything
+    older, embed each prior turn-block plus the current question and inject only
+    the top-k most similar older blocks. Works at turn-BLOCK granularity (a user
+    message plus the assistant/tool messages answering it) so a retrieved or
+    dropped block never orphans a tool result. Per-call view only; reports
+    ``history_retrievals`` (and ``dropped_messages``). Embeds via Cohere at run
+    time -- that cost is part of what this arm is measured on (vs carrying the
+    raw history). Offline tests inject a stub embedder.
+    """
+
+    def __init__(self, keep_recent: int, top_k: int, embed_fn: Any = None) -> None:
+        super().__init__()
+        self._keep_recent = max(1, int(keep_recent))
+        self._top_k = max(0, int(top_k))
+        self._embed_fn = embed_fn or _default_history_embedder
+
+    @staticmethod
+    def _blocks(messages: list[Any]) -> list[list[Any]]:
+        blocks: list[list[Any]] = []
+        current: list[Any] = []
+        for message in messages:
+            if getattr(message, "type", "") == "human" and current:
+                blocks.append(current)
+                current = []
+            current.append(message)
+        if current:
+            blocks.append(current)
+        return blocks
+
+    def _select(self, request: Any) -> Any:
+        messages = request.messages
+        blocks = self._blocks(messages)
+        if len(blocks) <= self._keep_recent:
+            return request
+        older = blocks[: -self._keep_recent]
+        recent = blocks[-self._keep_recent :]
+        if self._top_k >= len(older):
+            return request  # all older blocks already fit; nothing to drop
+        query = _history_block_text(recent[-1])
+        older_texts = [_history_block_text(block) for block in older]
+        try:
+            vectors = self._embed_fn([query] + older_texts)
+        except Exception as exc:  # degrade to carrying full history
+            logger.warning(
+                "history retrieval embed failed; carrying history. error=%s", exc
+            )
+            return request
+        query_vec, older_vecs = vectors[0], vectors[1:]
+        ranked = sorted(
+            range(len(older)),
+            key=lambda i: _cosine_similarity(query_vec, older_vecs[i]),
+            reverse=True,
+        )
+        keep_idx = set(ranked[: self._top_k])
+        kept_older = [older[i] for i in range(len(older)) if i in keep_idx]
+        new_messages = [m for block in (kept_older + recent) for m in block]
+        if len(new_messages) >= len(messages):
+            return request
+        turn = _turn_id_for(request)
+        record_turn_signal_max(turn, "history_retrievals", len(kept_older))
+        record_turn_signal_max(
+            turn, "dropped_messages", len(messages) - len(new_messages)
+        )
+        return request.override(messages=new_messages)
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._select(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._select(request))
+
+
 def build_agent_middleware(
     model: Any, memory_config: MemoryConfig
 ) -> list[AgentMiddleware]:
@@ -903,8 +1173,15 @@ def build_agent_middleware(
                     ClearToolUsesEdit(
                         trigger=memory_config.context_editing_trigger_tokens,
                         keep=memory_config.context_editing_keep,
-                        # Retrieval results stay; only shell outputs get cleared.
-                        exclude_tools=("retrieve_tutor_context",),
+                        # Default (prod): retrieval results stay, only shell
+                        # outputs clear (F3). The clear_retrieval_kb variant flips
+                        # this to clear retrieval + KB outputs too, where the
+                        # tokens actually are.
+                        exclude_tools=(
+                            ("retrieve_tutor_context",)
+                            if memory_config.clear_excludes_retrieval
+                            else ()
+                        ),
                         placeholder=CLEARED_TOOL_OUTPUT_PLACEHOLDER,
                     )
                 ],
@@ -912,11 +1189,36 @@ def build_agent_middleware(
             )
         )
     if memory_config.summarization:
+        summarization_kwargs: dict[str, Any] = {
+            "model": model,
+            "trigger": ("tokens", memory_config.summarization_trigger_tokens),
+            "keep": ("messages", memory_config.summarization_keep_messages),
+        }
+        # A custom summary prompt (selective_retention / context_reset) overrides
+        # the library default; None keeps it.
+        if memory_config.summary_prompt:
+            summarization_kwargs["summary_prompt"] = memory_config.summary_prompt
+        middleware.append(SummarizationMiddleware(**summarization_kwargs))
+    # Part C per-call-view mechanisms (each preset enables at most one). They
+    # reshape only the request, not the checkpoint, and report via the
+    # turn-signal registry.
+    if memory_config.sliding_window_keep is not None:
+        middleware.append(SlidingWindowMiddleware(memory_config.sliding_window_keep))
+    if memory_config.truncate_tool_outputs:
         middleware.append(
-            SummarizationMiddleware(
-                model=model,
-                trigger=("tokens", memory_config.summarization_trigger_tokens),
-                keep=("messages", memory_config.summarization_keep_messages),
+            ObservationTruncationMiddleware(
+                head_chars=memory_config.truncate_head_chars,
+                tail_chars=memory_config.truncate_tail_chars,
+                trigger_chars=memory_config.truncate_trigger_chars,
+            )
+        )
+    if memory_config.compress_prompt:
+        middleware.append(PromptCompressionMiddleware())
+    if memory_config.history_retrieval_keep_recent is not None:
+        middleware.append(
+            InContextHistoryRetrievalMiddleware(
+                keep_recent=memory_config.history_retrieval_keep_recent,
+                top_k=memory_config.history_retrieval_top_k,
             )
         )
     if memory_config.longterm_memory:
@@ -932,6 +1234,7 @@ def build_agent(
     include_thoughts: bool = False,
     kb_agents_instructions: str | None = None,
     include_local_tools: bool = True,
+    disable_kb: bool = False,
     memory_config: MemoryConfig = MEMORY_PRESETS[DEFAULT_MEMORY_PRESET],
 ):
     # kb_agents_instructions is part of the cache key on purpose: an agent
@@ -941,9 +1244,13 @@ def build_agent(
     model = build_chat_model(model_name, include_thoughts=include_thoughts)
     # An explicit empty source selection turns the knowledge base off: no
     # retrieval, no KB browsing, and a system prompt that says so.
-    tools: list[Any] = (
-        [retrieve_tutor_context, run_kb_command] if include_local_tools else []
-    )
+    tools: list[Any]
+    if not include_local_tools:
+        tools = []
+    elif disable_kb:
+        tools = [retrieve_tutor_context]
+    else:
+        tools = [retrieve_tutor_context, run_kb_command]
     middleware = build_agent_middleware(model, memory_config)
     enabled = set(enabled_tools)
     if is_google_genai_model(model_name):
@@ -978,6 +1285,7 @@ def build_agent(
             enabled_tools,
             kb_agents_instructions,
             include_local_tools=include_local_tools,
+            disable_kb=disable_kb,
         ),
         context_schema=AppContext,
         checkpointer=CHECKPOINTER,
@@ -996,8 +1304,14 @@ def effective_tool_names(
     model_name: str,
     enabled_tools: tuple[str, ...],
     include_local_tools: bool = True,
+    disable_kb: bool = False,
 ) -> tuple[str, ...]:
-    names = ["retrieve_tutor_context", "run_kb_command"] if include_local_tools else []
+    if not include_local_tools:
+        names = []
+    elif disable_kb:
+        names = ["retrieve_tutor_context"]
+    else:
+        names = ["retrieve_tutor_context", "run_kb_command"]
     enabled = set(enabled_tools)
     if is_google_genai_model(model_name):
         if "web_search" in enabled:
@@ -1058,6 +1372,7 @@ def agent_run_config(
         request.model_name,
         request.enabled_tools,
         include_local_tools=bool(request.source_keys),
+        disable_kb=bool(request.disable_kb),
     )
     source_labels = [
         SOURCE_KEY_TO_LABEL.get(source_key, source_key)
@@ -1159,6 +1474,9 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     answer_chunks: list[str] = []
     completed_answer = ""
     message_id = uuid4().hex
+    # Per-turn tally for middlewares whose effect never reaches the checkpoint
+    # (sliding window, truncation, ...); merged into context_stats below.
+    reset_turn_signals(message_id)
     include_reasoning = bool(request.include_reasoning) and (
         is_google_genai_model(request.model_name)
         or is_anthropic_model(request.model_name)
@@ -1169,10 +1487,12 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     reasoning_deltas_are_blocks = is_google_genai_model(request.model_name)
     google_search = GoogleSearchActivity(message_id, web_evidence)
     include_local_tools = bool(request.source_keys)
+    disable_kb = bool(request.disable_kb)
     effective_tools = effective_tool_names(
         request.model_name,
         request.enabled_tools,
         include_local_tools=include_local_tools,
+        disable_kb=disable_kb,
     )
     if "url_context" in effective_tools:
         _record_evidence(web_evidence, url_context_evidence(request.query))
@@ -1188,9 +1508,12 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
             enabled_tools=tuple(request.enabled_tools),
             include_thoughts=include_reasoning,
             kb_agents_instructions=(
-                ensure_kb_agents_instructions() if include_local_tools else None
+                ensure_kb_agents_instructions()
+                if (include_local_tools and not disable_kb)
+                else None
             ),
             include_local_tools=include_local_tools,
+            disable_kb=disable_kb,
             memory_config=memory_config,
         )
 
@@ -1224,6 +1547,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 kb_session_id=message_id,
                 kb_command_limit=DEFAULT_KB_COMMAND_LIMIT,
                 student_id=request.student_id,
+                retrieval_budget=request.retrieval_budget,
             ),
             stream_mode=["messages", "updates"],
             version="v2",
@@ -1524,6 +1848,9 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
             ),
             "total_ms": total_ms,
             **context_window_stats(state_messages, CLEARED_TOOL_OUTPUT_PLACEHOLDER),
+            # Signals from per-call-view middlewares (this turn only); absent
+            # keys simply mean that mechanism did not fire.
+            **pop_turn_signals(message_id),
         },
     )
     yield ChatEvent(

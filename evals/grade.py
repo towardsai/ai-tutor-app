@@ -1,4 +1,8 @@
-"""Grade trace bundles: code checks now, a hand-grade sheet for the rest.
+"""Grade saved tutor-turn bundles.
+
+This command does not call the tutor. It reads `bundles.jsonl`, computes every
+metric that code can compute, and writes a CSV for judgments that need a
+person or validated LLM judge.
 
   uv run -m evals.grade --run runs/<exp>                 # auto grades + sheet
   uv run -m evals.grade --run runs/<exp> --handgrades runs/<exp>/handgrade_filled.csv
@@ -7,26 +11,33 @@ Pure JSON/CSV in and out — no app imports — so old bundles re-grade forever.
 
 Outputs in the run dir:
 - grades_auto.jsonl  — one row per bundle row with every code-computable check
-  (retrieval recall, behavior heuristics, citation presence, persona regex
+  (retrieval recall, behavior proxy checks, citation presence, persona regex
   checks, probe trigger context). See data/eval/README.md for term definitions.
 - handgrade_sheet.csv — one row per pending human judgment (key points, session
   probes, replay replies, persona llm-checks). Fill `grade` with pass/fail
   (optionally a note), save as handgrade_filled.csv, re-run with --handgrades.
 - grades_merged.jsonl — auto + human grades joined, ready for evals.report.
 
-Behavior checks here are HEURISTIC proxies (regex/trajectory); the reportable
-behavior-accuracy number comes from the hand grades.
+Behavior checks here are rough proxies, such as "did a course question call
+retrieval?" The reportable behavior-accuracy number comes from human grades.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
 
-from .common import load_jsonl, normalize_url, write_jsonl
+from .common import (
+    COMPACTION_SIGNAL_KEYS,
+    compaction_active,
+    load_jsonl,
+    normalize_url,
+    write_jsonl,
+)
 
 BEHAVIOR_HEURISTICS = {
     "redirect_to_support": r"support|academy team|reach out|contact",
@@ -50,10 +61,12 @@ def index_battery(battery: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 def retrieval_metrics(
     bundle: dict[str, Any], source_key: str | None, lesson_url: str | None
 ) -> dict[str, Any]:
-    """Recall/MRR over the (post-rerank) matches of retrieval tool calls.
+    """Source/lesson hits over the matches from retrieval tool calls.
 
-    Matches are the reranked top-k the agent actually saw, so 'recall' here is
-    recall@top-k-shown. MRR ranks across calls in order.
+    Matches are the ranked results the model actually saw. `recall_source`
+    and `recall_lesson` answer "was the right source or lesson shown at all?"
+    `mrr_lesson` is a ranking score: first result = 1.0, second = 0.5,
+    third = 0.33, missing = 0.
     """
     matches: list[dict[str, Any]] = []
     called_retrieval = False
@@ -82,7 +95,7 @@ def retrieval_metrics(
 
 
 def behavior_heuristic(expected: str, bundle: dict[str, Any]) -> bool | None:
-    """Cheap proxy for behavior routing; None = no heuristic for this class."""
+    """Cheap proxy for behavior routing; None = no code check for this class."""
     answer = bundle.get("answer") or ""
     if expected == "answer_from_corpus":
         return any(
@@ -137,7 +150,11 @@ def sheet_row(
     reference: str = "",
 ) -> dict[str, str]:
     return {
-        "sheet_row_id": f"{bundle['run_id']}|{item_type}|{abs(hash(criterion)) % 10**8}",
+        # Stable hash (NOT builtin hash(), which is salted per process — that
+        # made sheet_row_id non-deterministic across runs and silently broke the
+        # workbook keymap join whenever a sheet was regenerated).
+        "sheet_row_id": f"{bundle['run_id']}|{item_type}"
+        f"|{hashlib.md5(criterion.encode('utf-8')).hexdigest()[:8]}",
         "run_id": bundle["run_id"],
         "battery_type": bundle["battery_type"],
         "preset": bundle["preset"],
@@ -185,6 +202,11 @@ def grade_run(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]
             "summary_messages": stats.get("summary_messages"),
             "cleared_tool_outputs": stats.get("cleared_tool_outputs"),
         }
+        # Surface per-call-view middleware signals (sliding window, truncation,
+        # reset, ...) when present; absent means that mechanism did not fire.
+        for signal in COMPACTION_SIGNAL_KEYS:
+            if signal in stats and signal not in row:
+                row[signal] = stats[signal]
         if bundle.get("error"):
             grades.append(row)
             continue
@@ -231,11 +253,9 @@ def grade_run(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]
             if probe:
                 row["probe_type"] = probe["probe_type"]
                 # Compression context at probe time: a memory eval where the
-                # triggers never fired measures nothing (README warning).
-                row["compaction_active"] = bool(
-                    (stats.get("summary_messages") or 0)
-                    or (stats.get("cleared_tool_outputs") or 0)
-                )
+                # triggers never fired measures nothing (README warning). Uses
+                # the generalized check so new mechanisms count too.
+                row["compaction_active"] = compaction_active(stats)
                 sheet.append(
                     sheet_row(
                         bundle=bundle,

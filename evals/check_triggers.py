@@ -1,14 +1,15 @@
-"""Verify compression triggers fired where the session battery assumes.
+"""Verify memory compaction happened before session probe turns.
 
   uv run -m evals.check_triggers --runs runs/a4_sessions_prod
   uv run -m evals.check_triggers --runs runs/a4_s03_fullhist --expect-none
 
-A memory eval where compaction never activated measures nothing (see
-data/eval/README.md), so this is the gate before any bake-off:
-- default: every probe turn must have compaction active (summary_messages or
-  cleared_tool_outputs > 0 in context_stats); exit 1 otherwise.
-- --expect-none (for full_history): NO turn may show compaction; exit 1 if
-  the baseline ever compressed — that would invalidate the comparison.
+Compaction means the app summarized older messages or cleared old tool output.
+A memory eval where compaction never activated does not test memory trimming,
+so this is the gate before comparing presets:
+- default: every graded probe turn must show compaction in context_stats
+  (summary_messages or cleared_tool_outputs > 0); exit 1 otherwise.
+- --expect-none (for full_history): no turn may show compaction; exit 1 if
+  the baseline ever compressed, because that would invalidate the comparison.
 
 Also prints per-session cost/token totals for Part B/C budget projection.
 """
@@ -21,6 +22,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from .common import compaction_active as _compaction_active
 from .common import load_jsonl
 
 
@@ -43,10 +45,8 @@ def probe_indices(battery_path: str, session_id: str) -> list[int]:
 
 
 def compaction_active(bundle: dict[str, Any]) -> bool:
-    stats = bundle.get("context_stats") or {}
-    return bool(
-        (stats.get("summary_messages") or 0) or (stats.get("cleared_tool_outputs") or 0)
-    )
+    """Any compaction mechanism (summary/clear or a per-call-view signal) fired."""
+    return _compaction_active(bundle.get("context_stats"))
 
 
 def check_run(run_dir: Path, expect_none: bool) -> bool:

@@ -1,13 +1,14 @@
-"""Build and merge the blinded hand-grading workbook for a bake-off.
+"""Build and merge the blinded human-grading workbook.
 
   uv run -m evals.handgrade_workbook build --dirs runs/b_st_* runs/b_pe_* \
       runs/b_se_* --out runs/b_report/workbook.csv
   uv run -m evals.handgrade_workbook merge --workbook runs/b_report/workbook_filled.csv
 
 Build collects the human-judgment rows from each run dir's handgrade_sheet.csv
-into ONE shuffled, BLINDED workbook: the grader sees question/answer/criterion
-but never the preset, so grades can't favor a method. A key map (written next
-to the workbook) links each blinded row back to its run dir for the merge.
+into one shuffled, blinded workbook: the grader sees question, answer, and
+criterion, but never the memory preset, so grades cannot favor a method. A key
+map written next to the workbook links each blinded row back to its run dir
+for the merge.
 
 Row selection (keeps the pass to a half-day):
 - priority 1: ALL session probe rows (the memory metric).

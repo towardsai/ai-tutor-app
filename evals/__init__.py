@@ -1,4 +1,10 @@
-"""Eval harness: run batteries against the tutor, grade bundles, report.
+"""Eval harness for repeatable tutor tests.
+
+Terms:
+- battery: a JSONL file of related test questions or conversations.
+- bundle: the saved JSON evidence for one tutor turn: input, answer, tools,
+  sources, timing, token usage, and errors.
+- grade: a metric row computed later from bundles.
 
 Pipeline (see evals.md):
   uv run -m evals.run_battery  -> runs/<exp>/bundles.jsonl   (talks to the app)
