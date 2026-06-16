@@ -58,6 +58,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ids", nargs="*", default=[], help="Run only these case/session/persona ids."
     )
+    parser.add_argument(
+        "--tags",
+        nargs="*",
+        default=[],
+        help=(
+            "Run only records whose tags or tier match any value here "
+            "(useful for tiered v2 batteries)."
+        ),
+    )
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument(
         "--scope-sources",
@@ -89,6 +98,13 @@ def record_id(record: dict[str, Any]) -> str:
         if key in record:
             return str(record[key])
     raise KeyError("record has no id")
+
+
+def record_tags(record: dict[str, Any]) -> set[str]:
+    tags = set(str(tag) for tag in (record.get("tags") or []))
+    if record.get("tier"):
+        tags.add(str(record["tier"]))
+    return tags
 
 
 class BundleSink:
@@ -316,10 +332,19 @@ async def run_session(
     """All turns sequentially on one thread, passing the visible transcript
     back each turn exactly like the real frontend does."""
     from app.chat_types import ChatTurn
+    from app.chat_service import set_student_profile
+    from app.memory_presets import resolve_memory_preset
 
     history: list[ChatTurn] = []
     thread_id = ""
     rows = []
+    student_id = ""
+    if resolve_memory_preset(args.preset).longterm_memory:
+        # Engage long-term memory on session batteries. Without a student_id,
+        # profile_memory's system-prompt injection and write-back both no-op,
+        # making it indistinguishable from prod on session probes.
+        student_id = f"{session['session_id']}|t{trial}"
+        set_student_profile(student_id, "")
     for turn_index, query in enumerate(session["turns"]):
         request = build_request(
             args,
@@ -327,6 +352,7 @@ async def run_session(
             source_key=session.get("source_key"),
             history=tuple(history),
             thread_id=thread_id,
+            student_id=student_id,
         )
         result = await run_turn(request)
         thread_id = result["thread_id"] or thread_id
@@ -397,6 +423,9 @@ async def run_all(args: argparse.Namespace) -> Path:
             for r in records
             if record_id(r) in wanted or (key and r.get(key) in wanted)
         ]
+    if args.tags:
+        wanted_tags = set(args.tags)
+        records = [r for r in records if record_tags(r) & wanted_tags]
     if args.limit:
         records = records[: args.limit]
     if not records:

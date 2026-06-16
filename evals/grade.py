@@ -201,6 +201,8 @@ def grade_run(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]
             "context_tokens_approx": stats.get("context_tokens_approx"),
             "summary_messages": stats.get("summary_messages"),
             "cleared_tool_outputs": stats.get("cleared_tool_outputs"),
+            "history_embedding_texts": stats.get("history_embedding_texts"),
+            "history_embedding_chars": stats.get("history_embedding_chars"),
         }
         # Surface per-call-view middleware signals (sliding window, truncation,
         # reset, ...) when present; absent means that mechanism did not fire.
@@ -252,6 +254,7 @@ def grade_run(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]
             row["is_probe"] = probe is not None
             if probe:
                 row["probe_type"] = probe["probe_type"]
+                row["probe_tier"] = probe.get("tier") or record.get("tier")
                 # Compression context at probe time: a memory eval where the
                 # triggers never fired measures nothing (README warning). Uses
                 # the generalized check so new mechanisms count too.

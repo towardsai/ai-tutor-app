@@ -100,6 +100,19 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
     )
     add("llm calls/turn", lambda g: fmt_mean(col(g, "llm_calls"), "{:.1f}"))
     add("tool calls/turn", lambda g: fmt_mean(col(g, "tool_call_count"), "{:.1f}"))
+    if any(
+        g.get("history_embedding_texts") is not None
+        for run in runs
+        for g in run["grades"]
+    ):
+        add(
+            "history embed inputs/turn",
+            lambda g: fmt_mean(col(g, "history_embedding_texts"), "{:.1f}"),
+        )
+        add(
+            "history embed chars/turn",
+            lambda g: fmt_mean(col(g, "history_embedding_chars"), "{:.0f}"),
+        )
 
     if battery_type == "singleturn":
         add(

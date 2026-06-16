@@ -1129,8 +1129,10 @@ class InContextHistoryRetrievalMiddleware(AgentMiddleware):
             return request  # all older blocks already fit; nothing to drop
         query = _history_block_text(recent[-1])
         older_texts = [_history_block_text(block) for block in older]
+        turn = _turn_id_for(request)
         try:
-            vectors = self._embed_fn([query] + older_texts)
+            embed_inputs = [query] + older_texts
+            vectors = self._embed_fn(embed_inputs)
         except Exception as exc:  # degrade to carrying full history
             logger.warning(
                 "history retrieval embed failed; carrying history. error=%s", exc
@@ -1147,7 +1149,10 @@ class InContextHistoryRetrievalMiddleware(AgentMiddleware):
         new_messages = [m for block in (kept_older + recent) for m in block]
         if len(new_messages) >= len(messages):
             return request
-        turn = _turn_id_for(request)
+        record_turn_signal_max(turn, "history_embedding_texts", len(embed_inputs))
+        record_turn_signal_max(
+            turn, "history_embedding_chars", sum(len(text) for text in embed_inputs)
+        )
         record_turn_signal_max(turn, "history_retrievals", len(kept_older))
         record_turn_signal_max(
             turn, "dropped_messages", len(messages) - len(new_messages)
