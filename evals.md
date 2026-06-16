@@ -78,7 +78,9 @@ Every turn persists a JSON trace bundle, so grading and reporting can re-run off
 **Setup for collaborators.** Code and docs are in git; the datasets and run results contain real student text and live only in the private HF dataset (`towardsai-tutors/ai-tutor-data` — git is force-pushed to the public prod Space on deploys, so student data never enters git). With an `HF_TOKEN` that can read it:
 
 ```bash
-uv run python -c "from huggingface_hub import snapshot_download as d; d(repo_id='towardsai-tutors/ai-tutor-data', repo_type='dataset', allow_patterns=['eval/**','eval_runs/**'], local_dir='.')"
+export HF_TOKEN=hf_...    # token with READ access; the inline cmd does NOT load .env (or: uv run huggingface-cli login)
+mkdir -p data/eval runs  # runs/ is gitignored, so a fresh clone has no runs/ dir yet
+uv run python -c "from huggingface_hub import snapshot_download as d; d(repo_id='towardsai-tutors/ai-tutor-data', repo_type='dataset', allow_patterns=['eval/**','eval_runs/**'], ignore_patterns=['eval/README.md'], local_dir='.')"
 mv eval/* data/eval/ && mv eval_runs/part_*/* runs/   # restore working paths (part_b, part_c, ...)
 ```
 
