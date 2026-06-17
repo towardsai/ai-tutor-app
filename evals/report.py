@@ -125,17 +125,41 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
                 ]
             ),
         )
-        add("recall@shown source", lambda g: rate(col(g, "recall_source")))
-        add("recall@shown lesson", lambda g: rate(col(g, "recall_lesson")))
+        add("recall@shown source (retrieval only)", lambda g: rate(col(g, "recall_source")))
+        add("recall@shown lesson (retrieval only)", lambda g: rate(col(g, "recall_lesson")))
         add(
             "right lesson rank (MRR)",
             lambda g: fmt_mean([x.get("mrr_lesson") for x in g], "{:.2f}"),
+        )
+        add(
+            "recall source (any tool: retrieval+KB)",
+            lambda g: rate(col(g, "recall_anytool_source")),
         )
         add(
             "citation present",
             lambda g: rate(
                 [
                     x.get("has_citation")
+                    for x in g
+                    if x.get("expected_behavior") == "answer_from_corpus"
+                ]
+            ),
+        )
+        add(
+            "cited correct source (answer, corpus)",
+            lambda g: rate(
+                [
+                    x.get("cited_correct_source")
+                    for x in g
+                    if x.get("expected_behavior") == "answer_from_corpus"
+                ]
+            ),
+        )
+        add(
+            "cited correct lesson (answer, corpus)",
+            lambda g: rate(
+                [
+                    x.get("cited_correct_lesson")
                     for x in g
                     if x.get("expected_behavior") == "answer_from_corpus"
                 ]

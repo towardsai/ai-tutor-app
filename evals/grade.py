@@ -44,6 +44,11 @@ BEHAVIOR_HEURISTICS = {
     "acknowledge_feedback": r"thank|feedback|appreciate|noted|passed (this|it) (on|along)",
 }
 RETRIEVAL_TOOLS = {"retrieve_tutor_context", "run_kb_command"}
+# run_kb_command output is raw file text, not structured matches, so recall@shown
+# (retrieve_tutor_context only) is blind to KB grounding. KB browses run with cwd
+# = data/kb, so raw/docs/<source>/... and raw/courses/<source>/... path fragments
+# in the command or its output reveal which corpus source the agent touched.
+KB_RAW_SOURCE_RE = re.compile(r"raw/(?:docs|courses)/([A-Za-z0-9_.\-]+)/")
 
 
 def index_battery(battery: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -58,6 +63,24 @@ def index_battery(battery: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return index
 
 
+def kb_browsed_sources(bundle: dict[str, Any]) -> set[str]:
+    """source_keys a ``run_kb_command`` touched, parsed from raw/ path fragments
+    in the command and its output.
+
+    Lets recall credit KB grounding, which recall@shown cannot see (KB output is
+    raw text, not structured matches). Caveats: bundle output is capped at
+    6000 chars, so a path past the cap is missed; a broad ``rg`` can surface many
+    sources at once (an over-count toward "shown", not "used").
+    """
+    seen: set[str] = set()
+    for call in bundle.get("tool_calls") or []:
+        if call.get("tool_name") != "run_kb_command":
+            continue
+        text = f"{call.get('args_text') or ''}\n{call.get('output_text') or ''}"
+        seen.update(KB_RAW_SOURCE_RE.findall(text))
+    return seen
+
+
 def retrieval_metrics(
     bundle: dict[str, Any], source_key: str | None, lesson_url: str | None
 ) -> dict[str, Any]:
@@ -66,7 +89,9 @@ def retrieval_metrics(
     Matches are the ranked results the model actually saw. `recall_source`
     and `recall_lesson` answer "was the right source or lesson shown at all?"
     `mrr_lesson` is a ranking score: first result = 1.0, second = 0.5,
-    third = 0.33, missing = 0.
+    third = 0.33, missing = 0. `recall_anytool_source` is the KB-fair version:
+    it also credits a source the agent browsed via run_kb_command, so it is
+    comparable across kb_on/kb_off arms (recall_source sees only retrieval).
     """
     matches: list[dict[str, Any]] = []
     called_retrieval = False
@@ -85,12 +110,46 @@ def retrieval_metrics(
         ),
         0,
     )
+    measured = bool(matches or called_retrieval)
+    kb_sources = kb_browsed_sources(bundle)
     return {
         "called_retrieval": called_retrieval,
         "retrieved_matches": len(matches),
-        "recall_source": source_hit if matches or called_retrieval else None,
+        "recall_source": source_hit if measured else None,
         "recall_lesson": bool(lesson_rank) if lesson else None,
         "mrr_lesson": (1.0 / lesson_rank) if lesson_rank else 0.0 if lesson else None,
+        "recall_anytool_source": (
+            (source_hit or source_key in kb_sources)
+            if measured and source_key
+            else None
+        ),
+    }
+
+
+def citation_metrics(
+    bundle: dict[str, Any], source_key: str | None, lesson_url: str | None
+) -> dict[str, Any]:
+    """Did the FINAL answer cite the correct source/lesson?
+
+    Reads `resolved_sources` (the answer's resolved citation cards), which the
+    app resolves from BOTH retrieval and KB-browse evidence via kb_manifest.
+    Unlike recall@shown (retrieve_tutor_context only), this is tool-agnostic and
+    so comparable across kb_on/kb_off arms. None when the case has no ground
+    truth source/lesson.
+    """
+    cited = bundle.get("resolved_sources") or []
+    lesson = normalize_url(lesson_url)
+    return {
+        "cited_correct_source": (
+            any(c.get("source_key") == source_key for c in cited)
+            if source_key
+            else None
+        ),
+        "cited_correct_lesson": (
+            any(normalize_url(c.get("url")) == lesson for c in cited)
+            if lesson
+            else None
+        ),
     }
 
 
@@ -216,6 +275,11 @@ def grade_run(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]
         if bundle["battery_type"] == "singleturn":
             row.update(
                 retrieval_metrics(
+                    bundle, record.get("source_key"), record.get("lesson_url")
+                )
+            )
+            row.update(
+                citation_metrics(
                     bundle, record.get("source_key"), record.get("lesson_url")
                 )
             )
