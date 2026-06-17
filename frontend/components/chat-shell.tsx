@@ -487,7 +487,7 @@ export function ChatShell() {
                       void handleSubmit();
                     }
                   }}
-                  placeholder="Ask about AI agents, AI at work, Claude Code, or any selected source…"
+                  placeholder="Ask about RAG, agents, or Python, paste an error to debug your project, or get a course concept explained…"
                   className="max-h-44 min-h-10 w-full resize-none overflow-y-auto bg-transparent px-0.5 py-2 text-[15px] leading-[1.6] tracking-[-0.012em] text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
                 />
 
@@ -772,85 +772,117 @@ type Suggestion = {
 };
 
 const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
-  // Core technical — covered by courses and/or open-source docs
+  // RAG and retrieval (Full Stack AI Engineering)
   {
-    title: "RAG vs fine-tuning",
+    title: "RAG with LlamaIndex",
     prompt:
-      "When should I use retrieval-augmented generation instead of fine-tuning a model?",
+      "How do I build a basic RAG pipeline over my own data with LlamaIndex?",
     kind: "technical",
   },
   {
-    title: "Evaluate a RAG pipeline",
+    title: "How should I chunk?",
     prompt:
-      "What are practical ways to evaluate the quality of a RAG pipeline?",
+      "How should I chunk my documents for RAG, and how does chunk size affect the answers I get?",
     kind: "technical",
   },
   {
-    title: "LangGraph tool-calling",
+    title: "Pick an embedding model",
     prompt:
-      "How do I build a tool-calling agent with LangGraph, step by step?",
+      "How do I choose the right embedding model for my use case?",
     kind: "technical",
   },
   {
-    title: "LoRA with PEFT",
+    title: "Re-ranking and top K",
     prompt:
-      "Walk me through fine-tuning a model with LoRA using the PEFT library.",
+      "How does re-ranking work in a RAG pipeline, and how do I pick the right value of K?",
     kind: "technical",
   },
   {
-    title: "DPO with TRL",
+    title: "Vector indexing methods",
     prompt:
-      "How do I run Direct Preference Optimization (DPO) on a model using TRL?",
+      "What are the main indexing methods for vector retrieval, and how do I choose one for a production system?",
     kind: "technical",
   },
   {
-    title: "Run a model locally",
+    title: "Evaluate retrieval",
     prompt:
-      "Show me how to load and run a Hugging Face transformer model locally.",
+      "Beyond hit rate and MRR, what metrics should I use to evaluate retrieval in my RAG system?",
     kind: "technical",
   },
   {
-    title: "Query your own docs",
+    title: "Context caching vs RAG",
     prompt:
-      "How do I build a query engine over my own documents with LlamaIndex?",
-    kind: "technical",
-  },
-  {
-    title: "Structured JSON output",
-    prompt:
-      "What's the most reliable way to get structured JSON output from a model, especially for tool calls?",
+      "When should I use a long-context model with context caching instead of RAG?",
     kind: "technical",
   },
 
-  // Trending topics
+  // Building LLM apps (Full Stack AI Engineering) — concepts + debugging
   {
-    title: "What is Claude Code?",
+    title: "Structured JSON outputs",
     prompt:
-      "What is Claude Code and how does it compare to Cursor or Codex for daily coding work?",
+      "How do I get reliable structured JSON output from an LLM using a Pydantic model?",
     kind: "technical",
   },
   {
-    title: "Long-term agent memory",
+    title: "Pydantic output error",
     prompt:
-      "How do I give an AI agent long-term memory that persists across sessions?",
+      "I get an error when I use a Pydantic BaseModel for structured outputs. How do I debug and fix it?",
     kind: "technical",
   },
   {
-    title: "Agent harnesses today",
+    title: "Routing and validation",
     prompt:
-      "What are the main AI agent harnesses in use today and how do they differ in practice?",
+      "How do I add question validation and routing so my app sends each query to the right model or tool?",
     kind: "technical",
   },
   {
-    title: "Build an MCP server",
+    title: "Cut API token costs",
     prompt:
-      "How do I build a Model Context Protocol (MCP) server to expose an internal tool to an agent?",
+      "What are practical ways to reduce the input token costs when calling an LLM API?",
     kind: "technical",
   },
   {
-    title: "Designing LLM evals",
+    title: "Prompt injection",
     prompt:
-      "How should I design evals for my LLM app before shipping it to real users?",
+      "How do I protect my app's system prompt from prompt injection and hacking?",
+    kind: "technical",
+  },
+  {
+    title: "Evaluate my prompts",
+    prompt:
+      "How do I evaluate and iterate on my prompts instead of just eyeballing the outputs?",
+    kind: "technical",
+  },
+
+  // Agents (Agent Engineering: Building Multi-Agent Systems)
+  {
+    title: "Define a tool for an agent",
+    prompt:
+      "Show me a minimal example of defining a tool that an LLM agent can call.",
+    kind: "technical",
+  },
+  {
+    title: "How LangGraph flows",
+    prompt:
+      "Can you walk me through how a LangGraph agent's flow actually works under the hood?",
+    kind: "technical",
+  },
+  {
+    title: "MCP and A2A protocols",
+    prompt:
+      "What are the MCP and A2A protocols, and when would I use each one?",
+    kind: "technical",
+  },
+  {
+    title: "What is ReAct?",
+    prompt:
+      "What is the ReAct pattern, and how is it different from a plain agentic loop?",
+    kind: "technical",
+  },
+  {
+    title: "Pick an agent framework",
+    prompt:
+      "How do I choose between LangGraph, CrewAI, and other agent frameworks for my use case?",
     kind: "technical",
   },
   {
@@ -860,126 +892,68 @@ const SUGGESTION_POOL: ReadonlyArray<Suggestion> = [
     kind: "technical",
   },
 
-  // Working with coding agents (directing, reviewing, debugging)
+  // Setup and debugging (across all courses)
   {
-    title: "Spec for an agent",
+    title: "Module not found",
     prompt:
-      "How do I write a spec clear enough that a coding agent builds the right thing the first time?",
+      "I'm getting a ModuleNotFoundError when I run a course notebook. How do I fix it?",
     kind: "technical",
   },
   {
-    title: "Break down a feature",
+    title: "Dependency version clash",
     prompt:
-      "How do I break a feature into tasks a coding agent can actually execute well?",
+      "I have a version conflict between two libraries when installing the course requirements. How do I resolve it?",
     kind: "technical",
   },
   {
-    title: "Review agent code",
+    title: "Clone the course repo",
     prompt:
-      "An AI agent wrote this feature. How do I review it for bugs and security holes before I ship it?",
-    kind: "technical",
-  },
-  {
-    title: "Unstick the agent",
-    prompt:
-      "My coding agent keeps looping on the same bug. How do I get it back on track?",
-    kind: "technical",
-  },
-
-  // Beginner / getting started
-  {
-    title: "LLM crash course",
-    prompt:
-      "I'm new to LLMs. What are the core concepts I need to understand before I start building anything?",
+      "I'm having trouble cloning the course GitHub repository. What am I doing wrong?",
     kind: "accessible",
   },
   {
-    title: "Python for AI",
+    title: "Store API keys safely",
     prompt:
-      "I'm new to Python. What's the minimum I need to know to start building AI apps?",
+      "Where should I store my API keys safely on my machine so I don't leak them?",
     kind: "accessible",
   },
   {
-    title: "AI basics in plain English",
+    title: "Set up my environment",
     prompt:
-      "Can you explain in plain English what LLMs, chatbots, and AI agents actually are?",
+      "How do I set up a clean Python environment for the course exercises on my machine?",
     kind: "accessible",
   },
 
-  // Non-technical (Master AI for Work)
+  // Getting started (Beginner Python for AI Engineering)
   {
-    title: "AI for daily work",
+    title: "New to Python",
     prompt:
-      "What's a realistic way to use ChatGPT to speed up my weekly reports and emails?",
+      "I'm new to Python. What's the minimum I need to know to start the AI engineering course?",
     kind: "accessible",
   },
   {
-    title: "Prompt like a pro",
+    title: "List comprehensions",
     prompt:
-      "What separates a good prompt from a great one for everyday work tasks?",
+      "Can you explain Python list comprehensions in simple terms, with a small example?",
     kind: "accessible",
   },
   {
-    title: "Roll out AI at work",
+    title: "Do I need to install anything?",
     prompt:
-      "How can a team start using AI tools together without creating chaos?",
+      "Do I need to install anything on my computer to do the course exercises, or can I use Google Colab?",
     kind: "accessible",
   },
   {
     title: "ChatGPT vs Claude vs Gemini",
     prompt:
-      "I'm not technical. How do I pick between ChatGPT, Claude, and Gemini for my work?",
+      "I'm just starting out. How do ChatGPT, Claude, and Gemini differ, and which should I use?",
     kind: "accessible",
   },
   {
-    title: "Spot AI use cases",
+    title: "New to LLMs",
     prompt:
-      "How do I identify which parts of my job AI can realistically help with?",
+      "I'm new to LLMs. What core concepts should I understand before I start building anything?",
     kind: "accessible",
-  },
-  {
-    title: "Fact-check AI output",
-    prompt:
-      "How do I tell if an AI's answer is actually correct and trustworthy?",
-    kind: "accessible",
-  },
-  {
-    title: "AI for meetings",
-    prompt:
-      "How can I use AI to turn meeting notes into clear next steps?",
-    kind: "accessible",
-  },
-
-  // Judgment in the age of agents (what's possible, verify, stay current)
-  {
-    title: "What's even possible?",
-    prompt:
-      "I have an app idea. Which AI techniques (RAG, fine-tuning, agents) should I even be considering?",
-    kind: "accessible",
-  },
-  {
-    title: "Vibe coding, carefully",
-    prompt:
-      "What does vibe coding actually mean, and how do I do it without shipping something broken?",
-    kind: "accessible",
-  },
-  {
-    title: "Build without coding",
-    prompt:
-      "I can't really read code. How far can I get building something with an agent like Claude Code or Cowork?",
-    kind: "accessible",
-  },
-  {
-    title: "Catch a stale answer",
-    prompt:
-      "How do I tell when an AI's advice is out of date or missing a newer, better approach?",
-    kind: "accessible",
-  },
-  {
-    title: "Trust agent research",
-    prompt:
-      "Can I trust an agent to find the latest best technique for me, and how do I verify it's right?",
-    kind: "technical",
   },
 ];
 
