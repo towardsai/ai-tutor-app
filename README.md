@@ -12,9 +12,24 @@ pinned: false
 
 An agentic RAG tutor for applied AI, LLMs, RAG, and Python: a Next.js frontend served by a FastAPI backend, with a LangChain/LangGraph agent core. See [AGENTS.md](./AGENTS.md) for the architecture map.
 
+Built by [Louis-François Bouchard](https://www.linkedin.com/in/whats-ai/) ([X](https://x.com/Whats_AI) · [LinkedIn](https://www.linkedin.com/in/whats-ai/)), Omar Solano, and Samridhi Vaid at [Towards AI](https://towardsai.net).
+
 The live app is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugging Face](https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot) (prod).
 
 **Deployment flow:** every push to `main` auto-deploys to the private dev Space ([ai-tutor](https://huggingface.co/spaces/towardsai-tutors/ai-tutor)) for verification; the prod Space is promoted manually via the "Deploy prod to Hugging Face" workflow in the Actions tab.
+
+### Workshop, slides, and going deeper
+
+This repo also backs our **AI Engineer (AIE)** workshop on building a production AI tutor, presented by Louis-François Bouchard.
+
+- Slides: [Google Slide Deck](https://docs.google.com/presentation/d/1bQfD_Foc948fB-dvZSuUWCPt93TUynEXjbZXPcz6E0I/edit?usp=sharing)
+- Workshop recording: TBD (coming soon)
+
+Want to build this AI tutor yourself, end to end? Our [**Full Stack AI Engineer course**](https://academy.towardsai.net/courses/beginner-to-advanced-llm-dev), by Towards AI, walks you through building this exact AI tutor from scratch, plus the broader skills the AI engineering role demands: prompt and context engineering, data pipelines, RAG from scratch then at scale, fine-tuning, agents, observability, and production deployment to Hugging Face Spaces.
+
+92 lessons. Hands-on capstone projects. A certificate. And an active Discord community. The first 6 lessons are free.
+
+[**Start here →**](https://academy.towardsai.net/courses/beginner-to-advanced-llm-dev)
 
 ### Backend — Quick Start
 
