@@ -7,21 +7,31 @@
 
 completion_models:
   default_completion_model:
-    model_provider: gemini # -> litellm "gemini/gemini-2.5-flash" (reads GEMINI_API_KEY)
+    # Still Gemini 2.5 Flash, but routed through Gemini's OpenAI-compatible
+    # endpoint instead of litellm's native gemini transport: the native path
+    # drops connections ("Server disconnected" / 503) under sustained
+    # extraction and aborts the stage; the OpenAI client path is far steadier.
+    model_provider: openai
     model: gemini-2.5-flash
+    api_base: https://generativelanguage.googleapis.com/v1beta/openai
     auth_method: api_key
     api_key: ${GEMINI_API_KEY}
     # graphrag defaults to 25 concurrent requests; that burst triggers Gemini
     # connection resets ([Errno 32] Broken pipe). Keep it low + let rate_limit
     # pace throughput. graphrag caches each successful call, so a re-run resumes.
-    concurrent_requests: 4
+    # Moderate parallelism over the OpenAI-compatible endpoint. Caching + the
+    # index retry-loop absorb any transient drops.
+    concurrent_requests: 6
     async_mode: threaded
     call_args:
       temperature: 0 # deterministic extraction
+    # Gemini throws transient 503 / broken-pipe under load; retry hard. graphrag
+    # caches each success, so a failed run is re-run to resume (see index loop).
     retry:
       type: exponential_backoff
-      max_retries: 10
-      max_delay: 60
+      max_retries: 20
+      base_delay: 2
+      max_delay: 120
     # Throttle to stay friendly to the Gemini free/low tier and avoid the
     # TPM blowups noted in evals.md. On a paid tier-1 key these can be raised
     # (e.g. requests_per_period: 200) to finish the full index faster.
