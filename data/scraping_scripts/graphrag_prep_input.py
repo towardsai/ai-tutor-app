@@ -52,9 +52,11 @@ def read_doc_text(record: dict) -> str:
         return ""
 
 
-def build_rows(records: list[dict]) -> list[dict]:
+def build_rows(records: list[dict], sources: set[str] | None = None) -> list[dict]:
     rows: list[dict] = []
     for record in records:
+        if sources and record.get("source") not in sources:
+            continue
         text = read_doc_text(record)
         if not text:
             continue
@@ -81,6 +83,14 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="First N documents only (for a cheap smoke index); 0 = all.",
     )
+    parser.add_argument(
+        "--sources",
+        nargs="*",
+        default=[],
+        help="Restrict to these source keys (e.g. full_stack_ai_engineering); "
+        "empty = all sources. Used to scope the GraphRAG index to the eval "
+        "battery's sources and keep indexing within budget.",
+    )
     return parser.parse_args()
 
 
@@ -88,6 +98,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = parse_args()
     records = load_manifest(args.manifest)
+    if args.sources:
+        wanted = set(args.sources)
+        records = [r for r in records if r.get("source") in wanted]
     if args.limit:
         records = records[: args.limit]
     rows = build_rows(records)

@@ -47,16 +47,9 @@ class GraphRagIndexTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "output"
             out.mkdir(parents=True)
-            from app import graph_rag
-
-            original = graph_rag.GRAPHRAG_OUTPUT_DIR
-            graph_rag.GRAPHRAG_OUTPUT_DIR = str(out)
-            try:
-                self.assertFalse(graphrag_index_exists())
-                (out / "entities.parquet").write_text("x")
-                self.assertTrue(graphrag_index_exists())
-            finally:
-                graph_rag.GRAPHRAG_OUTPUT_DIR = original
+            self.assertFalse(graphrag_index_exists(str(out)))
+            (out / "entities.parquet").write_text("x")
+            self.assertTrue(graphrag_index_exists(str(out)))
 
     def test_constructor_raises_when_index_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -80,12 +73,7 @@ class GraphRagMappingTestCase(unittest.TestCase):
         r._entity_top_k = 10
         r._embed_query = lambda _q: [0.0, 0.0]  # type: ignore[assignment]
         r._entity_table = _FakeEntityTable(pd.DataFrame({"id": ["e1", "e2"]}))
-        r._entities = pd.DataFrame(
-            {
-                "id": ["e1", "e2", "e3"],
-                "text_unit_ids": [["t1"], ["t2"], ["t3"]],
-            }
-        )
+        r._entity_text_units = {"e1": ["t1"], "e2": ["t2"], "e3": ["t3"]}
         r._text_unit_by_id = {
             "t1": {
                 "id": "t1",

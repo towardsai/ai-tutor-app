@@ -11,6 +11,11 @@ completion_models:
     model: gemini-2.5-flash
     auth_method: api_key
     api_key: ${GEMINI_API_KEY}
+    # graphrag defaults to 25 concurrent requests; that burst triggers Gemini
+    # connection resets ([Errno 32] Broken pipe). Keep it low + let rate_limit
+    # pace throughput. graphrag caches each successful call, so a re-run resumes.
+    concurrent_requests: 4
+    async_mode: threaded
     call_args:
       temperature: 0 # deterministic extraction
     retry:
@@ -32,6 +37,8 @@ embedding_models:
     model: text-embedding-3-small
     auth_method: api_key
     api_key: ${OPENAI_API_KEY}
+    concurrent_requests: 8
+    async_mode: threaded
     retry:
       type: exponential_backoff
       max_retries: 10

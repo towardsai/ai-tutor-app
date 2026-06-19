@@ -75,8 +75,8 @@ class GraphRAGIndexNotBuilt(RuntimeError):
     """
 
 
-def graphrag_index_exists() -> bool:
-    out = Path(GRAPHRAG_OUTPUT_DIR)
+def graphrag_index_exists(output_dir: str = GRAPHRAG_OUTPUT_DIR) -> bool:
+    out = Path(output_dir)
     return out.is_dir() and any(out.glob("entities.parquet"))
 
 
@@ -126,7 +126,7 @@ class GraphRAGRetriever:
         token_budget: int = DEFAULT_CONTEXT_TOKEN_BUDGET,
         answer_model_name: str | None = None,
     ) -> None:
-        if not graphrag_index_exists():
+        if not graphrag_index_exists(output_dir):
             raise GraphRAGIndexNotBuilt(
                 f"GraphRAG index not found at {output_dir}. Build it with "
                 "`uv run -m data.scraping_scripts.graphrag_prep_input` then "
@@ -163,7 +163,12 @@ class GraphRAGRetriever:
         self._text_units = pd.read_parquet(out / "text_units.parquet")
         reports_path = out / "community_reports.parquet"
         self._reports = pd.read_parquet(reports_path) if reports_path.exists() else None
-        # Index text units by id for O(1) lookup during expansion.
+        # entity id -> its text unit ids, and text unit id -> row, both O(1) so a
+        # query only touches the top-k nearest entities (not every entity/chunk).
+        self._entity_text_units = {
+            str(eid): list(tus) if tus is not None else []
+            for eid, tus in zip(self._entities["id"], self._entities["text_unit_ids"])
+        }
         self._text_unit_by_id = {
             str(row["id"]): row for _, row in self._text_units.iterrows()
         }
@@ -230,13 +235,12 @@ class GraphRAGRetriever:
         hits = (
             self._entity_table.search(query_vec).limit(self._entity_top_k).to_pandas()
         )
+        # Walk the nearest entities in similarity order, collecting the text
+        # units they were extracted from (deduped, order preserved).
         text_unit_ids: list[str] = []
         seen: set[str] = set()
-        entity_ids = set(str(v) for v in hits.get("id", []))
-        for _, entity in self._entities.iterrows():
-            if str(entity["id"]) not in entity_ids:
-                continue
-            for tu_id in entity.get("text_unit_ids") or []:
+        for entity_id in hits.get("id", []):
+            for tu_id in self._entity_text_units.get(str(entity_id), []):
                 tu_id = str(tu_id)
                 if tu_id not in seen:
                     seen.add(tu_id)
