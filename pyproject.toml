@@ -10,6 +10,7 @@ dependencies = [
     "cohere",
     "fastapi",
     "google-genai",
+    "graphrag>=3.1.0",
     "hf-xet",
     "huggingface-hub",
     "langchain",

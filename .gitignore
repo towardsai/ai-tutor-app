@@ -207,6 +207,15 @@ frontend/*.tsbuildinfo
 !frontend/app/apple-icon.png
 !assets/full-stack-ai-engineer-course.png
 
+# GraphRAG experiment workspace (local-only; never uploaded to the HF bundle).
+# Keep settings.yaml + prompts/ tracked; ignore generated artifacts + secrets.
+/data/graphrag/input/
+/data/graphrag/output/
+/data/graphrag/cache/
+/data/graphrag/logs/
+/data/graphrag/.env
+/data/graphrag/*.log
+
 .claude/
 runs/
 # Eval data with real student text: ships via the private HF dataset

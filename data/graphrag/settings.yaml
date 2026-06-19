@@ -1,0 +1,167 @@
+### GraphRAG config for the AI-tutor corpus (experiment: GraphRAG vs classical RAG).
+### Indexing LLM = Gemini 2.5 Flash (cheap, builds the whole graph DB).
+### The eval comparison runs the AGENT on Gemini 3.5 Flash; this model is only
+### used offline to build the graph. Embeddings = OpenAI text-embedding-3-small.
+### Run with:  uv run --env-file .env graphrag index --root data/graphrag
+### graphrag 3.1 uses litellm under the hood; litellm model id = "{model_provider}/{model}".
+
+completion_models:
+  default_completion_model:
+    model_provider: gemini # -> litellm "gemini/gemini-2.5-flash" (reads GEMINI_API_KEY)
+    model: gemini-2.5-flash
+    auth_method: api_key
+    api_key: ${GEMINI_API_KEY}
+    call_args:
+      temperature: 0 # deterministic extraction
+    retry:
+      type: exponential_backoff
+      max_retries: 10
+      max_delay: 60
+    # Throttle to stay friendly to the Gemini free/low tier and avoid the
+    # TPM blowups noted in evals.md. On a paid tier-1 key these can be raised
+    # (e.g. requests_per_period: 200) to finish the full index faster.
+    rate_limit:
+      type: sliding_window
+      period_in_seconds: 60
+      requests_per_period: 30
+      tokens_per_period: 250000
+
+embedding_models:
+  default_embedding_model:
+    model_provider: openai # -> "openai/text-embedding-3-small" (reads OPENAI_API_KEY)
+    model: text-embedding-3-small
+    auth_method: api_key
+    api_key: ${OPENAI_API_KEY}
+    retry:
+      type: exponential_backoff
+      max_retries: 10
+    rate_limit:
+      type: sliding_window
+      period_in_seconds: 60
+      requests_per_period: 200
+      tokens_per_period: 1000000
+
+### Document processing ###
+
+input:
+  type: jsonl # rows: {id=doc_id, title, text, source, url, source_group}
+  # (jsonl reader defaults file_pattern to all .jsonl; omitted on purpose
+  # because the config parser substitutes env vars and chokes on regex syntax.)
+  id_column: id # set to our doc_id so text_units.document_ids map to corpus_manifest
+  title_column: title
+  text_column: text
+
+chunking:
+  type: tokens
+  size: 1200
+  overlap: 100
+  encoding_model: o200k_base
+
+### Storage (all local; never uploaded to the HF vector-db bundle) ###
+
+input_storage:
+  type: file
+  base_dir: "input"
+
+output_storage:
+  type: file
+  base_dir: "output"
+
+reporting:
+  type: file
+  base_dir: "logs"
+
+cache:
+  type: json
+  storage:
+    type: file
+    base_dir: "cache"
+
+vector_store:
+  type: lancedb
+  db_uri: output/lancedb
+
+### Workflows ###
+
+embed_text:
+  embedding_model_id: default_embedding_model
+
+extract_graph:
+  completion_model_id: default_completion_model
+  prompt: "prompts/extract_graph.txt"
+  # Domain entity types for an applied-AI / LLM / RAG / Python corpus
+  # (the default organization/person/geo/event is useless here).
+  entity_types:
+    [
+      library,
+      framework,
+      tool,
+      model,
+      concept,
+      technique,
+      method,
+      class,
+      function,
+      parameter,
+      dataset,
+      metric,
+      error,
+      service,
+      person,
+      organization,
+    ]
+  max_gleanings: 1
+
+summarize_descriptions:
+  completion_model_id: default_completion_model
+  prompt: "prompts/summarize_descriptions.txt"
+  max_length: 500
+
+extract_graph_nlp:
+  text_analyzer:
+    extractor_type: regex_english
+
+cluster_graph:
+  max_cluster_size: 10
+
+extract_claims:
+  enabled: false # keep off: claims roughly double extraction cost
+  completion_model_id: default_completion_model
+  prompt: "prompts/extract_claims.txt"
+  description: "Any claims or facts that could be relevant to information discovery."
+  max_gleanings: 1
+
+community_reports:
+  completion_model_id: default_completion_model
+  graph_prompt: "prompts/community_report_graph.txt"
+  text_prompt: "prompts/community_report_text.txt"
+  max_length: 2000
+  max_input_length: 8000
+
+snapshots:
+  graphml: false
+  embeddings: false
+
+### Query (we use context assembly only; the agent's 3.5 Flash generates) ###
+
+local_search:
+  completion_model_id: default_completion_model
+  embedding_model_id: default_embedding_model
+  prompt: "prompts/local_search_system_prompt.txt"
+
+global_search:
+  completion_model_id: default_completion_model
+  map_prompt: "prompts/global_search_map_system_prompt.txt"
+  reduce_prompt: "prompts/global_search_reduce_system_prompt.txt"
+  knowledge_prompt: "prompts/global_search_knowledge_system_prompt.txt"
+
+drift_search:
+  completion_model_id: default_completion_model
+  embedding_model_id: default_embedding_model
+  prompt: "prompts/drift_search_system_prompt.txt"
+  reduce_prompt: "prompts/drift_search_reduce_prompt.txt"
+
+basic_search:
+  completion_model_id: default_completion_model
+  embedding_model_id: default_embedding_model
+  prompt: "prompts/basic_search_system_prompt.txt"

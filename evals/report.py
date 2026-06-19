@@ -37,6 +37,8 @@ def run_label(run_dir: Path, preset: str) -> str:
             label += "+kb_off"
         if cfg.get("retrieval_budget"):
             label += f"+rb{int(cfg['retrieval_budget']) // 1000}k"
+        if cfg.get("retriever") in ("graphrag", "classical"):
+            label += f"+{cfg['retriever']}"
     return label
 
 

@@ -89,6 +89,13 @@ def parse_args() -> argparse.Namespace:
         help="Per-request retrieval token budget (Axis B sweep, e.g. 30000); "
         "0 keeps the default 100k.",
     )
+    parser.add_argument(
+        "--retriever",
+        default="",
+        choices=["", "classical", "graphrag"],
+        help="Retrieval backend (GraphRAG experiment): '' / classical = hybrid "
+        "RAG (default); graphrag = GraphRAG over the prebuilt local index.",
+    )
     parser.add_argument("--langsmith", action="store_true", help="Enable tracing.")
     return parser.parse_args()
 
@@ -272,6 +279,7 @@ def build_request(
         student_id=student_id,
         disable_kb=args.disable_kb,
         retrieval_budget=args.retrieval_budget or None,
+        retriever=args.retriever,
     )
 
 
