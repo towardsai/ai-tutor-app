@@ -215,6 +215,7 @@ frontend/*.tsbuildinfo
 /data/graphrag/logs/
 /data/graphrag/.env
 /data/graphrag/*.log
+/data/graphrag/*.txt
 
 .claude/
 runs/
