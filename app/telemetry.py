@@ -150,9 +150,7 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # key usage_by_model resolves against). Per-1M-token pricing verified against
     # DeepSeek's price page 2026-06-19: $0.14 cache-miss input / $0.28 output /
     # $0.0028 cache-hit input (the ~50x cache discount that drives the cost test).
-    "deepseek-v4-flash": ModelPricing(
-        input=0.14, output=0.28, cache_read=0.0028
-    ),
+    "deepseek-v4-flash": ModelPricing(input=0.14, output=0.28, cache_read=0.0028),
 }
 
 

@@ -50,7 +50,9 @@ def load_run(run_dir: Path) -> dict[str, Any]:
     # Grade source for the column header: judge / human / mixed (None if no
     # merged grades). Stops the report from labeling judge grades "(human)".
     sources = {g.get("grade_source") for g in grades if g.get("grade_source")}
-    grade_source = sources.pop() if len(sources) == 1 else ("mixed" if sources else None)
+    grade_source = (
+        sources.pop() if len(sources) == 1 else ("mixed" if sources else None)
+    )
     return {
         "dir": run_dir,
         "label": run_label(run_dir, grades[0]["preset"]),
@@ -97,7 +99,9 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
     add("errors", lambda g: str(sum(1 for x in g if x.get("error"))))
     add("time to first text ms p50/p95", lambda g: fmt_ms(col(g, "ttft_ms")))
     add("turn ms p50/p95", lambda g: fmt_ms(col(g, "total_ms")))
-    add("input tok/turn (billed, all calls)", lambda g: fmt_mean(col(g, "input_tokens")))
+    add(
+        "input tok/turn (billed, all calls)", lambda g: fmt_mean(col(g, "input_tokens"))
+    )
     add(
         "context tokens/turn (window size)",
         lambda g: fmt_mean(col(g, "context_tokens_approx")),
