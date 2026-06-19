@@ -75,7 +75,10 @@ Config: `data/graphrag/settings.yaml` (tracked). Notable choices:
   retry-loop: graphrag aborts the stage if one call exhausts retries, but caches
   every success, so re-running resumes.
 
-<!-- INDEX-STATS: filled from the real full_stack index -->
+**Built index (full_stack_ai_engineering):** 90 docs -> 493 text units, **15,059
+entities**, 32,748 relationships, 3,371 communities + community reports. Cost
+**$44.96** on Gemini 2.5 Flash (in 34.5M / out 13.8M tokens), in budget. The
+retriever needs only the `entity_description` LanceDB table at query time.
 
 ## Run the comparison
 
@@ -109,5 +112,41 @@ context without ever falsely scoring as a recall/citation hit.
 
 ## Results
 
-<!-- RESULTS: filled after the comparison run (pending Cohere billing cap reset). -->
-_Pending the comparison run (blocked on the Cohere billing cap)._
+Run 2026-06-19: 41 full_stack single-turn cases, Gemini 3.5 Flash, `--disable-kb`
+(forces `retrieve_tutor_context` so the retriever is the only variable),
+`--scope-sources`, 1 trial, 0 errors per arm. Auto metrics only (key-point /
+behavior human grades pending). Bundles: `runs/grag_classical`, `runs/grag_graphrag`;
+report: `runs/grag_report/report.md`.
+
+| metric | classical RAG | GraphRAG |
+|---|---|---|
+| recall@shown source | 100% (n=41) | 100% (n=41) |
+| recall@shown lesson | 76% (n=41) | 76% (n=41) |
+| right-lesson rank (MRR) | **0.70** | 0.65 |
+| cited-correct source (answer) | 100% (n=27) | 100% (n=27) |
+| cited-correct lesson (answer) | 85% (n=27) | 85% (n=27) |
+| behavior proxy (code check) | 89% (n=37) | 92% (n=37) |
+| input tokens / turn | **110k** | 178k |
+| est cost / turn | **$0.147** | $0.212 |
+| TTFT p50 / p95 | **18.0s** / 31.8s | 18.8s / 39.2s |
+| turn ms p50 / p95 | **24.1s** / 40.9s | 26.9s / 44.4s |
+| llm calls / turn | 3.5 | 3.6 |
+
+**Finding (F-GraphRAG): on single-turn course-content questions, GraphRAG does
+not beat classical hybrid RAG — it ties on grounding accuracy and costs more.**
+Both surface and cite the right source 100% of the time and tie on lesson recall
+(76%) and cited-correct lesson (85%); classical is actually slightly better at
+*ranking* the right lesson (MRR 0.70 vs 0.65). GraphRAG pulls community-report
+context, so it spends **+61% input tokens and +44% $/turn** and is a bit slower,
+with no accuracy payoff. The +3pt behavior proxy is a coarse n=37 code check, not
+a real quality signal. This empirically supports the earlier decision to drop
+GraphRAG, rather than dropping it on faith.
+
+Caveats: scoped to one source (full_stack), single-turn, n=41 (27 corpus-answer),
+1 trial, auto metrics only. `recall@source` is saturated by `--scope-sources`
+(retrieval is restricted to the gold source), so `recall@lesson` / MRR /
+`cited_correct_lesson` are the discriminating numbers. GraphRAG's theoretical
+edge is multi-hop / cross-document synthesis, which this single-hop battery barely
+tests -- so this says GraphRAG doesn't help on typical single-hop course Q&A, not
+that it never helps. A fair test of its strength would need a multi-hop probe set
+(`_v2`), which is out of scope for this one comparison.
