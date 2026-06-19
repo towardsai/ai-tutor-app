@@ -1,5 +1,5 @@
 ---
-title: AI Tutor
+title: Towards AI's Chatbot Tutor
 emoji: 🎓
 colorFrom: blue
 colorTo: indigo
@@ -8,7 +8,7 @@ app_port: 7860
 pinned: false
 ---
 
-### AI Tutor Chatbot
+### Towards AI's Chatbot Tutor
 
 An agentic RAG tutor for applied AI, LLMs, RAG, and Python: a Next.js frontend served by a FastAPI backend, with a LangChain/LangGraph agent core. See [AGENTS.md](./AGENTS.md) for the architecture map.
 
@@ -20,7 +20,7 @@ The live app is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugging
 
 ### Workshop, slides, and going deeper
 
-This repo also backs our **AI Engineer (AIE)** workshop on building a production AI tutor, presented by Louis-François Bouchard.
+This repo also backs our **AI Engineer (AIE)** workshop on building a production AI tutor, presented by Towards AI.
 
 - Slides: [Google Slide Deck](https://docs.google.com/presentation/d/1bQfD_Foc948fB-dvZSuUWCPt93TUynEXjbZXPcz6E0I/edit?usp=sharing)
 - Workshop recording: TBD (coming soon)
@@ -30,6 +30,8 @@ Want to build this AI tutor yourself, end to end? Our [**Full Stack AI Engineer 
 92 lessons. Hands-on capstone projects. A certificate. And an active Discord community. The first 6 lessons are free.
 
 [**Start here →**](https://academy.towardsai.net/courses/beginner-to-advanced-llm-dev)
+
+<a href="https://academy.towardsai.net/courses/beginner-to-advanced-llm-dev"><img src="./assets/full-stack-ai-engineer-course.png" alt="Become a Certified AI Engineer — Full Stack AI Engineer course by Towards AI" width="400"></a>
 
 ### Backend — Quick Start
 

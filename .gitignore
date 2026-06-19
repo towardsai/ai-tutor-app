@@ -205,6 +205,7 @@ frontend/*.tsbuildinfo
 !frontend/public/towardsai-logo.png
 !frontend/app/icon.png
 !frontend/app/apple-icon.png
+!assets/full-stack-ai-engineer-course.png
 
 .claude/
 runs/
