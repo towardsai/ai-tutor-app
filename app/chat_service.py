@@ -699,6 +699,8 @@ def normalize_model_name(model_name: str) -> str:
         return f"anthropic:{normalized}"
     if normalized.startswith("gemini"):
         return f"google-genai:{normalized}"
+    if normalized.startswith("deepseek"):
+        return f"deepseek:{normalized}"
     return normalized
 
 
@@ -757,6 +759,23 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
             # session. A BYOK DeepSeek key is the real fix for sustained limits.
             max_retries=12,
         )
+    if provider == "deepseek":
+        # DeepSeek first-party API (OpenAI-compatible, base https://api.deepseek.com).
+        # stream_usage=True so the streamed response carries token usage ->
+        # context_stats / cost telemetry populates, including the cached-prefix
+        # tokens that drive the cost comparison (DeepSeek caches prefixes
+        # automatically; cache-hit input is ~50x cheaper than cache-miss). Reads
+        # DEEPSEEK_API_KEY.
+        return ChatOpenAI(
+            model=actual_model,
+            temperature=1,
+            base_url="https://api.deepseek.com",
+            api_key=os.environ.get("DEEPSEEK_API_KEY"),
+            stream_usage=True,
+            # A few retries ride out transient 429/5xx on long agentic sessions
+            # without failing the whole session (we run evals at concurrency 1).
+            max_retries=6,
+        )
     if provider == "anthropic":
         try:
             from langchain_anthropic import ChatAnthropic
@@ -795,7 +814,7 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
         )
 
     raise ValueError(
-        "Unsupported model provider. Use openai, openrouter, anthropic, or google-genai."
+        "Unsupported model provider. Use openai, openrouter, deepseek, anthropic, or google-genai."
     )
 
 

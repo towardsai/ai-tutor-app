@@ -47,6 +47,10 @@ def load_run(run_dir: Path) -> dict[str, Any]:
     grades = load_jsonl(grades_path)
     if not grades:
         raise SystemExit(f"No grades in {run_dir}; run evals.grade first.")
+    # Grade source for the column header: judge / human / mixed (None if no
+    # merged grades). Stops the report from labeling judge grades "(human)".
+    sources = {g.get("grade_source") for g in grades if g.get("grade_source")}
+    grade_source = sources.pop() if len(sources) == 1 else ("mixed" if sources else None)
     return {
         "dir": run_dir,
         "label": run_label(run_dir, grades[0]["preset"]),
@@ -54,6 +58,7 @@ def load_run(run_dir: Path) -> dict[str, Any]:
         "model": grades[0]["model"],
         "grades": grades,
         "merged": grades_path.name == "grades_merged.jsonl",
+        "grade_source": grade_source,
     }
 
 
@@ -92,7 +97,11 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
     add("errors", lambda g: str(sum(1 for x in g if x.get("error"))))
     add("time to first text ms p50/p95", lambda g: fmt_ms(col(g, "ttft_ms")))
     add("turn ms p50/p95", lambda g: fmt_ms(col(g, "total_ms")))
-    add("input tok/turn", lambda g: fmt_mean(col(g, "input_tokens")))
+    add("input tok/turn (billed, all calls)", lambda g: fmt_mean(col(g, "input_tokens")))
+    add(
+        "context tokens/turn (window size)",
+        lambda g: fmt_mean(col(g, "context_tokens_approx")),
+    )
     add("output tok/turn", lambda g: fmt_mean(col(g, "output_tokens")))
     add(
         "est cost/turn $",
@@ -116,7 +125,7 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
 
     if battery_type == "singleturn":
         add(
-            "retrieval called (corpus)",
+            "grounding tool called (corpus)",
             lambda g: rate(
                 [
                     x.get("called_retrieval")
@@ -175,8 +184,8 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
             "behavior proxy from code checks",
             lambda g: rate(col(g, "behavior_heuristic")),
         )
-        add("behavior (human grade)", lambda g: rate(col(g, "behavior_pass")))
-        add("key-point coverage (human grade)", lambda g: _kp_coverage(g))
+        add("behavior (graded)", lambda g: rate(col(g, "behavior_pass")))
+        add("key-point coverage (graded)", lambda g: _kp_coverage(g))
 
     if battery_type == "sessions":
         add("cumulative input tok (last turn, mean)", _final_cumulative)
@@ -187,7 +196,7 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
             ),
         )
         add(
-            "probe accuracy (human grade)",
+            "probe accuracy (graded)",
             lambda g: rate([x.get("probe_pass") for x in g if x.get("is_probe")]),
         )
         for probe_type in sorted(
@@ -322,7 +331,13 @@ def main() -> None:
     for battery_type, type_runs in by_type.items():
         lines.append(f"\n## {battery_type}\n")
         header = ["metric"] + [
-            run["label"] + ("" if run["merged"] else " (auto only)")
+            run["label"]
+            + ("" if run["merged"] else " (auto only)")
+            + (
+                f" [{run['grade_source']}]"
+                if run["merged"] and run.get("grade_source")
+                else ""
+            )
             for run in type_runs
         ]
         lines.append("| " + " | ".join(header) + " |")

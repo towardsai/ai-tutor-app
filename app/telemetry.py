@@ -139,10 +139,18 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     "claude-haiku-4-5": ModelPricing(
         input=1.00, output=5.00, cache_read=0.10, cache_write=1.25
     ),
-    # DeepSeek-V4-Flash, DeepSeek first-party endpoint on OpenRouter
-    # (https://openrouter.ai/deepseek/deepseek-v4-flash, checked 2026-06-18).
-    # Note the ~50x cache-read discount ($0.0028 vs $0.14/MTok input).
+    # DeepSeek-V4-Flash via OpenRouter (slug "deepseek/deepseek-v4-flash").
+    # Kept for the openrouter provider path; unused now that evals run on the
+    # first-party API. Note OpenRouter's own list price differs ($0.09/$0.18).
     "deepseek/deepseek-v4-flash": ModelPricing(
+        input=0.14, output=0.28, cache_read=0.0028
+    ),
+    # DeepSeek-V4-Flash, DeepSeek FIRST-PARTY API (base https://api.deepseek.com,
+    # model id "deepseek-v4-flash" — the id the API echoes back, so this is the
+    # key usage_by_model resolves against). Per-1M-token pricing verified against
+    # DeepSeek's price page 2026-06-19: $0.14 cache-miss input / $0.28 output /
+    # $0.0028 cache-hit input (the ~50x cache discount that drives the cost test).
+    "deepseek-v4-flash": ModelPricing(
         input=0.14, output=0.28, cache_read=0.0028
     ),
 }

@@ -382,6 +382,14 @@ def merge_handgrades(
         rows = human.get(grade["run_id"], [])
         if not rows:
             continue
+        # Grade source, for honest report labels: the LLM judge prefixes its
+        # note with "[judge...]"; human-filled sheets do not. (Part C runs were
+        # judge-filled, but the report hardcoded "(human grade)".)
+        sources = {
+            "judge" if (r.get("note") or "").lstrip().startswith("[judge") else "human"
+            for r in rows
+        }
+        grade["grade_source"] = sources.pop() if len(sources) == 1 else "mixed"
         key_points = [r for r in rows if r["item_type"] == "key_point"]
         if key_points:
             passed = sum(1 for r in key_points if r["grade"].lower() == "pass")
