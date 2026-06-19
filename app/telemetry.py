@@ -139,6 +139,12 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     "claude-haiku-4-5": ModelPricing(
         input=1.00, output=5.00, cache_read=0.10, cache_write=1.25
     ),
+    # DeepSeek-V4-Flash, DeepSeek first-party endpoint on OpenRouter
+    # (https://openrouter.ai/deepseek/deepseek-v4-flash, checked 2026-06-18).
+    # Note the ~50x cache-read discount ($0.0028 vs $0.14/MTok input).
+    "deepseek/deepseek-v4-flash": ModelPricing(
+        input=0.14, output=0.28, cache_read=0.0028
+    ),
 }
 
 

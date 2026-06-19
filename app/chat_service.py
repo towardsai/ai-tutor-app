@@ -736,6 +736,27 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
 
     if provider == "openai":
         return ChatOpenAI(model=actual_model, temperature=1)
+    if provider == "openrouter":
+        # OpenAI-compatible gateway for open models (DeepSeek, Qwen, ...).
+        # stream_usage=True makes the streamed response carry token usage, so
+        # context_stats / cost telemetry populates (some OpenAI-compatible
+        # endpoints, e.g. Ollama, omit usage and leave token counts at 0).
+        # Routing is left to OpenRouter with fallbacks enabled: pinning a single
+        # provider with allow_fallbacks=False made batches die on a backend's
+        # transient 429 instead of routing around it. Fallback across providers
+        # is what keeps a long eval run reliable.
+        return ChatOpenAI(
+            model=actual_model,
+            temperature=1,
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.environ.get("OPENROUTER_API_KEY"),
+            stream_usage=True,
+            # Long agentic sessions fire hundreds of calls against OpenRouter's
+            # shared pool; bump retries (with the client's exponential backoff)
+            # to ride out transient upstream 429s instead of failing a whole
+            # session. A BYOK DeepSeek key is the real fix for sustained limits.
+            max_retries=12,
+        )
     if provider == "anthropic":
         try:
             from langchain_anthropic import ChatAnthropic
@@ -774,7 +795,7 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
         )
 
     raise ValueError(
-        "Unsupported model provider. Use openai, anthropic, or google-genai."
+        "Unsupported model provider. Use openai, openrouter, anthropic, or google-genai."
     )
 
 

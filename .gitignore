@@ -214,3 +214,6 @@ runs/
 # to the public prod Space on deploys. (*.jsonl is already ignored globally.)
 data/eval/review_batches/
 data/eval/review_log_v1.md
+# Same data also lives in the top-level eval/ working dir; ignore it wholesale
+# so non-.jsonl files (review_log_v1.md, review_batches/*.json) can't slip in.
+eval/

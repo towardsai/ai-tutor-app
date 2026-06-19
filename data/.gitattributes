@@ -63,3 +63,4 @@ ai_for_business_professionals/AI[[:space:]]for[[:space:]]Business[[:space:]]Prof
 ai_for_business_professionals/AI[[:space:]]for[[:space:]]Business[[:space:]]Professionals[[:space:]]190f9b6f42708087863df100e9b4b556/(video)[[:space:]]Making[[:space:]]Prompts[[:space:]]Robust[[:space:]]and[[:space:]]Ready[[:space:]]for[[:space:]]Re-Use[[:space:]]190f9b6f42708042bed5e17583e364a9/4.mov filter=lfs diff=lfs merge=lfs -text
 ai_for_business_professionals/AI[[:space:]]for[[:space:]]Business[[:space:]]Professionals[[:space:]]190f9b6f42708087863df100e9b4b556/Using[[:space:]]LLMs[[:space:]]for[[:space:]]Research[[:space:]](Perplexity)[[:space:]]-[[:space:]]Video[[:space:]]190f9b6f42708069954bd75cc797a378/Screen_Recording_2024-11-27_at_17.10.38.mov filter=lfs diff=lfs merge=lfs -text
 chroma-db-all_sources/chroma.sqlite3 filter=lfs diff=lfs merge=lfs -text
+kb/generated/symbols.tsv filter=lfs diff=lfs merge=lfs -text
