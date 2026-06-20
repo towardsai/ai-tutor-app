@@ -130,6 +130,10 @@ def ensure_local_vector_db() -> None:
                     repo_id="towardsai-tutors/ai-tutor-vector-db",
                     local_dir="data",
                     repo_type="dataset",
+                    # The GraphRAG experiment index (~150 MB) lives in the same
+                    # repo for reproducibility but prod does not use it; skip it
+                    # on cold start. Pull it explicitly to run that eval.
+                    ignore_patterns=["graphrag/**"],
                 )
             finally:
                 httpx_logger.setLevel(previous_level)

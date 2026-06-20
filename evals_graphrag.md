@@ -80,6 +80,20 @@ entities**, 32,748 relationships, 3,371 communities + community reports. Cost
 **$44.96** on Gemini 2.5 Flash (in 34.5M / out 13.8M tokens), in budget. The
 retriever needs only the `entity_description` LanceDB table at query time.
 
+### Reuse the prebuilt index (skip the ~$45 rebuild)
+
+The index is published to the **same private HF dataset** as the rest of the data
+(`towardsai-tutors/ai-tutor-vector-db`, under `graphrag/output/`). It is **not**
+pulled by the runtime cold-start (`ensure_local_vector_db` ignores `graphrag/**`),
+so prod Spaces stay lean; pull it explicitly with the same `HF_TOKEN` to run the
+eval:
+
+```bash
+uv run python -c "from huggingface_hub import snapshot_download as d; d(repo_id='towardsai-tutors/ai-tutor-vector-db', repo_type='dataset', allow_patterns=['graphrag/**'], local_dir='data')"
+```
+
+Re-publish after rebuilding: `uv run -m data.scraping_scripts.upload_dbs_to_hf --graphrag` (prune-free; never touches the production bundle).
+
 ## Run the comparison
 
 Blocked only by Cohere being available (both arms use Cohere embed/rerank; the
