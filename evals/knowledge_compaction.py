@@ -17,11 +17,27 @@ Strategies (each turns the lesson into the answering context):
 
 Quality is graded by an LLM judge that sees the FULL lesson (the real source)
 and checks whether the answer is correct and supported by it -- we never write
-reference answers (repo rule). Everything runs on Gemini 2.5 Flash via the
-OpenAI-compatible endpoint (stable under load), to keep cost low.
+reference answers (repo rule). The judge always runs on a large-context model
+(Gemini 2.5 Flash): the lesson is ~37.7k tokens, which a small model could not
+hold as ground truth, and a model must never grade itself.
 
+The model UNDER TEST is selectable. The default is the Gemini cloud baseline.
+Pass ``--provider ollama`` to drive a local SLM (e.g. llama3.1:8b) with a small
+context window (``--num-ctx``): when the lesson overflows the window, "shove it
+all" (``full_context``) is physically impossible and a single-pass ``summary``
+of the whole lesson is too -- so compaction stops being optional, and the study
+ranks which method actually wins on a cheap, small-context model. Local => $0,
+so its story is tokens + latency + the hard ctx wall, not dollars.
+
+  # cloud baseline (Gemini)
   uv run --env-file .env -m evals.knowledge_compaction --questions 24
   uv run --env-file .env -m evals.knowledge_compaction --questions 2 --smoke   # cheap check
+
+  # local SLM arm: same questions as the Gemini run, 32k window, Gemini judges.
+  # (start the daemon first: `ollama serve`; pull the model: `ollama pull llama3.1:8b`)
+  uv run --env-file .env -m evals.knowledge_compaction \
+      --provider ollama --num-ctx 32768 --out data/compaction_slm \
+      --questions-file data/compaction/questions.jsonl --questions 15
 """
 
 from __future__ import annotations
@@ -32,7 +48,7 @@ import logging
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from statistics import mean
 
@@ -47,11 +63,57 @@ LESSON_PATH = (
 OUT_DIR = "data/compaction"
 GRAPHRAG_LESSON_OUTPUT = "data/graphrag_lesson/output"
 
-# Gemini 2.5 Flash via the OpenAI-compatible endpoint (stable under load).
-MODEL = "openai/gemini-2.5-flash"
-API_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
-PRICE_IN_PER_MTOK = 0.30
-PRICE_OUT_PER_MTOK = 2.50
+
+@dataclass(frozen=True)
+class ModelConfig:
+    """A model endpoint the study can drive via litellm."""
+
+    model: str  # litellm model id
+    api_base: str | None  # endpoint override (None -> litellm/provider default)
+    api_key_env: str | None  # env var holding the key (None -> none, e.g. local)
+    price_in: float  # USD per 1M input tokens
+    price_out: float  # USD per 1M output tokens
+    num_ctx: int | None = None  # Ollama context window; when the lesson exceeds
+    # it the prompt is truncated -> compaction stops being optional. None keeps
+    # the provider default (cloud models: effectively unbounded for this lesson).
+    reasoning_effort: str | None = None  # litellm maps a value outside
+    # {low,medium,high} (e.g. "none") to think=False, disabling a hybrid model's
+    # thinking mode (Qwen3) so the comparison stays cheap/fast. None = untouched.
+
+
+# The cloud baseline (Gemini 2.5 Flash via OpenAI-compat, stable under load) vs a
+# local SLM via Ollama. The SLM is the workshop's whole point: with a small
+# context window and no caching to bail you out, "shove it all" literally does
+# not fit, so the question becomes *which* compaction method wins -- not whether
+# to compact. Local => $0, so its story is tokens + latency + the hard ctx wall.
+PROVIDERS: dict[str, ModelConfig] = {
+    "gemini": ModelConfig(
+        model="openai/gemini-2.5-flash",
+        api_base="https://generativelanguage.googleapis.com/v1beta/openai",
+        api_key_env="GEMINI_API_KEY",
+        price_in=0.30,
+        price_out=2.50,
+    ),
+    "ollama": ModelConfig(
+        model="ollama_chat/llama3.1:8b",
+        api_base=None,  # litellm default: http://localhost:11434
+        api_key_env=None,  # local, no key
+        price_in=0.0,
+        price_out=0.0,
+        num_ctx=32_768,
+    ),
+}
+
+# Model under test: answers questions and builds the compaction contexts
+# (summary / hierarchical / trim / selective) -- realistically the same cheap
+# model you would deploy. Overridden in main(); defaults to the cloud baseline so
+# existing runs are unchanged.
+CFG: ModelConfig = PROVIDERS["gemini"]
+
+# The grader (and question generator). MUST stay on a large-context model: the
+# judge reads the FULL ~37.7k-token lesson as ground truth, which does not fit in
+# a 32k SLM window -- and we never let the model under test grade itself.
+JUDGE_CFG: ModelConfig = PROVIDERS["gemini"]
 
 TRIM_BUDGET_TOKENS = 4000
 SELECTIVE_BUDGET_TOKENS = 4000
@@ -67,27 +129,40 @@ STRATEGIES = [
 ]
 
 
-def _gemini_key() -> str:
-    key = os.environ.get("GEMINI_API_KEY")
-    if not key:
-        raise SystemExit("GEMINI_API_KEY not set (run with: uv run --env-file .env ...)")
-    return key
-
-
 def complete(
-    messages: list[dict], *, max_tokens: int | None = None, temperature: float = 0
+    messages: list[dict],
+    *,
+    max_tokens: int | None = None,
+    temperature: float = 0,
+    cfg: ModelConfig | None = None,
 ) -> tuple[str, int, int, float]:
-    """One Gemini 2.5 call -> (text, in_tokens, out_tokens, latency_s)."""
+    """One model call -> (text, in_tokens, out_tokens, latency_s).
+
+    Routes to ``cfg`` (defaults to the model under test, ``CFG``). Pass
+    ``cfg=JUDGE_CFG`` for grading/question-gen so those stay on the strong model.
+    """
     import litellm
 
+    cfg = cfg or CFG
     started = time.monotonic()
     kwargs: dict = {
-        "model": MODEL,
-        "api_base": API_BASE,
-        "api_key": _gemini_key(),
+        "model": cfg.model,
         "messages": messages,
         "temperature": temperature,
     }
+    if cfg.api_base:
+        kwargs["api_base"] = cfg.api_base
+    if cfg.api_key_env:
+        key = os.environ.get(cfg.api_key_env)
+        if not key:
+            raise SystemExit(
+                f"{cfg.api_key_env} not set (run with: uv run --env-file .env ...)"
+            )
+        kwargs["api_key"] = key
+    if cfg.num_ctx:
+        kwargs["num_ctx"] = cfg.num_ctx  # Ollama context window (litellm forwards it)
+    if cfg.reasoning_effort is not None:
+        kwargs["reasoning_effort"] = cfg.reasoning_effort  # "none" => think=False
     if max_tokens:
         kwargs["max_tokens"] = max_tokens
     resp = litellm.completion(**kwargs)
@@ -98,7 +173,7 @@ def complete(
 
 
 def cost_usd(in_tok: int, out_tok: int) -> float:
-    return in_tok / 1e6 * PRICE_IN_PER_MTOK + out_tok / 1e6 * PRICE_OUT_PER_MTOK
+    return in_tok / 1e6 * CFG.price_in + out_tok / 1e6 * CFG.price_out
 
 
 # --- context builders -----------------------------------------------------
@@ -257,6 +332,7 @@ def generate_questions(lesson: str, n: int, out_path: Path) -> list[str]:
             }
         ],
         max_tokens=3000,
+        cfg=JUDGE_CFG,
     )
     raw = text.strip()
     match = re.search(r"\[.*\]", raw, re.DOTALL)
@@ -301,6 +377,7 @@ def judge(question: str, ans: str, lesson: str) -> tuple[bool, str]:
             },
         ],
         max_tokens=300,
+        cfg=JUDGE_CFG,
     )
     match = JUDGE_RE.search(text)
     if not match:
@@ -324,18 +401,27 @@ class Row:
     latency_s: float
     judge_pass: bool
     judge_reason: str
+    ctx_overflow: bool = False  # context exceeded the model under test's window
+    retrieved_context: str = ""  # what rag/graphrag actually pulled (retrieval
+    # results); empty for static/builder strategies (their context is dumped once
+    # to contexts.json and is identical across questions).
 
 
-def build_contexts(lesson: str, chunks: list[str], enc) -> dict:
-    """Precompute the query-independent contexts once (the expensive part)."""
-    logger.info("Precomputing summary / hierarchical summary / skeleton ...")
-    ctx = {
-        "full_context": lesson,
-        "trim": trim_to_budget(lesson, enc, TRIM_BUDGET_TOKENS),
-        "summary": build_summary(lesson),
-        "hierarchical_summary": build_hierarchical_summary(chunks),
-        "selective": build_selective_skeleton(lesson, enc, SELECTIVE_BUDGET_TOKENS),
-    }
+def build_contexts(lesson: str, chunks: list[str], enc, strategies: list[str]) -> dict:
+    """Precompute only the query-independent contexts the run actually needs."""
+    want = set(strategies)
+    ctx: dict[str, str] = {}
+    if "full_context" in want:
+        ctx["full_context"] = lesson
+    if "trim" in want:
+        ctx["trim"] = trim_to_budget(lesson, enc, TRIM_BUDGET_TOKENS)
+    if "summary" in want:
+        ctx["summary"] = build_summary(lesson)
+    if "hierarchical_summary" in want:
+        logger.info("Building hierarchical summary (map-reduce over chunks) ...")
+        ctx["hierarchical_summary"] = build_hierarchical_summary(chunks)
+    if "selective" in want:
+        ctx["selective"] = build_selective_skeleton(lesson, enc, SELECTIVE_BUDGET_TOKENS)
     return ctx
 
 
@@ -343,14 +429,16 @@ def report(rows: list[Row], out_dir: Path) -> str:
     by_strategy: dict[str, list[Row]] = {}
     for row in rows:
         by_strategy.setdefault(row.strategy, []).append(row)
+    window = f", {CFG.num_ctx // 1000}k ctx window" if CFG.num_ctx else ""
     lines = [
         "# Knowledge-compaction report",
         "",
-        f"Lesson: `{LESSON_PATH}` | model: gemini-2.5-flash | n questions: "
+        f"Lesson: `{LESSON_PATH}` | model: {CFG.model}{window} | n questions: "
         f"{len({r.question for r in rows})}",
         "",
-        "| strategy | judge pass | ctx tok | in tok/turn | $/turn | latency s p50/p95 |",
-        "|---|---|---|---|---|---|",
+        "| strategy | judge pass | ctx tok | in tok/turn | $/turn | "
+        "latency s p50/p95 | ctx overflow |",
+        "|---|---|---|---|---|---|---|",
     ]
     order = sorted(
         by_strategy,
@@ -360,12 +448,14 @@ def report(rows: list[Row], out_dir: Path) -> str:
         rs = by_strategy[s]
         passed = sum(1 for r in rs if r.judge_pass)
         lat = [r.latency_s for r in rs]
+        overflow = sum(1 for r in rs if r.ctx_overflow)
+        ov_cell = f"{overflow}/{len(rs)}" if overflow else "-"
         lines.append(
             f"| {s} | {passed}/{len(rs)} ({passed / len(rs):.0%}) | "
             f"{mean(r.context_tokens for r in rs):.0f} | "
             f"{mean(r.input_tokens for r in rs):.0f} | "
             f"${mean(r.cost_usd for r in rs):.4f} | "
-            f"{percentile(lat, 50):.1f}/{percentile(lat, 95):.1f} |"
+            f"{percentile(lat, 50):.1f}/{percentile(lat, 95):.1f} | {ov_cell} |"
         )
     out = "\n".join(lines) + "\n"
     (out_dir / "report.md").write_text(out)
@@ -380,7 +470,49 @@ def main() -> None:
     parser.add_argument("--strategies", nargs="*", default=STRATEGIES)
     parser.add_argument("--out", default=OUT_DIR)
     parser.add_argument("--smoke", action="store_true", help="tiny run, skip nothing")
+    parser.add_argument(
+        "--provider",
+        choices=sorted(PROVIDERS),
+        default="gemini",
+        help="Model under test. 'ollama' = local SLM (forced to compact, $0).",
+    )
+    parser.add_argument("--model", help="Override the litellm model id for --provider.")
+    parser.add_argument("--api-base", help="Override the endpoint for --provider.")
+    parser.add_argument(
+        "--num-ctx",
+        type=int,
+        help="Ollama context window (forces compaction when the lesson overflows).",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        help="Pass 'none' to disable a hybrid model's thinking (e.g. Qwen3) so the "
+        "run stays cheap/fast; omit for non-thinking models.",
+    )
+    parser.add_argument(
+        "--judge-provider",
+        choices=sorted(PROVIDERS),
+        default="gemini",
+        help="Grader/question-gen model -- keep on a large-context model.",
+    )
+    parser.add_argument(
+        "--questions-file",
+        help="Reuse an existing questions.jsonl (e.g. the Gemini run's) so models "
+        "answer the SAME questions; defaults to <out>/questions.jsonl.",
+    )
     args = parser.parse_args()
+
+    global CFG, JUDGE_CFG
+    CFG = PROVIDERS[args.provider]
+    if args.model:
+        CFG = replace(CFG, model=args.model)
+    if args.api_base is not None:
+        CFG = replace(CFG, api_base=args.api_base)
+    if args.num_ctx is not None:
+        CFG = replace(CFG, num_ctx=args.num_ctx)
+    if args.reasoning_effort is not None:
+        CFG = replace(CFG, reasoning_effort=args.reasoning_effort)
+    JUDGE_CFG = PROVIDERS[args.judge_provider]
+    logger.info("model under test: %s | judge: %s", CFG.model, JUDGE_CFG.model)
 
     from app.chroma_rag import get_token_encoding
 
@@ -392,11 +524,37 @@ def main() -> None:
     chunks = chunk_lesson(lesson)
     logger.info("Lesson %d tokens, %d chunks", len(enc.encode(lesson, disallowed_special=())), len(chunks))
 
-    questions = generate_questions(lesson, args.questions, out_dir / "questions.jsonl")
-    logger.info("Using %d questions", len(questions))
+    q_path = Path(args.questions_file) if args.questions_file else out_dir / "questions.jsonl"
+    questions = generate_questions(lesson, args.questions, q_path)
+    logger.info("Using %d questions (from %s)", len(questions), q_path)
+
+    # Run metadata so a cross-model aggregator can label each bundle by model.
+    (out_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "model": CFG.model,
+                "num_ctx": CFG.num_ctx,
+                "reasoning_effort": CFG.reasoning_effort,
+                "judge": JUDGE_CFG.model,
+                "lesson": args.lesson,
+                "n_questions": len(questions),
+            },
+            indent=2,
+        )
+    )
 
     strategies = list(args.strategies)
-    contexts = build_contexts(lesson, chunks, enc)
+    contexts = build_contexts(lesson, chunks, enc, strategies)
+    # Dump the built static/compaction contexts once (not full_context, which is
+    # just the lesson) so the qualitative comparison of what each method KEEPS is
+    # auditable without bloating every bundle row.
+    (out_dir / "contexts.json").write_text(
+        json.dumps(
+            {k: v for k, v in contexts.items() if k != "full_context"},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
     rag = LessonRagIndex(chunks) if "rag" in strategies else None
     graphrag = None
@@ -430,6 +588,10 @@ def main() -> None:
         for strategy in strategies:
             ctx = context_for(strategy, question)
             ctx_tok = len(enc.encode(ctx, disallowed_special=()))
+            # Overflow when the built context alone exceeds the window (the
+            # question + system wrap make the real prompt larger still); the SLM
+            # silently truncates, so we flag it as lost information.
+            overflow = bool(CFG.num_ctx) and ctx_tok > CFG.num_ctx
             ans, in_tok, out_tok, latency = answer(question, ctx)
             c = cost_usd(in_tok, out_tok)
             jp, jr = judge(question, ans, lesson)
@@ -445,6 +607,8 @@ def main() -> None:
                 latency_s=latency,
                 judge_pass=jp,
                 judge_reason=jr,
+                ctx_overflow=overflow,
+                retrieved_context=ctx if strategy in ("rag", "graphrag") else "",
             )
             rows.append(row)
             with open(bundle, "a", encoding="utf-8") as handle:
