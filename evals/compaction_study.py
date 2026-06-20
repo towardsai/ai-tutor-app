@@ -81,59 +81,102 @@ def _preset_of(run_dir: Path, bundles: list[dict]) -> str:
     return run_dir.name
 
 
-def report(run_dirs: list[str], lesson_path: str, out_dir: Path) -> str:
-    lesson = load_lesson(lesson_path)
+def _family_a_rows(run_dirs: list[str], lesson: str) -> list[dict]:
+    """In-context presets, run via run_battery: judge each question turn vs the
+    lesson; pull cost/tokens/latency from context_stats."""
     rows: list[dict] = []
     for rd in run_dirs:
         run_dir = Path(rd)
         bundles = load_jsonl(run_dir / "bundles.jsonl")
         if not bundles:
             continue
-        preset = _preset_of(run_dir, bundles)
-        # Question turns only (skip turn 0, the lesson-loading turn).
         q_turns = [
             b for b in bundles if (b.get("turn_index") or 0) >= 1 and not b.get("error")
         ]
-        passed = 0
-        for b in q_turns:
-            ok, _ = judge(b["query"], b.get("answer") or "", lesson)
-            passed += 1 if ok else 0
+        if not q_turns:
+            continue
+        passed = sum(1 for b in q_turns if judge(b["query"], b.get("answer") or "", lesson)[0])
         stats = [b.get("context_stats") or {} for b in q_turns]
         in_toks = [s.get("input_tokens") for s in stats if s.get("input_tokens")]
         costs = [s.get("est_cost_usd") for s in stats if s.get("est_cost_usd") is not None]
-        ttft = [s.get("ttft_ms") for s in stats if s.get("ttft_ms")]
+        lat = [s.get("total_ms") / 1000 for s in stats if s.get("total_ms")]
         compacted = sum(
             1 for s in stats if s.get("summary_messages") or s.get("dropped_messages")
         )
         rows.append(
             {
-                "preset": preset,
+                "arm": _preset_of(run_dir, bundles),
+                "family": "A: keep/compact in context",
                 "n": len(q_turns),
-                "judge_pass": passed,
-                "pass_rate": passed / len(q_turns) if q_turns else 0.0,
+                "passed": passed,
+                "pass_rate": passed / len(q_turns),
                 "mean_in_tok": mean(in_toks) if in_toks else 0,
-                "cum_cost": sum(costs) if costs else 0.0,
-                "mean_cost": mean(costs) if costs else 0.0,
-                "ttft_p50_ms": percentile(ttft, 50) if ttft else 0,
-                "compacted_turns": compacted,
+                "session_cost": sum(costs) if costs else 0.0,
+                "lat_p50_s": percentile(lat, 50) if lat else 0.0,
+                "note": f"compacted {compacted}/{len(q_turns)} turns",
             }
         )
+    return rows
 
-    rows.sort(key=lambda r: -r["pass_rate"])
+
+def _family_b_rows(bundles_path: Path) -> list[dict]:
+    """Retrieve-per-question arms (rag/graphrag) from knowledge_compaction
+    bundles, which are already judged against the lesson."""
+    if not bundles_path.exists():
+        return []
+    by_strat: dict[str, list[dict]] = {}
+    for r in load_jsonl(bundles_path):
+        by_strat.setdefault(r["strategy"], []).append(r)
+    rows: list[dict] = []
+    for strat, rs in by_strat.items():
+        passed = sum(1 for r in rs if r.get("judge_pass"))
+        in_toks = [r["input_tokens"] for r in rs if r.get("input_tokens")]
+        costs = [r["cost_usd"] for r in rs if r.get("cost_usd") is not None]
+        lat = [r["latency_s"] for r in rs if r.get("latency_s")]
+        rows.append(
+            {
+                "arm": strat,
+                "family": "B: retrieve per question",
+                "n": len(rs),
+                "passed": passed,
+                "pass_rate": passed / len(rs) if rs else 0.0,
+                "mean_in_tok": mean(in_toks) if in_toks else 0,
+                "session_cost": sum(costs) if costs else 0.0,
+                "lat_p50_s": percentile(lat, 50) if lat else 0.0,
+                "note": "stateless (fresh context each question)",
+            }
+        )
+    return rows
+
+
+def report(
+    run_dirs: list[str], lesson_path: str, out_dir: Path, family_b: Path | None = None
+) -> str:
+    lesson = load_lesson(lesson_path)
+    rows = _family_a_rows(run_dirs, lesson)
+    if family_b is not None:
+        rows += _family_b_rows(family_b)
+    rows.sort(key=lambda r: (-r["pass_rate"], r["mean_in_tok"]))
     lines = [
         "# Compaction study report",
         "",
-        f"Lesson: `{lesson_path}` | model: gemini-2.5-flash | no tools "
-        "(answer from retained context only) | 1 session.",
+        f"Lesson: `{lesson_path}` | model under test: **gemini-2.5-flash** | "
+        "answer from retained/retrieved context only (no live tools) | 1 session, "
+        f"{rows[0]['n'] if rows else 0} questions.",
         "",
-        "| preset | judge pass | mean in tok/turn | session $ | TTFT p50 ms | compacted turns |",
-        "|---|---|---|---|---|---|",
+        "> **Standalone fleet.** Every arm here runs on Gemini 2.5 Flash and is "
+        "compared only against the other arms in this table. Do NOT compare these "
+        "numbers to the Part B/C or GraphRAG-vs-RAG results, which ran on Gemini "
+        "3.5 Flash (different model, different pricing/caching).",
+        "",
+        "| arm | family | judge pass | mean in tok/turn | total $ | latency p50 s | note |",
+        "|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         lines.append(
-            f"| {r['preset']} | {r['judge_pass']}/{r['n']} ({r['pass_rate']:.0%}) | "
-            f"{r['mean_in_tok']:.0f} | ${r['cum_cost']:.4f} | {r['ttft_p50_ms']:.0f} | "
-            f"{r['compacted_turns']}/{r['n']} |"
+            f"| {r['arm']} | {r['family']} | {r['passed']}/{r['n']} "
+            f"({r['pass_rate']:.0%}) | {r['mean_in_tok']:.0f} | "
+            f"${r['session_cost']:.4f} | {r['lat_p50_s']:.1f} | {r['note']} |"
         )
     out = "\n".join(lines) + "\n"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -155,13 +198,20 @@ def main() -> None:
     r.add_argument("--runs", nargs="+", required=True)
     r.add_argument("--lesson", default=LESSON_PATH)
     r.add_argument("--out", default="runs/compaction_report")
+    r.add_argument(
+        "--family-b",
+        default=f"{OUT_DIR}/bundles.jsonl",
+        help="knowledge_compaction bundles for the retrieve-per-question arms "
+        "(rag/graphrag); empty string to skip.",
+    )
 
     args = parser.parse_args()
     if args.cmd == "build":
         build_battery(args.lesson, args.questions, Path(args.out))
     elif args.cmd == "report":
         runs = [d for pat in args.runs for d in glob.glob(pat)]
-        print(report(runs, args.lesson, Path(args.out)))
+        fb = Path(args.family_b) if args.family_b else None
+        print(report(runs, args.lesson, Path(args.out), family_b=fb))
 
 
 if __name__ == "__main__":
