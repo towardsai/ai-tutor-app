@@ -218,8 +218,9 @@ frontend/*.tsbuildinfo
 /data/graphrag/*.txt
 # Per-lesson GraphRAG workspace for the knowledge-compaction study (local-only).
 /data/graphrag_lesson/
-# Knowledge-compaction study run artifacts (generated questions + bundles).
-/data/compaction/
+# Knowledge-compaction study run artifacts (generated questions + bundles +
+# smoke + local-SLM runs). Contain lesson-derived text; never commit.
+/data/compaction*/
 
 .claude/
 runs/

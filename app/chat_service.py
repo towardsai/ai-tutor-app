@@ -1221,7 +1221,9 @@ class HierarchicalSummarizationMiddleware(AgentMiddleware):
         return message_content_to_text(getattr(message, "content", ""))
 
     def _summarize(self, text: str, instruction: str) -> str:
-        response = self._model.invoke([HumanMessage(content=f"{instruction}\n\n{text}")])
+        response = self._model.invoke(
+            [HumanMessage(content=f"{instruction}\n\n{text}")]
+        )
         return message_content_to_text(response.content).strip()
 
     def _unit_summary(self, text: str) -> str:

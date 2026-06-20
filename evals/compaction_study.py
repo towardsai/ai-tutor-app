@@ -95,10 +95,14 @@ def _family_a_rows(run_dirs: list[str], lesson: str) -> list[dict]:
         ]
         if not q_turns:
             continue
-        passed = sum(1 for b in q_turns if judge(b["query"], b.get("answer") or "", lesson)[0])
+        passed = sum(
+            1 for b in q_turns if judge(b["query"], b.get("answer") or "", lesson)[0]
+        )
         stats = [b.get("context_stats") or {} for b in q_turns]
         in_toks = [s.get("input_tokens") for s in stats if s.get("input_tokens")]
-        costs = [s.get("est_cost_usd") for s in stats if s.get("est_cost_usd") is not None]
+        costs = [
+            s.get("est_cost_usd") for s in stats if s.get("est_cost_usd") is not None
+        ]
         lat = [s.get("total_ms") / 1000 for s in stats if s.get("total_ms")]
         compacted = sum(
             1 for s in stats if s.get("summary_messages") or s.get("dropped_messages")
@@ -209,7 +213,7 @@ def main() -> None:
     if args.cmd == "build":
         build_battery(args.lesson, args.questions, Path(args.out))
     elif args.cmd == "report":
-        runs = [d for pat in args.runs for d in glob.glob(pat)]
+        runs = [d for pat in args.runs for d in glob.glob(pat) if Path(d).is_dir()]
         fb = Path(args.family_b) if args.family_b else None
         print(report(runs, args.lesson, Path(args.out), family_b=fb))
 

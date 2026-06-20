@@ -283,7 +283,10 @@ class LessonRagIndex:
         self._chunks = chunks
         self._cohere = cohere.ClientV2(api_key=os.environ["COHERE_API_KEY"])
         self._vecs = embed_texts(
-            self._cohere, chunks, input_type="search_document", model=DEFAULT_EMBED_MODEL
+            self._cohere,
+            chunks,
+            input_type="search_document",
+            model=DEFAULT_EMBED_MODEL,
         )
 
     def retrieve(self, query: str, top_k: int = RAG_TOP_K) -> str:
@@ -314,7 +317,11 @@ class LessonRagIndex:
 
 def generate_questions(lesson: str, n: int, out_path: Path) -> list[str]:
     if out_path.exists():
-        qs = [json.loads(line)["question"] for line in out_path.read_text().splitlines() if line.strip()]
+        qs = [
+            json.loads(line)["question"]
+            for line in out_path.read_text().splitlines()
+            if line.strip()
+        ]
         if len(qs) >= n:
             return qs[:n]
     text, *_ = complete(
@@ -326,7 +333,7 @@ def generate_questions(lesson: str, n: int, out_path: Path) -> list[str]:
                     "about the lesson below. Mix specific-detail questions (a single "
                     "fact/step buried in the text) with cross-section synthesis "
                     "questions (require combining multiple parts). Return ONLY a JSON "
-                    'array of strings.\n\n'
+                    "array of strings.\n\n"
                     f"{lesson}"
                 ),
             }
@@ -352,7 +359,10 @@ def answer(question: str, context: str) -> tuple[str, int, int, float]:
                 "ONLY the provided lesson context. If the context does not contain "
                 "the answer, say you don't have enough information.",
             },
-            {"role": "user", "content": f"Lesson context:\n{context}\n\nQuestion: {question}"},
+            {
+                "role": "user",
+                "content": f"Lesson context:\n{context}\n\nQuestion: {question}",
+            },
         ],
         max_tokens=800,
     )
@@ -368,7 +378,7 @@ def judge(question: str, ans: str, lesson: str) -> tuple[bool, str]:
                 "role": "system",
                 "content": "You grade an AI tutor's answer against the SOURCE LESSON "
                 "(ground truth). Pass only if the answer is correct and supported by "
-                "the lesson. Output ONLY JSON: {\"pass\": true/false, \"reason\": \"...\"}.",
+                'the lesson. Output ONLY JSON: {"pass": true/false, "reason": "..."}.',
             },
             {
                 "role": "user",
@@ -421,7 +431,9 @@ def build_contexts(lesson: str, chunks: list[str], enc, strategies: list[str]) -
         logger.info("Building hierarchical summary (map-reduce over chunks) ...")
         ctx["hierarchical_summary"] = build_hierarchical_summary(chunks)
     if "selective" in want:
-        ctx["selective"] = build_selective_skeleton(lesson, enc, SELECTIVE_BUDGET_TOKENS)
+        ctx["selective"] = build_selective_skeleton(
+            lesson, enc, SELECTIVE_BUDGET_TOKENS
+        )
     return ctx
 
 
@@ -442,7 +454,9 @@ def report(rows: list[Row], out_dir: Path) -> str:
     ]
     order = sorted(
         by_strategy,
-        key=lambda s: -sum(1 for r in by_strategy[s] if r.judge_pass) / len(by_strategy[s]),
+        key=lambda s: (
+            -sum(1 for r in by_strategy[s] if r.judge_pass) / len(by_strategy[s])
+        ),
     )
     for s in order:
         rs = by_strategy[s]
@@ -522,9 +536,17 @@ def main() -> None:
 
     lesson = load_lesson(args.lesson)
     chunks = chunk_lesson(lesson)
-    logger.info("Lesson %d tokens, %d chunks", len(enc.encode(lesson, disallowed_special=())), len(chunks))
+    logger.info(
+        "Lesson %d tokens, %d chunks",
+        len(enc.encode(lesson, disallowed_special=())),
+        len(chunks),
+    )
 
-    q_path = Path(args.questions_file) if args.questions_file else out_dir / "questions.jsonl"
+    q_path = (
+        Path(args.questions_file)
+        if args.questions_file
+        else out_dir / "questions.jsonl"
+    )
     questions = generate_questions(lesson, args.questions, q_path)
     logger.info("Using %d questions (from %s)", len(questions), q_path)
 
@@ -613,10 +635,17 @@ def main() -> None:
             rows.append(row)
             with open(bundle, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row.__dict__, ensure_ascii=False) + "\n")
-        logger.info("q%d/%d done (running answer cost $%.3f)", qi + 1, len(questions), total_cost)
+        logger.info(
+            "q%d/%d done (running answer cost $%.3f)",
+            qi + 1,
+            len(questions),
+            total_cost,
+        )
 
     print(report(rows, out_dir))
-    print(f"\nBundles: {bundle}  | answer-call cost ~= ${total_cost:.2f} (excl. judge/precompute)")
+    print(
+        f"\nBundles: {bundle}  | answer-call cost ~= ${total_cost:.2f} (excl. judge/precompute)"
+    )
 
 
 if __name__ == "__main__":
