@@ -22,6 +22,9 @@ cd "$(dirname "$0")/.."
 
 # Local experiment: skip LangSmith upload (quota noise; we use context_stats).
 export LANGSMITH_TRACING=false LANGCHAIN_TRACING_V2=false
+# Slow local model: hierarchical summarization's map-reduce (~30 sequential
+# summary calls in one turn) needs far longer than the 600s cloud default.
+export AI_TUTOR_EVAL_TURN_TIMEOUT="${AI_TUTOR_EVAL_TURN_TIMEOUT:-2400}"
 
 BATTERY="${BATTERY:-data/compaction/longctx_session.jsonl}"
 MODEL="${MODEL:-ollama:qwen2.5-7b-ctx32k}"   # a num_ctx Ollama variant

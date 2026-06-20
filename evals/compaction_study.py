@@ -157,17 +157,25 @@ def report(
     if family_b is not None:
         rows += _family_b_rows(family_b)
     rows.sort(key=lambda r: (-r["pass_rate"], r["mean_in_tok"]))
+    # Derive the model under test from the bundles instead of hardcoding it, so
+    # the header is correct whether this ran on Gemini or a local SLM.
+    model_label = "unknown"
+    for rd in run_dirs:
+        bundles = load_jsonl(Path(rd) / "bundles.jsonl")
+        if bundles and bundles[0].get("model"):
+            model_label = str(bundles[0]["model"])
+            break
     lines = [
         "# Compaction study report",
         "",
-        f"Lesson: `{lesson_path}` | model under test: **gemini-2.5-flash** | "
+        f"Lesson: `{lesson_path}` | model under test: **{model_label}** | "
         "answer from retained/retrieved context only (no live tools) | 1 session, "
         f"{rows[0]['n'] if rows else 0} questions.",
         "",
-        "> **Standalone fleet.** Every arm here runs on Gemini 2.5 Flash and is "
+        f"> **Standalone fleet.** Every arm here runs on `{model_label}` and is "
         "compared only against the other arms in this table. Do NOT compare these "
-        "numbers to the Part B/C or GraphRAG-vs-RAG results, which ran on Gemini "
-        "3.5 Flash (different model, different pricing/caching).",
+        "numbers across different models or to runs on other models (different "
+        "context window, pricing, and caching).",
         "",
         "| arm | family | judge pass | mean in tok/turn | total $ | latency p50 s | note |",
         "|---|---|---|---|---|---|---|",
