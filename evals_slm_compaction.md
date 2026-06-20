@@ -1,25 +1,41 @@
-# Knowledge compaction on small local models (SLMs) — experiment
+# Knowledge compaction on small local models (SLMs) — experiments
 
-A scoped study of **how to fit one long lesson into a small context window**, run
-on cheap **local** models (Ollama) instead of a large cloud model. It lives
-entirely on branch `experiment/slm-compaction` and is fully opt-in: the default
-chat model and all production behavior are unchanged.
+Two scoped experiments on **how to survive a long lesson in a small context
+window**, run on cheap **local** models (Ollama) instead of a large cloud model,
+across three SLMs that run on a 16 GB Mac. It lives entirely on branch
+`experiment/slm-compaction` and is fully opt-in: the default chat model and all
+production behavior are unchanged.
 
 ## Why this exists (the gap it fills)
 
-The Axis-A compaction results on Gemini are anticlimactic (F2/F9/F15): under
-implicit prompt caching, keeping the **full history** is cheapest *and* best, so
+The compaction results on Gemini are anticlimactic (F2/F9/F15): under implicit
+prompt caching, keeping the **full history** is cheapest *and* best, so
 compaction looks unnecessary. That conclusion only holds when context is cheap
 and effectively unbounded. The interesting regime is the opposite one a workshop
 audience actually hits on their own hardware: **a small model with a small
 context window and no caching**, where the ~37.7k-token lesson physically does
 not fit. There, "shove it all" is not an option, so the question stops being
-*whether* to compact and becomes **which compaction method wins** — at what
-quality, latency, and token cost.
+*whether* to compact and becomes **which method wins** — at what quality,
+latency, and token cost.
 
-This is the **Axis-B** knob (how knowledge is fetched/compacted into context),
-held to a single long document so methods are directly comparable, measured
-across three SLMs that run on a 16 GB Mac.
+Two complementary axes, same lesson / questions / models / 32k window:
+
+- **Experiment 1 — Axis B (how to *fetch/compact a document* into context):**
+  one giant document, compared as full-context vs trim/summary/hierarchical vs
+  RAG/GraphRAG vs selective skeleton. Stateless per question.
+- **Experiment 2 — Axis A (how to *compact a growing conversation history*):**
+  the lesson is loaded turn 0 of a session, then questions accumulate, and each
+  real app **memory preset** (full_history / sliding_window / summarization /
+  selective_retention / ...) manages the growing context through the middleware
+  stack, retrieval off.
+
+The judge, models, and the eviction mechanism (below) are shared. Per-model
+reports: `runs/slm_compaction_compare/compare.md` (Axis B) and
+`runs/axisa_<model>_report/report.md` (Axis A).
+
+---
+
+# Experiment 1 — Axis B: how to fit a document into context
 
 ## What varies, what's held constant
 
@@ -142,6 +158,74 @@ Run on a **MacBook Pro, Apple M1 Pro, 16 GB**, one model at a time via
   answer ("Global AI Summit 2025") is stated verbatim several times in the lesson
   but did not survive the single-pass summary the 8B model produced.
 
+---
+
+# Experiment 2 — Axis A: how to compact a growing conversation history
+
+## Setup
+
+The lesson is loaded in **turn 0** of a session; turns 1-15 ask the same 15
+questions; **retrieval is off** so the agent answers only from whatever the
+**memory preset retained**. Each preset runs through the real app middlewares
+(`evals/compaction_study.py` → `run_battery` → the production agent), on a
+`num_ctx=32768` Ollama model variant so the oversized lesson forces compaction.
+Quality is judged on Gemini against the full lesson, same as Axis B.
+
+### The eviction mechanism (important, and a finding in itself)
+
+On a small local model, "keep everything" cannot even be *truncated-and-kept*.
+The lesson (~37.7k tokens) is one giant turn-0 message that exceeds the 32k
+window. At turn 0 Ollama keeps a truncated 32,767-token slice of it; but from
+turn 1 on, **Ollama's server-side context fitting evicts the whole oversized old
+message** to make room for the newer turns, so `full_history` answers turns 1-15
+with the lesson *gone* (it sees ~1-5k tokens of accumulated Q&A, not the lesson).
+On Gemini's large window this never happens (`full_history` held ~43k/turn). So
+on an SLM, keep-everything is not a baseline you can lean on — the runtime
+silently drops the content, and a method that **summarizes the lesson into a
+small message the middleware injects before Ollama** is the only way to retain
+its gist. (Verified by inspecting the checkpoint: the full lesson is in stored
+state, but the model receives ~300-1.4k tokens.)
+
+## Results (per model; judge pass = correct+supported, n=15, 1 trial)
+
+| preset | qwen2.5-7b | llama3.1-8b | qwen3-8b (no-think) |
+|---|---|---|---|
+| full_history (keep all) | 27% | 7% | 67% |
+| sliding_window | 13% | 13% | 40% |
+| summarization_only | 20% | 0% | **73%** |
+| prompt_compression | **60%** | 13% | 60% |
+| selective_retention | 47% | 13% | 60% |
+| incontext_history_retrieval | 33% | 13% | 60% |
+| delta_summarization | 47% | 0% | **73%** |
+| hierarchical_summarization | 33% | **40%** | 67% |
+| **best method** | prompt_compression | hierarchical | summarization/delta |
+
+Local models cost $0; the cost axes are tokens and latency. Notable: hierarchical
+is by far the most expensive (it retains a ~25-29k-token layered summary and runs
+a ~30-call map-reduce → p50 latency 233s on qwen2.5, 333s on qwen3, vs ~5-80s for
+the others), for no quality lead except on the weakest model.
+
+### Findings
+
+1. **No single compaction method wins across models.** `prompt_compression`
+   leads on qwen2.5, `hierarchical_summarization` on llama3.1, and
+   `summarization_only`/`delta_summarization` on qwen3. Method effectiveness is
+   model-dependent, so there is no universal "best compaction" to recommend.
+2. **`full_history` never tops the table on an SLM** (27% / 7% / 67%) — it is the
+   evicted-lesson case above, and on the two weaker models it is near the bottom.
+   This **inverts** the cached-Gemini result (F9/F15) where full history wins.
+3. **`sliding_window` is reliably among the worst** (13% / 13% / 40%): pure
+   recency dropping evicts the lesson turn outright, with no summary to fall back
+   on.
+4. **Model capability dominates the compaction method.** qwen3 (40-73% across
+   *every* method) >> qwen2.5 (13-60%) >> llama3.1 (0-40%). Choosing a better
+   small model buys more than choosing the best compaction strategy — qwen3 even
+   answers `full_history` at 67% *despite* the lesson being evicted (it leans on
+   accumulated Q&A and prior answers).
+5. **Summarization-family needs a capable model.** `summarization_only` /
+   `delta_summarization` are top on qwen3 (73%) but bottom on llama3.1 (0%): a
+   weak model writes a lossy summary and then can't recover the facts from it.
+
 ## Methodology note — judge-truncation fix (important)
 
 The first pass under-reported quality badly: the judge emitted
@@ -154,26 +238,39 @@ JSON (the boolean is emitted first). The SLM answers were all saved, so we
 **re-graded offline** with `evals/rejudge_compaction.py` (no SLM re-run) → **0
 unparseable verdicts**. The table above is post-fix.
 
-## Caveats
+## Caveats (both experiments)
 
-- **Coarse n.** 15 questions/method, 1 trial. Read the table as a ranking, not
-  precise rates; the 100% cells in particular saturate at this n.
-- **One lesson, one domain.** A single case-study lesson; the absolute numbers and
-  the summary/retrieval gap may move on denser or more numeric content.
-- **Qwen3 thinking disabled** to keep cost/latency honest; thinking-on could lift
-  its quality at a large latency/token cost (the opposite of the SLM thesis).
-- **Strict judge.** Gemini grades "correct AND supported by the lesson"; a lenient
-  rubric would raise all arms but is unlikely to change the ranking.
+- **Coarse n.** 15 questions/method, 1 trial. Read the tables as rankings, not
+  precise rates; saturated (100%) and small-difference cells are not separable.
+- **LLM-judge variance.** Re-judging the same Axis-A answers moved individual
+  cells by ~1-3/15 (e.g. delta 27%↔47%) even at temperature 0, so only sizeable
+  gaps are meaningful — not 1-2 question differences.
+- **One lesson, one domain.** A single case-study lesson; absolute numbers and the
+  gaps may move on denser or more numeric content.
+- **Axis-A eviction is runtime+model-specific.** The `full_history` numbers
+  reflect Ollama's message-eviction behavior on a 32k window; a different serving
+  layer (or per-message truncation) could keep a truncated lesson instead.
+- **Qwen3 thinking off** (Axis B `--reasoning-effort none`; Axis A via Ollama
+  `/v1`, which returns final answers without reasoning) to keep cost/latency
+  honest.
+- **Strict judge.** Gemini grades "correct AND supported by the lesson."
 
 ## Reproduce
 
 ```bash
 # prereqs: `ollama serve`; ollama pull llama3.1:8b qwen2.5:7b-instruct qwen3:8b
 # GEMINI_API_KEY in .env (judge + question gen); COHERE_API_KEY (rag embeds)
-bash evals/run_slm_compaction.sh                 # 3 models x 7 methods x 15 Q (~7h)
-# re-grade saved answers if the judge changes (cheap, no SLM re-run):
-uv run --env-file .env -m evals.rejudge_compaction data/compaction_slm_*
+
+# Experiment 1 (Axis B): 3 models x 7 methods x 15 Q (~7h)
+bash evals/run_slm_compaction.sh
+uv run --env-file .env -m evals.rejudge_compaction data/compaction_slm_*   # re-grade if judge changes
 uv run -m evals.compaction_compare data/compaction_slm_* --out runs/slm_compaction_compare
+
+# Experiment 2 (Axis A): one num_ctx=32768 Ollama variant per model, then:
+printf 'FROM qwen2.5:7b-instruct\nPARAMETER num_ctx 32768\n' | ollama create qwen2.5-7b-ctx32k -f /dev/stdin
+uv run --env-file .env -m evals.compaction_study build --questions 15    # build the session battery once
+MODEL=ollama:qwen2.5-7b-ctx32k TAG=qwen2.5-7b bash evals/run_slm_axis_a.sh
 ```
 
-Outputs live under `data/compaction_slm_*` (gitignored — no eval data in git).
+Outputs live under `data/compaction_slm_*` and `runs/axisa_*` (gitignored — no
+eval data in git).
