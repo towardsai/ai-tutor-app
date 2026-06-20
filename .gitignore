@@ -216,6 +216,10 @@ frontend/*.tsbuildinfo
 /data/graphrag/.env
 /data/graphrag/*.log
 /data/graphrag/*.txt
+# Per-lesson GraphRAG workspace for the knowledge-compaction study (local-only).
+/data/graphrag_lesson/
+# Knowledge-compaction study run artifacts (generated questions + bundles).
+/data/compaction/
 
 .claude/
 runs/
