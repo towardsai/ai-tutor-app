@@ -153,6 +153,9 @@ def report(
     run_dirs: list[str], lesson_path: str, out_dir: Path, family_b: Path | None = None
 ) -> str:
     lesson = load_lesson(lesson_path)
+    # Drop globbed paths that aren't run dirs (e.g. the report out dir itself when
+    # --out matches the --runs glob on a re-run): they have no bundles.jsonl.
+    run_dirs = [rd for rd in run_dirs if (Path(rd) / "bundles.jsonl").exists()]
     rows = _family_a_rows(run_dirs, lesson)
     if family_b is not None:
         rows += _family_b_rows(family_b)
