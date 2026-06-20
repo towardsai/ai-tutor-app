@@ -225,6 +225,7 @@ Golden cases as a CI gate (5–10 critical-path cases with deterministic asserti
 - `evals_part_c_plan.md` — Part C execution plan: orchestration (workflow vs direct), the variant catalog with exact wiring + telemetry signals, the subset run matrix, and cost.
 - `evals_background.md` — research sources (Hamel, howtoeval, OpenAI macro-evals) and design rationale.
 - `evals_graphrag.md` — GraphRAG vs classical RAG experiment (branch `experiment/graphrag-vs-rag`): a scoped, true-GraphRAG head-to-head on the single-turn battery. Revisits the dropped GraphRAG idea with a fair test.
+- `evals_compaction.md` — compaction-vs-keep-everything study (branch `experiment/context-compaction`): on the largest lesson, keep-all vs every compaction method vs retrieve-per-question. **Standalone fleet on Gemini 2.5 Flash — not comparable to the 3.5-Flash results above.**
 - `data/eval/README.md` — battery schemas + glossary of terms; `review_log_v1.md` — dataset audit trail.
 - `evals/` — the harness code; `app/memory_presets.py`, `app/telemetry.py` — the app-side hooks.
 - `runs/b_report/` — generated: final tables, token curves, the blinded grading workbook.
