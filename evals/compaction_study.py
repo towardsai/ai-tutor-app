@@ -209,7 +209,7 @@ def main() -> None:
     if args.cmd == "build":
         build_battery(args.lesson, args.questions, Path(args.out))
     elif args.cmd == "report":
-        runs = [d for pat in args.runs for d in glob.glob(pat)]
+        runs = [d for pat in args.runs for d in glob.glob(pat) if Path(d).is_dir()]
         fb = Path(args.family_b) if args.family_b else None
         print(report(runs, args.lesson, Path(args.out), family_b=fb))
 
