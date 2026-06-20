@@ -369,6 +369,9 @@ def answer(question: str, context: str) -> tuple[str, int, int, float]:
 
 
 JUDGE_RE = re.compile(r"\{.*\}", re.DOTALL)
+# Recover the verdict from truncated JSON: the boolean is emitted first, so even
+# if a long "reason" is cut off at max_tokens we can still read pass/fail.
+JUDGE_PASS_RE = re.compile(r'"pass"\s*:\s*(true|false)', re.IGNORECASE)
 
 
 def judge(question: str, ans: str, lesson: str) -> tuple[bool, str]:
@@ -378,7 +381,8 @@ def judge(question: str, ans: str, lesson: str) -> tuple[bool, str]:
                 "role": "system",
                 "content": "You grade an AI tutor's answer against the SOURCE LESSON "
                 "(ground truth). Pass only if the answer is correct and supported by "
-                'the lesson. Output ONLY JSON: {"pass": true/false, "reason": "..."}.',
+                'the lesson. Output ONLY JSON: {"pass": true/false, "reason": "..."} '
+                "where reason is at most 25 words.",
             },
             {
                 "role": "user",
@@ -386,17 +390,21 @@ def judge(question: str, ans: str, lesson: str) -> tuple[bool, str]:
                 f"TUTOR ANSWER: {ans}",
             },
         ],
-        max_tokens=300,
+        max_tokens=400,
         cfg=JUDGE_CFG,
     )
     match = JUDGE_RE.search(text)
-    if not match:
-        return False, f"unparseable judge output: {text[:120]}"
-    try:
-        verdict = json.loads(match.group(0))
-        return bool(verdict.get("pass")), str(verdict.get("reason", ""))
-    except json.JSONDecodeError:
-        return False, f"bad judge json: {text[:120]}"
+    if match:
+        try:
+            verdict = json.loads(match.group(0))
+            return bool(verdict.get("pass")), str(verdict.get("reason", ""))
+        except json.JSONDecodeError:
+            pass
+    # JSON malformed/truncated -> recover the leading pass boolean if present.
+    pm = JUDGE_PASS_RE.search(text)
+    if pm:
+        return pm.group(1).lower() == "true", text[:200].strip()
+    return False, f"unparseable judge output: {text[:160]}"
 
 
 @dataclass
