@@ -1001,3 +1001,99 @@ textarea {
   line-height: 1.55;
   color: var(--muted);
 }
+
+/* ---- metric toggle (within a bars view) ---- */
+.exp-metric-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+.exp-metric-btn {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.exp-metric-btn.is-active {
+  color: #fff;
+}
+
+/* ---- scale section (home) ---- */
+.scale-section {
+  margin-top: clamp(48px, 7vw, 84px);
+}
+.scale-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+.scale-card {
+  padding: 22px;
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+}
+.scale-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-family: var(--font-display), sans-serif;
+  font-size: 17px;
+  margin: 0 0 16px;
+}
+.scale-unit {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.scale-items {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.scale-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.scale-item-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.scale-item-value {
+  font-family: var(--font-display), sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.scale-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  overflow: hidden;
+}
+.scale-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-soft), var(--accent));
+}
+.scale-note {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 5px;
+}

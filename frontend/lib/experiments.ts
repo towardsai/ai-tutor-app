@@ -39,7 +39,19 @@ export type FindingsView = {
   caption?: string;
   findings: Finding[];
 };
-export type View = BarsView | TableView | FindingsView;
+export type MetricSeries = { key: string; label: string; bars: Bar[] };
+export type MetricView = {
+  kind: "metric";
+  key: string;
+  label: string;
+  caption?: string;
+  series: MetricSeries[];
+};
+export type View = BarsView | TableView | FindingsView | MetricView;
+
+// Magnitude visual for the home page: how big the things we juggle actually are.
+export type ScaleItem = { label: string; value: number; display: string; note: string };
+export type ScaleStrip = { title: string; unit: string; items: ScaleItem[] };
 
 export type ResultGroup = { title: string; intro?: string; views: View[] };
 
@@ -86,24 +98,6 @@ function costBars(rows: [string, number, string?][]): Bar[] {
     .sort((a, b) => a.pct - b.pct);
 }
 
-const SLM_B_TOK: Record<string, string> = {
-  full_context: "37.8k tok (truncated to 32.8k)",
-  rag: "2.9k tok",
-  graphrag: "8.2k tok",
-  trim: "4.0k tok",
-  summary: "0.5k tok",
-  hierarchical_summary: "1.0k tok",
-  selective: "4.0k tok",
-};
-function slmB(key: string, label: string, pairs: [string, number][]): BarsView {
-  return {
-    kind: "bars",
-    key,
-    label,
-    metricLabel: "Answer quality (judge pass, n=15)",
-    bars: markHigh(pairs.map(([m, p]) => ({ label: m, pct: p, value: `${p}%`, sub: SLM_B_TOK[m] }))),
-  };
-}
 function slmA(key: string, label: string, scores: Record<string, number>): BarsView {
   return {
     kind: "bars",
@@ -111,6 +105,50 @@ function slmA(key: string, label: string, scores: Record<string, number>): BarsV
     label,
     metricLabel: "Answer quality (judge pass, n=15)",
     bars: markHigh(Object.entries(scores).map(([m, p]) => ({ label: m, pct: p, value: `${p}%` }))),
+  };
+}
+
+function fmtTok(t: number): string {
+  return t >= 1000 ? `${(t / 1000).toFixed(1)}k tok` : `${t} tok`;
+}
+// lower-is-better bars (tokens, latency): scaled to the max for visible widths.
+function lowerBars(rows: [string, number, string][]): Bar[] {
+  const max = Math.max(...rows.map((r) => r[1]));
+  const min = Math.min(...rows.map((r) => r[1]));
+  return rows
+    .map(([label, v, display]) => ({
+      label,
+      pct: Math.max(2, Math.round((v / max) * 100)),
+      value: display,
+      winner: v === min,
+      tone: (v === min ? "good" : v === max ? "bad" : "neutral") as Bar["tone"],
+    }))
+    .sort((a, b) => a.pct - b.pct);
+}
+// One model's Axis-B result with a Quality / Tokens / Latency metric toggle.
+// rows: [method, quality%, input tokens, latency p50 s] from compare.md.
+function slmBMetric(key: string, label: string, rows: [string, number, number, number][]): MetricView {
+  return {
+    kind: "metric",
+    key,
+    label,
+    series: [
+      {
+        key: "quality",
+        label: "Quality",
+        bars: markHigh(rows.map(([m, q]) => ({ label: m, pct: q, value: `${q}%` }))),
+      },
+      {
+        key: "tokens",
+        label: "Input tokens",
+        bars: lowerBars(rows.map(([m, , t]) => [m, t, fmtTok(t)])),
+      },
+      {
+        key: "latency",
+        label: "Latency",
+        bars: lowerBars(rows.map(([m, , , l]) => [m, l, `${l}s`])),
+      },
+    ],
   };
 }
 
@@ -412,19 +450,23 @@ export const EXPERIMENTS: Experiment[] = [
       {
         title: "Axis B: how to fit a document into context",
         intro:
-          "One long lesson, answered 7 ways. RAG ties or beats stuffing the whole document, at a fraction of the tokens. Switch models to compare.",
+          "One long lesson, answered 7 ways. Switch the model (tabs), then switch the metric (Quality, Input tokens, Latency) to see the trade-off: RAG ties or beats stuffing the whole document on quality, while full_context costs an order of magnitude more tokens and time.",
         views: [
-          slmB("qwen3", "qwen3:8b", [
-            ["rag", 100], ["graphrag", 100], ["full_context", 73],
-            ["hierarchical_summary", 73], ["selective", 73], ["trim", 67], ["summary", 67],
+          // rows: [method, quality %, input tokens, latency p50 s] from compare.md
+          slmBMetric("qwen3", "qwen3:8b", [
+            ["rag", 100, 3093, 25.9], ["graphrag", 100, 8672, 58.7], ["full_context", 73, 32767, 345.5],
+            ["hierarchical_summary", 73, 1796, 10.4], ["selective", 73, 4219, 13.0],
+            ["trim", 67, 4222, 26.1], ["summary", 67, 1042, 8.7],
           ]),
-          slmB("qwen2.5", "qwen2.5:7b", [
-            ["rag", 100], ["graphrag", 100], ["full_context", 67],
-            ["trim", 47], ["selective", 47], ["summary", 33], ["hierarchical_summary", 20],
+          slmBMetric("qwen2.5", "qwen2.5:7b", [
+            ["rag", 100, 3085, 20.1], ["graphrag", 100, 8664, 52.2], ["full_context", 67, 32767, 265.6],
+            ["trim", 47, 4214, 9.5], ["selective", 47, 4211, 4.4],
+            ["summary", 33, 743, 2.7], ["hierarchical_summary", 20, 1161, 2.4],
           ]),
-          slmB("llama3.1", "llama3.1:8b", [
-            ["graphrag", 87], ["full_context", 80], ["rag", 80],
-            ["trim", 53], ["selective", 47], ["hierarchical_summary", 27], ["summary", 0],
+          slmBMetric("llama3.1", "llama3.1:8b", [
+            ["graphrag", 87, 8324, 50.8], ["full_context", 80, 32767, 296.3], ["rag", 80, 3019, 19.6],
+            ["trim", 53, 4087, 11.6], ["selective", 47, 4086, 9.2],
+            ["hierarchical_summary", 27, 598, 4.2], ["summary", 0, 527, 4.1],
           ]),
         ],
       },
@@ -559,3 +601,33 @@ export const EXPERIMENTS: Experiment[] = [
 export function getExperiment(slug: string): Experiment | undefined {
   return EXPERIMENTS.find((e) => e.slug === slug);
 }
+
+// The scale of the problem, shown as proportional bars on the home page.
+export const SCALES: ScaleStrip[] = [
+  {
+    title: "Context windows",
+    unit: "tokens",
+    items: [
+      { label: "Local SLM (8B)", value: 32_768, display: "32k", note: "the lesson does not fit" },
+      { label: "Gemini / DeepSeek", value: 1_000_000, display: "~1M", note: "the lesson is a rounding error" },
+    ],
+  },
+  {
+    title: "What goes into one turn",
+    unit: "tokens",
+    items: [
+      { label: "One course lesson", value: 37_700, display: "37.7k", note: "overflows a 32k window" },
+      { label: "Retrieval payload / turn (Gemini)", value: 200_000, display: "~200k", note: "where the tokens actually are (F1)" },
+      { label: "Cached prefix at 36 turns (DeepSeek)", value: 1_780_000, display: "1.78M", note: "~97% cache-hit, so it is cheap" },
+    ],
+  },
+  {
+    title: "Conversation length tested",
+    unit: "turns",
+    items: [
+      { label: "Short / medium sessions", value: 13, display: "13", note: "keep-all still wins here" },
+      { label: "Contradiction tier", value: 22, display: "22", note: "plant a fact, update it, probe" },
+      { label: "Long-horizon tier", value: 36, display: "36", note: "keep-all still cheapest (DeepSeek)" },
+    ],
+  },
+];

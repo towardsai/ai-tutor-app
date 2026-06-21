@@ -1,0 +1,75 @@
+name: Deploy workshop UI to Hugging Face
+
+# Builds the frontend static export and deploys it to a standalone HF Static
+# Space (the workshop showcase, separate from the tutor Space it embeds).
+# Uses the same HF_TOKEN secret as the tutor deploy (org write).
+on:
+  workflow_dispatch:
+  push:
+    branches: [experiment/workshop-ui, main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-workshop-hf.yml'
+
+env:
+  HF_SPACE: towardsai-tutors/context-engineering-experiments
+
+jobs:
+  deploy-workshop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build static export
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy to HF Static Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          pip install "huggingface_hub>=0.25"
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+
+          repo = os.environ["HF_SPACE"]
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          api.create_repo(repo, repo_type="space", space_sdk="static", exist_ok=True)
+
+          readme = """---
+          title: Context Engineering in 2026
+          emoji: 🧠
+          colorFrom: blue
+          colorTo: indigo
+          sdk: static
+          pinned: false
+          short_description: Workshop showcase - compaction, memory & cost for an AI tutor
+          ---
+
+          Workshop showcase for "Context Engineering in 2026: Compaction, Memory & Cost",
+          built over the Towards AI open-source AI tutor (embedded here via iframe).
+          Static export of the Next.js site in frontend/.
+          Source: https://github.com/towardsai/ai-tutor-app
+          """
+          # dedent the heredoc indentation
+          readme = "\n".join(line[10:] if line.startswith(" " * 10) else line for line in readme.splitlines())
+          with open("frontend/out/README.md", "w") as f:
+              f.write(readme)
+
+          api.upload_folder(
+              folder_path="frontend/out",
+              repo_id=repo,
+              repo_type="space",
+              commit_message="Deploy workshop showcase (static export)",
+          )
+          print("Deployed:", f"https://huggingface.co/spaces/{repo}")
+          PY

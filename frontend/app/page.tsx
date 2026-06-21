@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowRight, Github, MessageSquare, FlaskConical } from "lucide-react";
 import { EXPERIMENTS } from "@/lib/experiments";
+import { ScaleSection } from "@/components/scale-section";
 
 const REPO = "https://github.com/towardsai/ai-tutor-app";
 const TUTOR_EMBED = "https://towardsai-tutors-ai-tutor-chatbot.hf.space";
@@ -63,6 +64,18 @@ export default function Home() {
               allow="clipboard-write"
             />
           </div>
+        </section>
+
+        <section id="scale" className="scale-section">
+          <div className="section-head">
+            <h2>The problem, by the numbers</h2>
+          </div>
+          <p className="section-intro">
+            Context engineering exists because of these magnitudes: a finite window, a
+            long lesson, retrieval payloads that dwarf the chat, and sessions that grow
+            for dozens of turns.
+          </p>
+          <ScaleSection />
         </section>
 
         <section id="experiments" className="experiments-section">

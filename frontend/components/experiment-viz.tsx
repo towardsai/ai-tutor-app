@@ -26,7 +26,43 @@ function BarRow({ b, accent, shown }: { b: Bar; accent: string; shown: boolean }
   );
 }
 
+function MetricBody({ view, accent }: { view: Extract<View, { kind: "metric" }>; accent: string }) {
+  const [metric, setMetric] = useState(view.series[0]?.key ?? "");
+  const [shown, setShown] = useState(true);
+  const series = view.series.find((s) => s.key === metric) ?? view.series[0];
+  return (
+    <div>
+      <div className="exp-metric-switch" role="tablist">
+        {view.series.map((s) => (
+          <button
+            key={s.key}
+            role="tab"
+            aria-selected={s.key === series.key}
+            className={clsx("exp-metric-btn", s.key === series.key && "is-active")}
+            style={s.key === series.key ? { background: accent, borderColor: accent } : undefined}
+            onClick={() => {
+              setShown(false);
+              setMetric(s.key);
+              requestAnimationFrame(() => setShown(true));
+            }}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+      <div className="exp-bars">
+        {series.bars.map((b) => (
+          <BarRow key={b.label} b={b} accent={accent} shown={shown} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ViewBody({ view, accent, shown }: { view: View; accent: string; shown: boolean }) {
+  if (view.kind === "metric") {
+    return <MetricBody view={view} accent={accent} />;
+  }
   if (view.kind === "findings") {
     return (
       <div className="exp-findings">
