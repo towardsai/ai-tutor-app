@@ -27,6 +27,24 @@ function BarRow({ b, accent, shown }: { b: Bar; accent: string; shown: boolean }
 }
 
 function ViewBody({ view, accent, shown }: { view: View; accent: string; shown: boolean }) {
+  if (view.kind === "findings") {
+    return (
+      <div className="exp-findings">
+        {view.findings.map((f, i) => (
+          <div key={i} className="exp-finding">
+            {f.stat && <span className="exp-finding-stat" style={{ color: accent }}>{f.stat}</span>}
+            <div className="exp-finding-body">
+              <h4 className="exp-finding-title">
+                {f.id && <span className="exp-finding-id">{f.id}</span>}
+                {f.title}
+              </h4>
+              <p>{f.text}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
   if (view.kind === "bars") {
     return (
       <div>
