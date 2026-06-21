@@ -1097,3 +1097,63 @@ textarea {
   color: var(--muted);
   margin-top: 5px;
 }
+
+/* ---- sticky experiment switcher ---- */
+.exp-nav {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 11px clamp(18px, 4vw, 40px);
+  background: var(--panel-strong);
+  backdrop-filter: blur(18px);
+  border-bottom: 1px solid var(--line-strong);
+}
+.exp-nav-pill {
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.exp-nav-pill:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+.exp-nav-pill.is-active {
+  background: var(--surface-strong);
+  border-width: 1.5px;
+}
+.exp-nav-home {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 11px;
+}
+
+/* ---- wider, taller tutor embed (desktop layout like the real Space) ---- */
+.tutor-frame {
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(1440px, 95vw);
+  height: min(88vh, 900px);
+}
+
+/* ---- about section (home, detail at the bottom) ---- */
+.about-section {
+  margin-top: clamp(48px, 7vw, 84px);
+}
+.about-text {
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.7;
+  max-width: 74ch;
+  margin: 0 0 14px;
+}

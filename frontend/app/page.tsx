@@ -8,6 +8,7 @@ import { ExperimentView } from "@/components/experiment-view";
 
 const REPO = "https://github.com/towardsai/ai-tutor-app";
 const TUTOR_EMBED = "https://towardsai-tutors-ai-tutor-chatbot.hf.space";
+const TUTOR_SPACE = "https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot";
 
 // Hash routing (#slm, #gemini, ...). Everything is served from the single
 // index.html, which is the only path an HF Static Space serves reliably for a
@@ -41,23 +42,12 @@ function HomeView() {
           <p className="hero-lead">
             Every long agent session eventually breaks: the assistant that swore it
             would never push to main does exactly that forty turns later. The model
-            did not get dumber, its context did. Context engineering is deciding what
-            the model sees on every single call (instructions, history, retrieved
-            course content, memory, and tool outputs), and it is the line between a
-            tutor that holds a coherent session and one that forgets the student
-            halfway through.
-          </p>
-          <p className="hero-lead">
-            We show it with Towards AI&rsquo;s open-source AI tutor for our
-            AI-engineering courses: the compaction toolkit, memory that survives
-            across sessions, and production retrieval, each measured on Gemini for
-            tokens, cost, latency, and memory probes instead of vibe-checks. At real
-            volume even Gemini Flash got expensive, so we tested whether open and
-            local models match the quality for a fraction of the cost. Everything is
-            open source.
+            did not get dumber, its context did. We measured how to fix that on
+            Towards AI&rsquo;s open-source AI tutor, across big cloud models and cheap
+            local ones.
           </p>
           <div className="hero-actions">
-            <a href="#tutor" className="btn btn-primary">
+            <a href={TUTOR_SPACE} target="_blank" rel="noreferrer" className="btn btn-primary">
               <MessageSquare size={17} /> Try the tutor
             </a>
             <a href="#experiments" className="btn">
@@ -72,6 +62,9 @@ function HomeView() {
         <section id="tutor" className="tutor-section">
           <div className="section-head">
             <h2>Try the AI tutor</h2>
+            <a href={TUTOR_SPACE} target="_blank" rel="noreferrer" className="section-link">
+              Open full tutor <ArrowRight size={15} />
+            </a>
           </div>
           <p className="section-intro">
             The live production tutor, embedded below. Ask it about RAG, agents,
@@ -117,6 +110,28 @@ function HomeView() {
               </a>
             ))}
           </div>
+        </section>
+
+        <section id="about" className="about-section">
+          <div className="section-head">
+            <h2>About this workshop</h2>
+          </div>
+          <p className="about-text">
+            Context engineering is deciding what the model sees on every single
+            call: instructions, history, retrieved course content, memory, and tool
+            outputs. It is the line between a tutor that holds a coherent session and
+            one that forgets the student halfway through. We show it on Towards
+            AI&rsquo;s open-source AI tutor for our AI-engineering courses: the
+            compaction toolkit, memory that survives across sessions, and production
+            retrieval.
+          </p>
+          <p className="about-text">
+            Everything here is measured, not vibe-checked: tokens, cost, latency, and
+            memory probes across more than a thousand runs. At real volume even Gemini
+            Flash got expensive, so we tested whether a cheaper API model (DeepSeek)
+            and free local models could match the quality for a fraction of the cost.
+            Everything is open source.
+          </p>
         </section>
 
         <footer className="home-footer">

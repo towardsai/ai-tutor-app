@@ -1,17 +1,15 @@
 "use client";
 
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import type { Experiment } from "@/lib/experiments";
 import { ResultGroupViz } from "@/components/experiment-viz";
+import { ExpNav } from "@/components/exp-nav";
 
 export function ExperimentView({ exp }: { exp: Experiment }) {
   return (
     <main className="exp-page" style={{ ["--exp-accent" as string]: exp.accent }}>
+      <ExpNav active={exp.slug} />
       <div className="exp-wrap">
-        <a href="#" className="exp-back">
-          <ArrowLeft size={16} /> All experiments
-        </a>
-
         <header className="exp-header">
           <span className="exp-badge">{exp.badge}</span>
           <h1 className="exp-title">{exp.title}</h1>

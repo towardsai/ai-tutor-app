@@ -58,6 +58,7 @@ export type ResultGroup = { title: string; intro?: string; views: View[] };
 export type Experiment = {
   slug: string;
   order: number;
+  navLabel: string;
   shortTitle: string;
   title: string;
   badge: string;
@@ -111,6 +112,20 @@ function slmA(key: string, label: string, scores: Record<string, number>): BarsV
 function fmtTok(t: number): string {
   return t >= 1000 ? `${(t / 1000).toFixed(1)}k tok` : `${t} tok`;
 }
+// higher-is-better bars with raw values + custom display (e.g. cache discount).
+function higherBars(rows: [string, number, string][]): Bar[] {
+  const max = Math.max(...rows.map((r) => r[1]));
+  const top = max;
+  return rows
+    .map(([label, v, display]) => ({
+      label,
+      pct: Math.max(2, Math.round((v / max) * 100)),
+      value: display,
+      winner: v === top,
+      tone: (v === top ? "good" : "neutral") as Bar["tone"],
+    }))
+    .sort((a, b) => b.pct - a.pct);
+}
 // lower-is-better bars (tokens, latency): scaled to the max for visible widths.
 function lowerBars(rows: [string, number, string][]): Bar[] {
   const max = Math.max(...rows.map((r) => r[1]));
@@ -158,6 +173,7 @@ export const EXPERIMENTS: Experiment[] = [
   {
     slug: "gemini",
     order: 1,
+    navLabel: "Gemini 3.5",
     shortTitle: "Gemini 3.5 Flash: the full eval program",
     title: "Gemini 3.5 Flash: the full eval program",
     badge: "Cloud · Gemini 3.5 · F1-F23",
@@ -247,22 +263,52 @@ export const EXPERIMENTS: Experiment[] = [
       {
         title: "Retrieval: GraphRAG vs classical RAG",
         intro:
-          "Does a true Microsoft GraphRAG index beat the production hybrid retriever? Only the retriever changes; Gemini 3.5 writes the answer in both arms.",
+          "Does a true Microsoft GraphRAG index beat the production hybrid retriever? Only the retriever changes; Gemini 3.5 writes the answer in both arms. Toggle the metric.",
         views: [
           {
-            kind: "table",
+            kind: "metric",
             key: "graphrag",
-            label: "Classical vs GraphRAG",
             caption:
-              "Grounding accuracy ties; GraphRAG ranks the right lesson slightly worse and uses more tokens, so it costs about 44% more. Index build was a one-time $44.96.",
-            columns: ["Metric", "Classical RAG", "GraphRAG"],
-            rows: [
-              ["recall@shown source", "100%", "100%"],
-              ["right-lesson rank (MRR)", "0.70", "0.65"],
-              ["cited-correct lesson", "85%", "85%"],
-              ["input tokens / turn", "110k", "178k"],
-              ["est cost / turn", "$0.147", "$0.212"],
+              "Accuracy ties: recall 100% / 100%, right-lesson rank (MRR) 0.70 vs 0.65, cited-correct lesson 85% / 85%. GraphRAG just costs more, plus a one-time $44.96 index build.",
+            label: "Classical vs GraphRAG",
+            series: [
+              {
+                key: "cost",
+                label: "Cost / turn",
+                bars: lowerBars([
+                  ["classical RAG", 0.147, "$0.147"],
+                  ["GraphRAG", 0.212, "$0.212"],
+                ]),
+              },
+              {
+                key: "tokens",
+                label: "Input tokens / turn",
+                bars: lowerBars([
+                  ["classical RAG", 110000, "110k"],
+                  ["GraphRAG", 178000, "178k"],
+                ]),
+              },
             ],
+          },
+        ],
+      },
+      {
+        title: "What the Gemini runs cost",
+        intro:
+          "Measuring everything on Gemini 3.5 Flash was not cheap. This is the bill the cheaper-model experiments were a response to.",
+        views: [
+          {
+            kind: "bars",
+            key: "spend",
+            metricLabel: "Approximate Gemini spend by phase (USD, at corrected pricing)",
+            label: "Spend",
+            bars: [
+              { label: "Part C screen (~660 turns)", pct: 100, value: "$166", tone: "bad" },
+              { label: "Part B bake-off (4 presets)", pct: 44, value: "$73", tone: "neutral" },
+              { label: "GraphRAG index (one-time)", pct: 27, value: "$45", tone: "neutral" },
+            ],
+            caption:
+              "About $284 total on Gemini for these phases, and a full-corpus GraphRAG index was projected near $2,000. The same experiment shapes cost roughly $8 on DeepSeek and $0 on local models, which is the whole motivation for the next pages.",
           },
         ],
       },
@@ -286,6 +332,7 @@ export const EXPERIMENTS: Experiment[] = [
   {
     slug: "deepseek",
     order: 2,
+    navLabel: "DeepSeek",
     shortTitle: "DeepSeek V4-Flash: cost and long horizon",
     title: "DeepSeek V4-Flash: cost and long-horizon memory",
     badge: "Cloud · DeepSeek · F25 + F26",
@@ -328,19 +375,33 @@ export const EXPERIMENTS: Experiment[] = [
           "Plant a fact, update it, then probe after compaction has evicted the original. This is the one regime where keep-all could lose (it carries both the old and new fact and must pick the current one).",
         views: [
           {
-            kind: "table",
+            kind: "metric",
             key: "memory",
-            label: "Memory probes",
             caption:
-              "Keep-all is perfect on both tiers. Summarization (prod) fails contradictions outright. Retrieving old turns matches keep-all but costs more.",
-            columns: ["Arm", "Contradiction (3)", "Long-horizon recall (2)"],
-            rows: [
-              ["full_history", "3/3", "2/2"],
-              ["incontext_history_retrieval", "3/3", "2/2"],
-              ["profile_memory", "2/3", "-"],
-              ["prompt_compression", "-", "2/2"],
-              ["prod (summarization)", "0/3", "1/2"],
-              ["context_reset", "-", "0/2"],
+              "Keep-all is perfect on both tiers. Summarization (prod) fails contradictions outright (it evicts the updated fact). Retrieving old turns matches keep-all but costs more.",
+            label: "Memory probes",
+            series: [
+              {
+                key: "contradiction",
+                label: "Contradiction (n=3)",
+                bars: markHigh([
+                  { label: "full_history", pct: 100, value: "3/3" },
+                  { label: "incontext_history_retrieval", pct: 100, value: "3/3" },
+                  { label: "profile_memory", pct: 67, value: "2/3" },
+                  { label: "prod (summarization)", pct: 0, value: "0/3" },
+                ]),
+              },
+              {
+                key: "longhorizon",
+                label: "Long-horizon recall (n=2)",
+                bars: markHigh([
+                  { label: "full_history", pct: 100, value: "2/2" },
+                  { label: "incontext_history_retrieval", pct: 100, value: "2/2" },
+                  { label: "prompt_compression", pct: 100, value: "2/2" },
+                  { label: "prod (summarization)", pct: 50, value: "1/2" },
+                  { label: "context_reset", pct: 0, value: "0/2" },
+                ]),
+              },
             ],
           },
         ],
@@ -363,6 +424,7 @@ export const EXPERIMENTS: Experiment[] = [
   {
     slug: "deepseek-vs-gemini",
     order: 3,
+    navLabel: "DS vs Gemini",
     shortTitle: "DeepSeek vs Gemini",
     title: "DeepSeek vs Gemini: the caching and cost story",
     badge: "Cloud · provider comparison",
@@ -383,19 +445,29 @@ export const EXPERIMENTS: Experiment[] = [
           "The strategies behave the same way; the cache strength sets how strong keep-all's advantage is and how far it holds.",
         views: [
           {
-            kind: "table",
+            kind: "metric",
             key: "vs",
             label: "Gemini vs DeepSeek",
-            columns: ["", "Gemini Flash", "DeepSeek V4-Flash"],
-            rows: [
-              ["cache discount", "~10x", "~50x"],
-              ["cheapest arm", "full_history", "full_history"],
-              ["keep-all cost lead holds to", "crossover may appear sooner", "past 36 turns"],
-              ["contradiction (keep-all vs summarize)", "full_history wins", "3/3 vs 0/3"],
-              ["per-turn cost (comparable tier)", "baseline", "~10-15x cheaper"],
-            ],
             caption:
-              "A stronger cache pushes the point where compaction could win further out, so on DeepSeek it never appears in any length tested.",
+              "On both, full_history is the cheapest arm and wins memory. A stronger cache makes keep-all's lead bigger and pushes the point where compaction could win further out, so on DeepSeek it never appears in any length tested (past 36 turns).",
+            series: [
+              {
+                key: "cost",
+                label: "Cost / turn",
+                bars: lowerBars([
+                  ["Gemini Flash", 0.15, "~$0.15"],
+                  ["DeepSeek V4-Flash", 0.011, "~$0.011"],
+                ]),
+              },
+              {
+                key: "cache",
+                label: "Cache discount",
+                bars: higherBars([
+                  ["Gemini Flash", 10, "~10x"],
+                  ["DeepSeek V4-Flash", 50, "~50x"],
+                ]),
+              },
+            ],
           },
         ],
       },
@@ -432,6 +504,7 @@ export const EXPERIMENTS: Experiment[] = [
   {
     slug: "slm",
     order: 4,
+    navLabel: "Local SLMs",
     shortTitle: "Small local models (SLMs)",
     title: "Small local models: forced to compact",
     badge: "Local · Ollama · F24 + F25",
@@ -511,6 +584,7 @@ export const EXPERIMENTS: Experiment[] = [
   {
     slug: "comparison",
     order: 5,
+    navLabel: "Final takeaway",
     shortTitle: "Cross-model: what to actually do",
     title: "Cross-model: cost, latency, quality, and the call",
     badge: "Synthesis · all models",
@@ -526,6 +600,26 @@ export const EXPERIMENTS: Experiment[] = [
       { label: "The split", value: "caching vs a hard window" },
     ],
     groups: [
+      {
+        title: "Cost per turn across models",
+        intro:
+          "Three orders of magnitude. This single gap is why we did not stop at Gemini.",
+        views: [
+          {
+            kind: "bars",
+            key: "cost",
+            metricLabel: "Estimated $/turn (lower is better)",
+            label: "Cost / turn",
+            bars: lowerBars([
+              ["Gemini 3.5 Flash", 0.15, "~$0.15"],
+              ["DeepSeek V4-Flash", 0.011, "~$0.011"],
+              ["Local SLM (8B)", 0, "$0"],
+            ]),
+            caption:
+              "Gemini ran roughly 10-15x a cheap API model and is unbounded next to a free local model. Quality is not on this axis (see the regimes and final takeaway).",
+          },
+        ],
+      },
       {
         title: "The two regimes",
         intro:
@@ -550,18 +644,23 @@ export const EXPERIMENTS: Experiment[] = [
         ],
       },
       {
-        title: "General outcomes",
+        title: "Final takeaway",
         intro: "What carries across every study.",
         views: [
           {
             kind: "findings",
             key: "outcomes",
-            label: "General outcomes",
+            label: "Final takeaway",
             findings: [
               {
                 title: "If you can cache, hoarding wins",
                 stat: "keep all",
                 text: "On both cloud models, full history is cheapest, fastest, and best on memory up to the lengths tested. Compaction breaks the cache and drops old facts, so it has to earn its place on very long horizons or hard quality needs.",
+              },
+              {
+                title: "Small window vs big window with caching",
+                stat: "32k vs ~1M",
+                text: "A free 8B model at 32k cannot hold a 37.7k lesson, so it is forced to retrieve or summarize and quality is capped by the model. A ~1M-token model with caching can just keep everything cheaply per cached token. The cheap-and-local path has real potential, but today it trades quality and convenience for a hard window; the big cached models still win when the work needs the whole context.",
               },
               {
                 title: "If you cannot cache, you must compact, and RAG is the tool",
