@@ -273,4 +273,16 @@ MODEL=ollama:qwen2.5-7b-ctx32k TAG=qwen2.5-7b bash evals/run_slm_axis_a.sh
 ```
 
 Outputs live under `data/compaction_slm_*` and `runs/axisa_*` (gitignored — no
-eval data in git).
+eval data in git). They are shared via the private `ai-tutor-data` HF dataset:
+
+- Batteries: `eval/compaction/{questions,longctx_session}.jsonl`
+- Run results: `eval_runs/slm_compaction/axis_b/<model>/` (fit-a-document) and
+  `eval_runs/slm_compaction/axis_a/axisa_<model>_<preset>/` (compact-history),
+  with `axis_b/_compare/` and `axisa_<model>_report/` holding the reports.
+
+```bash
+# download just this study's data + results
+uv run --env-file .env hf download towardsai-tutors/ai-tutor-data \
+    --repo-type dataset --include "eval/compaction/*" "eval_runs/slm_compaction/*" \
+    --local-dir .
+```
