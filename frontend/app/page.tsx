@@ -88,7 +88,7 @@ export default function Home() {
           </p>
           <div className="exp-grid">
             {experiments.map((e) => (
-              <Link key={e.slug} href={`/experiments/${e.slug}`} className="exp-card">
+              <Link key={e.slug} href={`/${e.slug}`} className="exp-card">
                 <div className="exp-card-accent" style={{ background: e.accent }} />
                 <span className="exp-card-badge">{e.badge}</span>
                 <h3 className="exp-card-title">{e.shortTitle}</h3>
