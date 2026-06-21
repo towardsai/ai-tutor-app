@@ -443,3 +443,509 @@ textarea {
 .markdown-block-muted h4 {
   color: var(--ink);
 }
+
+/* ============================================================
+   Workshop showcase (home + experiment pages)
+   ============================================================ */
+
+.home-wrap,
+.exp-wrap {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: clamp(28px, 5vw, 64px) clamp(18px, 4vw, 40px) 80px;
+}
+
+/* ---- hero ---- */
+.hero {
+  padding: 24px 0 12px;
+}
+.hero-kicker {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 14px;
+}
+.hero-title {
+  font-family: var(--font-display), sans-serif;
+  font-size: clamp(30px, 5.2vw, 52px);
+  line-height: 1.06;
+  letter-spacing: -0.02em;
+  margin: 0 0 18px;
+  max-width: 18ch;
+}
+.hero-lead {
+  font-size: clamp(16px, 2.1vw, 19px);
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 64ch;
+  margin: 0 0 28px;
+}
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+.btn:hover {
+  transform: translateY(-1px);
+  background: var(--surface-hover);
+  box-shadow: var(--shadow);
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover {
+  background: var(--accent);
+  filter: brightness(1.05);
+}
+.btn-ghost {
+  background: transparent;
+}
+
+/* ---- sections ---- */
+.tutor-section,
+.experiments-section {
+  margin-top: clamp(48px, 7vw, 84px);
+}
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.section-head h2 {
+  font-family: var(--font-display), sans-serif;
+  font-size: clamp(22px, 3.4vw, 30px);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.section-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+}
+.section-link:hover {
+  text-decoration: underline;
+}
+.section-intro {
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.6;
+  max-width: 70ch;
+  margin: 10px 0 22px;
+}
+
+/* ---- tutor iframe ---- */
+.tutor-frame {
+  border: 1px solid var(--line-strong);
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
+  height: min(74vh, 760px);
+}
+.tutor-frame iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+/* ---- experiment cards (home) ---- */
+.exp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 18px;
+}
+.exp-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px 22px 20px;
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+  text-decoration: none;
+  color: var(--ink);
+  overflow: hidden;
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+}
+.exp-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow);
+}
+.exp-card-accent {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+}
+.exp-card-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.exp-card-title {
+  font-family: var(--font-display), sans-serif;
+  font-size: 21px;
+  line-height: 1.2;
+  margin: 0;
+}
+.exp-card-q {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+}
+.exp-card-takeaway {
+  font-size: 14px;
+  line-height: 1.55;
+  margin: 0;
+}
+.exp-card-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 14px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.home-footer {
+  margin-top: 72px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.home-footer a {
+  color: var(--muted);
+}
+
+/* ---- experiment detail page ---- */
+.exp-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  margin-bottom: 22px;
+}
+.exp-back:hover {
+  color: var(--accent);
+}
+.exp-header {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 26px;
+  margin-bottom: 30px;
+}
+.exp-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--exp-accent, var(--accent));
+}
+.exp-title {
+  font-family: var(--font-display), sans-serif;
+  font-size: clamp(26px, 4.4vw, 40px);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin: 10px 0 14px;
+}
+.exp-question {
+  font-size: 18px;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 70ch;
+  margin: 0 0 20px;
+}
+.exp-takeaway {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: var(--accent-faint);
+  border: 1px solid var(--line-strong);
+}
+.exp-takeaway-tag {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--exp-accent, var(--accent));
+  padding-top: 3px;
+}
+.exp-takeaway p {
+  margin: 0;
+  font-size: 15.5px;
+  line-height: 1.6;
+}
+.exp-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+.exp-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+}
+.exp-chip-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+.exp-chip-value {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ---- result groups ---- */
+.exp-group {
+  margin-top: 38px;
+}
+.exp-group-title {
+  font-family: var(--font-display), sans-serif;
+  font-size: 22px;
+  margin: 0 0 8px;
+}
+.exp-group-intro {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.6;
+  max-width: 72ch;
+  margin: 0 0 18px;
+}
+.exp-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.exp-tab {
+  padding: 7px 15px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.exp-tab:hover {
+  background: var(--surface-hover);
+}
+.exp-tab.is-active {
+  background: var(--surface-strong);
+  border-width: 1.5px;
+}
+
+.exp-metric-label {
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 14px;
+}
+.exp-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.exp-bar-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 5px;
+}
+.exp-bar-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.exp-bar-star {
+  color: var(--exp-accent, var(--accent));
+}
+.exp-bar-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 13.5px;
+}
+.exp-bar-track {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  overflow: hidden;
+}
+.exp-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+  min-width: 2px;
+}
+.exp-bar-fill.is-winner {
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+.exp-bar-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.exp-caption {
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 16px 0 0;
+}
+
+/* ---- result tables ---- */
+.exp-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.exp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.exp-table th,
+.exp-table td {
+  padding: 11px 16px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--line);
+}
+.exp-table thead th {
+  background: var(--table-header-bg);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.exp-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.exp-th-label,
+.exp-td-label {
+  text-align: left;
+  font-weight: 600;
+}
+
+/* ---- details + links ---- */
+.exp-details {
+  margin-top: 26px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  padding: 4px 18px;
+}
+.exp-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 12px 0;
+  list-style: none;
+}
+.exp-details summary::-webkit-details-marker {
+  display: none;
+}
+.exp-details summary::before {
+  content: "+ ";
+  color: var(--accent);
+  font-weight: 700;
+}
+.exp-details[open] summary::before {
+  content: "– ";
+}
+.exp-details ul {
+  margin: 0 0 14px;
+  padding-left: 20px;
+}
+.exp-details li {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin-bottom: 7px;
+}
+.exp-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 30px;
+}
+.exp-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 15px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.exp-link:hover {
+  background: var(--surface-hover);
+}
+
+@media (max-width: 560px) {
+  .exp-takeaway {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .tutor-frame {
+    height: 82vh;
+  }
+}
