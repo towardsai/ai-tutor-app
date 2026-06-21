@@ -13,14 +13,25 @@ export default function Home() {
         <header className="hero">
           <span className="hero-kicker">Towards AI · Workshop</span>
           <h1 className="hero-title">
-            Filling the context window: what actually works for an AI tutor
+            Context Engineering in 2026: Compaction, Memory &amp; Cost
           </h1>
           <p className="hero-lead">
-            A retrieval-grounded AI tutor for applied AI, LLMs, and RAG, plus the
-            experiments behind it. We measured how to put long course content into
-            the model context, across large cloud models and cheap local ones, on
-            answer quality, tokens, cost, and latency. Try the tutor below, then
-            dig into each experiment and its results.
+            Every long agent session eventually breaks: the assistant that swore it
+            would never push to main does exactly that forty turns later. The model
+            did not get dumber, its context did. Context engineering is deciding what
+            the model sees on every single call (instructions, history, retrieved
+            course content, memory, and tool outputs), and it is the line between a
+            tutor that holds a coherent session and one that forgets the student
+            halfway through.
+          </p>
+          <p className="hero-lead">
+            We show it with Towards AI&rsquo;s open-source AI tutor for our
+            AI-engineering courses: the compaction toolkit, memory that survives
+            across sessions, and production retrieval, each measured on Gemini for
+            tokens, cost, latency, and memory probes instead of vibe-checks. At real
+            volume even Gemini Flash got expensive, so we tested whether open and
+            local models match the quality for a fraction of the cost. Everything is
+            open source.
           </p>
           <div className="hero-actions">
             <a href="#tutor" className="btn btn-primary">
@@ -37,13 +48,10 @@ export default function Home() {
 
         <section id="tutor" className="tutor-section">
           <div className="section-head">
-            <h2>The AI tutor, live</h2>
-            <Link href="/chat" className="section-link">
-              Open the local build <ArrowRight size={15} />
-            </Link>
+            <h2>Try the AI tutor</h2>
           </div>
           <p className="section-intro">
-            The production tutor running on Hugging Face. Ask it about RAG, agents,
+            The live production tutor, embedded below. Ask it about RAG, agents,
             embeddings, or anything from the course corpus. It grounds answers in a
             curated knowledge base and shows its sources.
           </p>

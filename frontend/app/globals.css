@@ -113,11 +113,18 @@ body {
   overflow-x: hidden;
 }
 
+/* The chat app fills the viewport with its own internal scroll; lock the body
+   only on that route (marked with data-chat-root). The showcase pages scroll
+   normally. */
 @media (min-width: 1024px) {
-  body {
+  body:has([data-chat-root]) {
     height: 100vh;
     overflow: hidden;
   }
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 a {
