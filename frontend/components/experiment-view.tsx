@@ -1,28 +1,16 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
+"use client";
+
 import { ArrowLeft, ExternalLink } from "lucide-react";
-import { EXPERIMENTS, getExperiment } from "@/lib/experiments";
+import type { Experiment } from "@/lib/experiments";
 import { ResultGroupViz } from "@/components/experiment-viz";
 
-export function generateStaticParams() {
-  return EXPERIMENTS.map((e) => ({ slug: e.slug }));
-}
-
-export default async function ExperimentPage({
-  params,
-}: {
-  params: Promise<{ slug: string }>;
-}) {
-  const { slug } = await params;
-  const exp = getExperiment(slug);
-  if (!exp) notFound();
-
+export function ExperimentView({ exp }: { exp: Experiment }) {
   return (
     <main className="exp-page" style={{ ["--exp-accent" as string]: exp.accent }}>
       <div className="exp-wrap">
-        <Link href="/" className="exp-back">
+        <a href="#" className="exp-back">
           <ArrowLeft size={16} /> All experiments
-        </Link>
+        </a>
 
         <header className="exp-header">
           <span className="exp-badge">{exp.badge}</span>

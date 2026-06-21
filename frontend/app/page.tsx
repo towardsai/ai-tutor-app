@@ -1,12 +1,34 @@
-import Link from "next/link";
+"use client";
+
+import { useEffect, useState } from "react";
 import { ArrowRight, Github, MessageSquare, FlaskConical } from "lucide-react";
-import { EXPERIMENTS } from "@/lib/experiments";
+import { EXPERIMENTS, getExperiment } from "@/lib/experiments";
 import { ScaleSection } from "@/components/scale-section";
+import { ExperimentView } from "@/components/experiment-view";
 
 const REPO = "https://github.com/towardsai/ai-tutor-app";
 const TUTOR_EMBED = "https://towardsai-tutors-ai-tutor-chatbot.hf.space";
 
-export default function Home() {
+// Hash routing (#slm, #gemini, ...). Everything is served from the single
+// index.html, which is the only path an HF Static Space serves reliably for a
+// multi-view site; the hash switches the view client-side and is deep-linkable.
+export default function Page() {
+  const [slug, setSlug] = useState("");
+  useEffect(() => {
+    const read = () => setSlug(window.location.hash.replace(/^#\/?/, ""));
+    read();
+    window.addEventListener("hashchange", read);
+    return () => window.removeEventListener("hashchange", read);
+  }, []);
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [slug]);
+
+  const exp = getExperiment(slug);
+  return exp ? <ExperimentView exp={exp} /> : <HomeView />;
+}
+
+function HomeView() {
   const experiments = [...EXPERIMENTS].sort((a, b) => a.order - b.order);
   return (
     <main className="home">
@@ -57,12 +79,7 @@ export default function Home() {
             curated knowledge base and shows its sources.
           </p>
           <div className="tutor-frame">
-            <iframe
-              src={TUTOR_EMBED}
-              title="AI Tutor"
-              loading="lazy"
-              allow="clipboard-write"
-            />
+            <iframe src={TUTOR_EMBED} title="AI Tutor" loading="lazy" allow="clipboard-write" />
           </div>
         </section>
 
@@ -88,7 +105,7 @@ export default function Home() {
           </p>
           <div className="exp-grid">
             {experiments.map((e) => (
-              <Link key={e.slug} href={`/${e.slug}`} className="exp-card">
+              <a key={e.slug} href={`#${e.slug}`} className="exp-card">
                 <div className="exp-card-accent" style={{ background: e.accent }} />
                 <span className="exp-card-badge">{e.badge}</span>
                 <h3 className="exp-card-title">{e.shortTitle}</h3>
@@ -97,7 +114,7 @@ export default function Home() {
                 <span className="exp-card-cta" style={{ color: e.accent }}>
                   View results <ArrowRight size={15} />
                 </span>
-              </Link>
+              </a>
             ))}
           </div>
         </section>
