@@ -52,7 +52,7 @@ jobs:
           colorTo: indigo
           sdk: static
           pinned: false
-          short_description: Workshop showcase - compaction, memory & cost for an AI tutor
+          short_description: Compaction, memory and cost for an AI tutor
           ---
 
           Workshop showcase for "Context Engineering in 2026: Compaction, Memory & Cost",
