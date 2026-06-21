@@ -70,6 +70,9 @@ jobs:
               repo_id=repo,
               repo_type="space",
               commit_message="Deploy workshop showcase (static export)",
+              # Remove stale remote files (e.g. routes that were renamed) so the
+              # Space mirrors the current build exactly. README.md is kept.
+              delete_patterns=["**", "!README.md"],
           )
           print("Deployed:", f"https://huggingface.co/spaces/{repo}")
           PY
