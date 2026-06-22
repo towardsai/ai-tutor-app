@@ -97,8 +97,13 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
 
     add("cases run", lambda g: str(len({x["unit_id"] for x in g})))
     add("errors", lambda g: str(sum(1 for x in g if x.get("error"))))
-    add("time to first text ms p50/p95", lambda g: fmt_ms(col(g, "ttft_ms")))
-    add("turn ms p50/p95", lambda g: fmt_ms(col(g, "total_ms")))
+    # --- Work & cost: run-time-INDEPENDENT, the unconfounded headline ----------
+    # These depend only on the request/response, not on when the arm ran, so
+    # they (not the latency rows below) are the basis for any efficiency claim.
+    # The compaction re-work that drives latency shows up here as extra
+    # calls/tokens (F9/F27), without the time-of-run noise.
+    add("llm calls/turn", lambda g: fmt_mean(col(g, "llm_calls"), "{:.1f}"))
+    add("tool calls/turn", lambda g: fmt_mean(col(g, "tool_call_count"), "{:.1f}"))
     add(
         "input tok/turn (billed, all calls)", lambda g: fmt_mean(col(g, "input_tokens"))
     )
@@ -111,8 +116,25 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
         "est cost/turn $",
         lambda g: fmt_mean(col(g, "est_cost_usd"), "{:.4f}"),
     )
-    add("llm calls/turn", lambda g: fmt_mean(col(g, "llm_calls"), "{:.1f}"))
-    add("tool calls/turn", lambda g: fmt_mean(col(g, "tool_call_count"), "{:.1f}"))
+    # --- Latency: TIME-OF-RUN CONFOUNDED (sequential arms meet different API
+    # load) -> supporting, not headline; `total - ttft` does NOT de-confound (it
+    # is only the answer-streaming tail). See the runtime note + evals.md F27.
+    # time-to-first-token (first reasoning/tool/text token) is only present on
+    # runs recorded after that telemetry was added; older runs show "—".
+    if any(
+        g.get("time_to_first_token_ms") is not None
+        for run in runs
+        for g in run["grades"]
+    ):
+        add(
+            "time to first token ms p50/p95 [confounded]",
+            lambda g: fmt_ms(col(g, "time_to_first_token_ms")),
+        )
+    add(
+        "time to first text ms p50/p95 [confounded]",
+        lambda g: fmt_ms(col(g, "ttft_ms")),
+    )
+    add("turn ms p50/p95 [confounded]", lambda g: fmt_ms(col(g, "total_ms")))
     if any(
         g.get("history_embedding_texts") is not None
         for run in runs
@@ -328,6 +350,15 @@ def main() -> None:
         f"Model(s): {', '.join(sorted(models))}. Runs missing human grades show "
         "— for quality rows (fill handgrade_sheet.csv, re-run evals.grade "
         "with --handgrades)."
+    )
+    lines.append(
+        "\n**Runtime read:** treat **llm calls/turn, tool calls/turn, and "
+        "tokens/turn** as the efficiency headline — they are run-time-independent. "
+        "The **latency rows are marked `[confounded]`**: when arms run "
+        "sequentially their seconds reflect API load at that moment, not just the "
+        "arm (evals.md F27). `total - ttft` does not fix this (it is only the "
+        "answer-streaming tail). Run arms interleaved or repeat trials before "
+        "quoting latency."
     )
     by_type: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for run in runs:

@@ -252,6 +252,7 @@ def grade_run(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]
             "tool_call_count": len(bundle.get("tool_calls") or []),
             "has_citation": bool(bundle.get("resolved_sources")),
             "ttft_ms": stats.get("ttft_ms"),
+            "time_to_first_token_ms": stats.get("time_to_first_token_ms"),
             "total_ms": stats.get("total_ms"),
             "input_tokens": stats.get("input_tokens"),
             "output_tokens": stats.get("output_tokens"),

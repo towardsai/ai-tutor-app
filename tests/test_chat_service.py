@@ -123,6 +123,55 @@ class FakeAnswerAgent(FakeAgent):
         }
 
 
+class FakeToolThenTextAgent(FakeAgent):
+    """Streams a tool-call token first, then streamed answer text, so a turn
+    sets first_token_at (the tool call) strictly before first_text_at (the
+    answer) -- the case that distinguishes time_to_first_token_ms from ttft_ms."""
+
+    async def astream(self, *args, **kwargs):
+        yield {
+            "type": "messages",
+            "data": (
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_ls",
+                            "name": "run_kb_command",
+                            "args": {"command": "ls raw"},
+                        }
+                    ],
+                ),
+                {"langgraph_node": "model"},
+            ),
+        }
+        yield {
+            "type": "updates",
+            "data": {
+                "tools": {
+                    "messages": [
+                        ToolMessage(
+                            content="$ ls raw\nok",
+                            name="run_kb_command",
+                            tool_call_id="call_ls",
+                        )
+                    ]
+                }
+            },
+        }
+        yield {
+            "type": "messages",
+            "data": (
+                AIMessageChunk(content="Here is the answer."),
+                {"langgraph_node": "model"},
+            ),
+        }
+        yield {
+            "type": "updates",
+            "data": {"model": {"messages": [AIMessage(content="Here is the answer.")]}},
+        }
+
+
 class ChatServiceTestCase(unittest.TestCase):
     def test_effective_tool_names_follow_provider(self) -> None:
         self.assertEqual(
@@ -381,6 +430,39 @@ class ChatServiceTestCase(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0].url, "https://unsourced.example/page")
         self.assertEqual(kept[0].group, "web")
+
+    def test_stream_chat_emits_time_to_first_token(self) -> None:
+        agent = FakeToolThenTextAgent([])
+        self.addCleanup(_drop_thread_record, "thread_ttft")
+        request = ChatRequest(
+            query="ls the kb",
+            source_keys=("peft",),
+            model_name="google-genai:gemini-3.5-flash",
+            include_reasoning=False,
+            enabled_tools=(),
+        )
+
+        async def collect_events():
+            return [event async for event in stream_chat(request)]
+
+        with (
+            patch("app.chat_service.build_agent", return_value=agent),
+            patch("app.chat_service.new_thread_id", return_value="thread_ttft"),
+        ):
+            events = asyncio.run(collect_events())
+
+        stats = [event for event in events if event.type == "context_stats"]
+        self.assertEqual(len(stats), 1)
+        data = stats[0].data
+        self.assertIn("time_to_first_token_ms", data)
+        first_token = data["time_to_first_token_ms"]
+        ttft = data["ttft_ms"]
+        self.assertIsInstance(first_token, int)
+        self.assertIsInstance(ttft, int)
+        self.assertGreaterEqual(first_token, 0)
+        # The tool-call token precedes the first answer text, so first-token
+        # latency never exceeds time-to-first-answer.
+        self.assertLessEqual(first_token, ttft)
 
     def test_stream_chat_resolves_shell_citation_after_final_answer(self) -> None:
         agent = FakeStreamingAgent([])
