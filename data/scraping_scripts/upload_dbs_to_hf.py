@@ -113,6 +113,37 @@ def upload_vector_db(repo_id: str = DEFAULT_REPO_ID) -> None:
     )
 
 
+GRAPHRAG_LOCAL_DIR = "data/graphrag/output"
+GRAPHRAG_REPO_PATH = "graphrag/output"
+
+
+def upload_graphrag_index(repo_id: str = DEFAULT_REPO_ID) -> None:
+    """Upload the local GraphRAG index to the same dataset repo (no prune).
+
+    Lets anyone with read access to the (private) repo pull the prebuilt graph
+    and re-run the GraphRAG-vs-RAG eval without rebuilding it (~$45 of Gemini
+    indexing). Deliberately separate from `upload_vector_db` and **prune-free**:
+    it must never delete the production bundle. The runtime cold-start download
+    (`config.ensure_local_vector_db`) ignores `graphrag/**`, so prod Spaces do
+    not pull this ~150 MB experiment artifact; pull it explicitly to run the eval
+    (see evals_graphrag.md).
+    """
+    try:
+        api = validate_hf_access(repo_id=repo_id)
+    except HuggingFaceAuthError as exc:
+        print(exc)
+        raise SystemExit(1) from exc
+    if not Path(GRAPHRAG_LOCAL_DIR).is_dir():
+        raise SystemExit(f"No GraphRAG index at {GRAPHRAG_LOCAL_DIR}; build it first.")
+    api.upload_folder(
+        folder_path=GRAPHRAG_LOCAL_DIR,
+        path_in_repo=GRAPHRAG_REPO_PATH,
+        repo_id=repo_id,
+        repo_type="dataset",
+    )
+    print(f"Uploaded {GRAPHRAG_LOCAL_DIR} -> {repo_id}:{GRAPHRAG_REPO_PATH}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Upload the Chroma vector database to Hugging Face."
@@ -122,8 +153,17 @@ def main() -> None:
         default=DEFAULT_REPO_ID,
         help=f"Hugging Face dataset repo. Default: {DEFAULT_REPO_ID}",
     )
+    parser.add_argument(
+        "--graphrag",
+        action="store_true",
+        help="Upload the GraphRAG index (data/graphrag/output) instead of the "
+        "vector-db bundle. Prune-free; never touches the production bundle.",
+    )
     args = parser.parse_args()
-    upload_vector_db(args.repo)
+    if args.graphrag:
+        upload_graphrag_index(args.repo)
+    else:
+        upload_vector_db(args.repo)
 
 
 if __name__ == "__main__":

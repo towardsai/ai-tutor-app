@@ -124,6 +124,10 @@ class AppContext:
     # Per-request retrieval token budget (Part C / Axis B sweep); None keeps the
     # retriever's DEFAULT_CONTEXT_TOKEN_BUDGET.
     retrieval_budget: int | None = None
+    # Which retrieval backend retrieve_tutor_context uses (GraphRAG experiment).
+    # "" / "classical" = hybrid LocalChromaRetriever (default); "graphrag" = the
+    # GraphRAG retriever over the prebuilt graph index.
+    retriever_kind: str = ""
 
 
 def get_student_profile(student_id: str) -> str:
@@ -267,6 +271,22 @@ def get_retriever() -> LocalChromaRetriever:
         return _build_retriever()
 
 
+def select_retriever(retriever_kind: str = ""):
+    """Pick the retrieval backend for retrieve_tutor_context.
+
+    Default ("" / "classical") is the hybrid LocalChromaRetriever. "graphrag"
+    returns the GraphRAG retriever over the prebuilt local graph index (used by
+    the GraphRAG-vs-RAG experiment); both expose the same ``search(...)``
+    signature returning ``list[SearchResult]``.
+    """
+    if (retriever_kind or "").lower() == "graphrag":
+        from .graph_rag import get_graphrag_retriever
+
+        with _RETRIEVER_INIT_LOCK:
+            return get_graphrag_retriever()
+    return get_retriever()
+
+
 def warm_up_retriever() -> None:
     if not os.environ.get("COHERE_API_KEY"):
         return
@@ -297,7 +317,9 @@ RETRIEVE_TUTOR_CONTEXT_SCHEMA = {
 def retrieve_tutor_context(query: str, runtime: ToolRuntime[AppContext]) -> str:
     """Retrieve relevant course and documentation context for an AI tutor question."""
     try:
-        results = get_retriever().search(
+        results = select_retriever(
+            getattr(runtime.context, "retriever_kind", "")
+        ).search(
             query=query,
             allowed_sources=list(runtime.context.allowed_sources),
             token_budget=getattr(runtime.context, "retrieval_budget", None),
@@ -1600,6 +1622,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 kb_command_limit=DEFAULT_KB_COMMAND_LIMIT,
                 student_id=request.student_id,
                 retrieval_budget=request.retrieval_budget,
+                retriever_kind=request.retriever,
             ),
             stream_mode=["messages", "updates"],
             version="v2",
