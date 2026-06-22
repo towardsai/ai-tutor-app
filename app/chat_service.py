@@ -1511,6 +1511,13 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     # never depend on LangSmith being enabled or within plan limits.
     usage_handler = TurnUsageHandler()
     first_text_at: float | None = None
+    # First streamed token of ANY kind (reasoning, tool call, or answer text),
+    # vs first_text_at which waits for the visible answer. On an agentic turn
+    # the first token is usually the model's tool-call decision, so this
+    # measures "when did the model start moving" (a UX/responsiveness signal)
+    # separately from time-to-first-answer (ttft_ms), which trails the whole
+    # tool-call loop.
+    first_token_at: float | None = None
     normalized_history = normalize_history(request.history)
     retrieval_evidence: dict[str, SourceMatch] = {}
     shell_evidence: dict[str, SourceMatch] = {}
@@ -1611,6 +1618,8 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 if include_reasoning:
                     thought_text = "\n\n".join(extract_thought_summaries(token.content))
                     if thought_text:
+                        if first_token_at is None:
+                            first_token_at = time.monotonic()
                         yield ChatEvent(
                             "reasoning_delta",
                             {
@@ -1630,6 +1639,8 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                     if not tool_call_id or tool_call_id in tool_calls_by_id:
                         continue
                     tool_calls_by_id[tool_call_id] = tool_call
+                    if first_token_at is None:
+                        first_token_at = time.monotonic()
                     yield ChatEvent(
                         "tool_call_started",
                         {
@@ -1647,6 +1658,8 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 if text_delta:
                     if first_text_at is None:
                         first_text_at = time.monotonic()
+                    if first_token_at is None:
+                        first_token_at = time.monotonic()
                     answer_chunks.append(text_delta)
                     yield ChatEvent(
                         "text_delta",
@@ -1889,6 +1902,14 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
             "ttft_ms": (
                 int((first_text_at - turn_started) * 1000)
                 if first_text_at is not None
+                else None
+            ),
+            # Time to the first streamed token of any kind (reasoning/tool/text);
+            # <= ttft_ms. Isolates raw model responsiveness from the tool-call
+            # loop that ttft_ms includes. See first_token_at above.
+            "time_to_first_token_ms": (
+                int((first_token_at - turn_started) * 1000)
+                if first_token_at is not None
                 else None
             ),
             "total_ms": total_ms,
