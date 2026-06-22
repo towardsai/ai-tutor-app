@@ -12,6 +12,15 @@ quality at the lowest cost.
 > 2.5 Flash**. The Part B/C memory-preset results and the GraphRAG-vs-RAG study
 > ran on **Gemini 3.5 Flash** — a different model with different pricing and
 > caching. These numbers are comparable only to each other.
+>
+> **What this compares — and what it doesn't.** This pits keeping a whole
+> document in the prompt against retrieving from it, on *one static lesson* — a
+> long-context-vs-RAG question. `full_history` here just means "the whole lesson
+> stays in the prompt," **not** its multi-turn-memory role in the Part B/C
+> sessions (F9/F10). So `rag` "beating" `full_history` is a grounding result on a
+> single document, not evidence about the Axis-A memory question; in the real
+> tutor, retrieval (Axis B) and a memory policy (Axis A) compose rather than
+> compete.
 
 ## Setup
 
