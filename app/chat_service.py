@@ -799,6 +799,21 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
             # without failing the whole session (we run evals at concurrency 1).
             max_retries=6,
         )
+    if provider == "ollama":
+        # Local SLM via Ollama's OpenAI-compatible endpoint (experiments only,
+        # e.g. the SLM compaction study). The model's context window is set on
+        # the Ollama side (a num_ctx Modelfile variant), not per request.
+        return ChatOpenAI(
+            model=actual_model,
+            temperature=1,
+            base_url=os.environ.get(
+                "OLLAMA_OPENAI_BASE_URL", "http://localhost:11434/v1"
+            ),
+            api_key=os.environ.get("OLLAMA_API_KEY", "ollama"),
+            # Ollama streams usage only when asked; without this the telemetry's
+            # usage_metadata is empty and token counts come back as 0.
+            stream_usage=True,
+        )
     if provider == "anthropic":
         try:
             from langchain_anthropic import ChatAnthropic
@@ -837,7 +852,7 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
         )
 
     raise ValueError(
-        "Unsupported model provider. Use openai, openrouter, deepseek, anthropic, or google-genai."
+        "Unsupported model provider. Use openai, openrouter, deepseek, anthropic, google-genai, or ollama."
     )
 
 

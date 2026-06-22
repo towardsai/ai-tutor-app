@@ -44,7 +44,10 @@ TOOL_OUTPUT_MAX_CHARS = 6_000
 # Slowest observed turn is ~2.5 min; anything past this is a wedged stream
 # (e.g. laptop sleep killed the connection mid-turn). The turn records a
 # TimeoutError and the unit re-runs on resume instead of hanging forever.
-TURN_TIMEOUT_SECONDS = 600
+# Overridable for slow local models whose multi-call middlewares (e.g.
+# hierarchical summarization's map-reduce, ~30 sequential calls) legitimately
+# need longer than the cloud default.
+TURN_TIMEOUT_SECONDS = int(os.environ.get("AI_TUTOR_EVAL_TURN_TIMEOUT", "600"))
 
 
 def parse_args() -> argparse.Namespace:
