@@ -4,6 +4,8 @@ This document explains how we test the AI tutor with repeatable conversations an
 
 The eval setup compares answer quality, memory retention, retrieval accuracy, tokens, cost, and latency for the June 2026 workshop. The same harness also becomes the ongoing quality program afterwards. Research sources and design rationale live in `evals_background.md`.
 
+**Running a new experiment?** See `evals_contributing.md` for the step-by-step (run → upload data to HF → record an `F<N>` finding here → merge) and the definition-of-done checklist, so the next person inherits both your result and the data to reproduce it.
+
 Plain-English map:
 - A **battery** is a dataset of test conversations or test questions.
 - A **run** is one battery executed with one model and one memory setting.
@@ -225,6 +227,7 @@ Golden cases as a CI gate (5–10 critical-path cases with deterministic asserti
 ## Files
 
 - `evals.md` — this file: the what, the data, the results, the queue.
+- `evals_contributing.md` — contributor playbook: how to run an experiment and land it (run → upload data to HF → record an `F<N>` finding → merge), with a definition-of-done gate.
 - `evals_part_c_plan.md` — Part C execution plan: orchestration (workflow vs direct), the variant catalog with exact wiring + telemetry signals, the subset run matrix, and cost.
 - `evals_background.md` — research sources (Hamel, howtoeval, OpenAI macro-evals) and design rationale.
 - `evals_graphrag.md` — GraphRAG vs classical RAG experiment (branch `experiment/graphrag-vs-rag`): a scoped, true-GraphRAG head-to-head on the single-turn battery. Revisits the dropped GraphRAG idea with a fair test.

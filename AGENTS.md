@@ -91,7 +91,7 @@ uv run -m data.scraping_scripts.retire_source_workflow --sources KEY [--dry-run 
 
 ## Evaluation
 
-**`evals.md` is the entry point** (what we evaluate, the datasets, results, remaining work); `evals/` is the harness (`run_battery` → `grade` → `report`, plus `check_triggers` and the blinded `handgrade_workbook`). Eval datasets and run results contain **real student text**: they are gitignored and ship via the private `ai-tutor-data` HF dataset (`eval/`, `eval_runs/`) — download snippet in `evals.md`. Runs cost real API money (a 4-preset bake-off ≈ $73); grading and reporting re-run offline from saved bundles for free.
+**`evals.md` is the entry point** (what we evaluate, the datasets, results, remaining work); `evals/` is the harness (`run_battery` → `grade` → `report`, plus `check_triggers` and the blinded `handgrade_workbook`). Eval datasets and run results contain **real student text**: they are gitignored and ship via the private `ai-tutor-data` HF dataset (`eval/`, `eval_runs/`) — download snippet in `evals.md`. Runs cost real API money (a 4-preset bake-off ≈ $73); grading and reporting re-run offline from saved bundles for free. **Running or contributing an experiment? Follow `evals_contributing.md`** (run → upload data to HF → record an `F<N>` finding → merge; with a definition-of-done gate).
 
 ## Environment variables
 
