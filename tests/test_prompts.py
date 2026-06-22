@@ -79,6 +79,33 @@ def test_build_system_prompt_without_local_tools_describes_none_of_them(
     assert "one tool available" not in no_tools
 
 
+def test_build_system_prompt_includes_course_reproduction_policy() -> None:
+    # The policy must reach the model whenever it can touch the corpus: both the
+    # full KB-browsing path and the retrieval-only path (disable_kb).
+    kb_on = build_system_prompt(
+        "google-genai:gemini-3.5-flash", (), kb_agents_instructions=""
+    )
+    retrieval_only = build_system_prompt(
+        "google-genai:gemini-3.5-flash", (), disable_kb=True
+    )
+    for prompt in (kb_on, retrieval_only):
+        assert "## Course content reproduction policy" in prompt
+        assert "raw/courses/" in prompt
+        assert "raw/docs/" in prompt
+        # Affordability redirect, gated on the student raising cost.
+        assert "louis@towardsai.net" in prompt
+        assert "never offer it unprompted" in prompt
+
+
+def test_course_reproduction_policy_absent_without_corpus_access() -> None:
+    # No sources selected: the agent has no corpus to copy from, so the policy
+    # (which only governs corpus text) must not appear.
+    prompt = build_system_prompt(
+        "google-genai:gemini-3.5-flash", (), include_local_tools=False
+    )
+    assert "## Course content reproduction policy" not in prompt
+
+
 def test_build_system_prompt_uses_explicit_instructions_without_file_read(
     tmp_path: Path,
     monkeypatch,
