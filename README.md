@@ -22,7 +22,8 @@ The live app is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugging
 
 This repo also backs our **AI Engineer (AIE)** workshop on building a production AI tutor, presented by Towards AI.
 
-- Slides: [Google Slide Deck](https://docs.google.com/presentation/d/1bQfD_Foc948fB-dvZSuUWCPt93TUynEXjbZXPcz6E0I/edit?usp=sharing)
+- Experiments and live demo: [Context engineering experiments](https://huggingface.co/spaces/towardsai-tutors/context-engineering-experiments), see the experiment results and try the chatbot.
+- Slides: [Google Slide Deck](https://docs.google.com/presentation/d/1BVqX1h2DPyIDCEWUSNXSVFIPTQgbhM_ik4JBVaQ2f3k/edit?usp=sharing)
 - Workshop recording: TBD (coming soon)
 
 Want to build this AI tutor yourself, end to end? Our [**Full Stack AI Engineer course**](https://academy.towardsai.net/courses/beginner-to-advanced-llm-dev), by Towards AI, walks you through building this exact AI tutor from scratch, plus the broader skills the AI engineering role demands: prompt and context engineering, data pipelines, RAG from scratch then at scale, fine-tuning, agents, observability, and production deployment to Hugging Face Spaces.
