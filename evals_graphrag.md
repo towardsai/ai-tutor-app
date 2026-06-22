@@ -49,6 +49,20 @@ question). Both arms run on those 41 cases, both restricted to that source
 Measured course-content indexing rate: **~$88 / 1M corpus tokens** (vs ~$255 for
 dense API-reference docs). full_stack = 486k tokens -> **~$43** to index.
 
+## Setup (optional extra)
+
+`graphrag` (and its `lancedb`/`litellm`/`pandas` deps) is an **eval-only optional
+extra** — it is imported lazily and only by the opt-in `graphrag` retriever, never
+on the production path, so it is kept out of the default install to keep the prod
+image lean. Install it to build/run this experiment:
+
+```bash
+uv sync --extra graphrag
+```
+
+A default `uv sync` (prod, CI) omits it; `tests/test_graph_rag.py` skips itself
+when the extra is absent.
+
 ## Build the graph DB
 
 Local-only; never uploaded to the HF vector-db bundle (the `data/graphrag/`

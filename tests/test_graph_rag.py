@@ -4,6 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
+# The GraphRAG retriever is an optional eval-only extra (see pyproject
+# [project.optional-dependencies].graphrag). Skip this module unless it is
+# installed, so a default/prod `uv sync` (which omits it) still collects clean.
+pytest.importorskip("graphrag", reason="install the optional 'graphrag' extra to run")
+
 import pandas as pd
 
 from app.chat_types import ChatRequest
