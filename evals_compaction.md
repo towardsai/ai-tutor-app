@@ -60,7 +60,7 @@ quality at the lowest cost.
 | graphrag | B retrieve | 8/15 (53%) | 8,960 | $0.045 | 1.9 |
 | summarization_only | A in-context | 8/15 (53%) | 27,344 | $0.089 | 4.8 |
 | prompt_compression | A in-context | 8/15 (53%) | 40,919 | $0.134 | 4.3 |
-| full_history (keep all) | A in-context | 8/15 (53%) | 42,935 | $0.134 | 4.8 |
+| full_history (keep all = lesson in prompt) | A in-context | 8/15 (53%) | 42,935 | $0.134 | 4.8 |
 | delta_summarization | A in-context | 7/15 (47%) | 27,033 | $0.107 | 5.9 |
 | selective_retention | A in-context | 6/15 (40%) | 27,121 | $0.105 | 5.9 |
 | prod | A in-context | 6/15 (40%) | 27,406 | $0.103 | 4.6 |
@@ -78,7 +78,7 @@ quality at the lowest cost.
   document queried question-by-question, fetch the relevant chunk; don't hold or
   summarize the whole thing.
 - **F-C2 — "Keep everything" is the priciest in-context arm and not even the best
-  quality.** `full_history` costs $0.134 / 43k tok per turn for 53%. (Note: this
+  quality.** `full_history` (here = the whole lesson held in the prompt, *not* its multi-turn-memory role from F9/F10) costs $0.134 / 43k tok per turn for 53%. (Note: this
   is a **no-tools** setting, so the F9 "full_history is cheapest" result does NOT
   hold here — F9's cost win came from avoiding re-retrieval, and there is nothing
   to re-retrieve here. With no re-retrieval penalty, compaction *does* cut
