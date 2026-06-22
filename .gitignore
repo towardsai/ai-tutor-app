@@ -217,3 +217,4 @@ data/eval/review_log_v1.md
 # Same data also lives in the top-level eval/ working dir; ignore it wholesale
 # so non-.jsonl files (review_log_v1.md, review_batches/*.json) can't slip in.
 eval/
+deepseek_eval_results.md
