@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -1228,6 +1229,113 @@ class InContextHistoryRetrievalMiddleware(AgentMiddleware):
         return await handler(self._select(request))
 
 
+_HIERARCHICAL_SUMMARY_CACHE: dict[str, str] = {}
+
+
+class HierarchicalSummarizationMiddleware(AgentMiddleware):
+    """Map-reduce summary of older messages into the model's view (Part C / Axis A).
+
+    Splits the message list into older (to compress) and the last ``keep_recent``;
+    when the older block exceeds the trigger, summarizes it in groups, then
+    summarizes the group summaries into one layered summary that replaces the
+    older block in the request view. Per-call view only (checkpoint untouched).
+    The summary is cached by older-block content hash, so a static long document
+    (e.g. a lesson loaded turn 0) is summarized once and reused, not every turn.
+
+    Caveat: the extra summarization calls go straight to the model (not through
+    the turn's usage handler), so they are reported via ``summary_messages`` but
+    are not added into the turn's est_cost -- hierarchical's summarization cost is
+    a one-time-per-session extra on top of the per-turn numbers.
+    """
+
+    def __init__(
+        self, model: Any, trigger_tokens: int, keep_recent: int, group_size: int
+    ) -> None:
+        super().__init__()
+        self._model = model
+        self._trigger = max(1, int(trigger_tokens))
+        self._keep = max(1, int(keep_recent))
+        self._group = max(1, int(group_size))
+
+    def _text(self, message: Any) -> str:
+        return message_content_to_text(getattr(message, "content", ""))
+
+    def _summarize(self, text: str, instruction: str) -> str:
+        response = self._model.invoke(
+            [HumanMessage(content=f"{instruction}\n\n{text}")]
+        )
+        return message_content_to_text(response.content).strip()
+
+    def _unit_summary(self, text: str) -> str:
+        """Map step for one stable chunk, cached by content so a static long
+        document is summarized once and reused across turns."""
+        key = hashlib.md5(text.encode("utf-8")).hexdigest()
+        cached = _HIERARCHICAL_SUMMARY_CACHE.get(key)
+        if cached is None:
+            cached = self._summarize(
+                text,
+                "Summarize this part of a tutoring conversation/lesson, keeping "
+                "concrete facts, steps, names, and examples:",
+            )
+            _HIERARCHICAL_SUMMARY_CACHE[key] = cached
+        return cached
+
+    def _maybe(self, request: Any) -> Any:
+        messages = request.messages
+        if len(messages) <= self._keep + 1:
+            return request
+        older = messages[: -self._keep]
+        recent = messages[-self._keep :]
+        older_text = "\n\n".join(self._text(m) for m in older)
+        # Cheap ~4-chars/token estimate to avoid encoding the whole prefix each call.
+        if len(older_text) < self._trigger * 4:
+            return request
+        # Stable map units: each older message, with oversized messages (a long
+        # lesson loaded in one turn) split into fixed char-chunks. Boundaries are
+        # stable across turns, so each unit's map summary is cached and computed
+        # once; only newly-arrived messages and the final reduce re-run as the
+        # session grows -- the realistic incremental cost, not a per-turn redo.
+        chunk_chars = max(2_000, self._group * 1_200)
+        units: list[str] = []
+        for message in older:
+            text = self._text(message)
+            if not text.strip():
+                continue
+            if len(text) > chunk_chars:
+                units += [
+                    text[i : i + chunk_chars] for i in range(0, len(text), chunk_chars)
+                ]
+            else:
+                units.append(text)
+        partials = [self._unit_summary(u) for u in units]
+        reduce_key = hashlib.md5("\n\n".join(partials).encode("utf-8")).hexdigest()
+        summary = _HIERARCHICAL_SUMMARY_CACHE.get(reduce_key)
+        if summary is None:
+            summary = self._summarize(
+                "\n\n".join(partials),
+                "Combine these section summaries into one coherent hierarchical "
+                "study summary (grouped by topic, concrete details kept, no "
+                "redundancy):",
+            )
+            _HIERARCHICAL_SUMMARY_CACHE[reduce_key] = summary
+        turn = _turn_id_for(request)
+        record_turn_signal_max(turn, "summary_messages", 1)
+        record_turn_signal_max(turn, "dropped_messages", len(older))
+        new_messages = [
+            SystemMessage(
+                content=f"## Summary of earlier context (hierarchical)\n\n{summary}"
+            ),
+            *recent,
+        ]
+        return request.override(messages=new_messages)
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._maybe(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._maybe(request))
+
+
 def build_agent_middleware(
     model: Any, memory_config: MemoryConfig
 ) -> list[AgentMiddleware]:
@@ -1286,6 +1394,15 @@ def build_agent_middleware(
             InContextHistoryRetrievalMiddleware(
                 keep_recent=memory_config.history_retrieval_keep_recent,
                 top_k=memory_config.history_retrieval_top_k,
+            )
+        )
+    if memory_config.hierarchical_summarize:
+        middleware.append(
+            HierarchicalSummarizationMiddleware(
+                model,
+                trigger_tokens=memory_config.hierarchical_trigger_tokens,
+                keep_recent=memory_config.hierarchical_keep_recent,
+                group_size=memory_config.hierarchical_group_size,
             )
         )
     if memory_config.longterm_memory:

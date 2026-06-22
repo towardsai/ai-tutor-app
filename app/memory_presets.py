@@ -69,6 +69,22 @@ Respond ONLY with the snapshot.
 {messages}
 </messages>"""
 
+DELTA_SUMMARY_PROMPT = """<role>
+Running-summary updater (delta compaction)
+</role>
+
+The messages below contain the running summary so far (if one exists) followed by
+newer turns. Produce an UPDATED running summary: start from the existing summary
+and fold in only what the newer turns add or change. Keep the durable facts,
+decisions, and lesson content the student is asking about; do not drop anything
+important that was already summarized; stay concise and non-redundant.
+
+Respond ONLY with the updated running summary.
+
+<messages>
+{messages}
+</messages>"""
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryConfig:
@@ -101,6 +117,13 @@ class MemoryConfig:
     # and retrieve only the top-k most relevant older blocks. None disables it.
     history_retrieval_keep_recent: int | None = None
     history_retrieval_top_k: int = 3
+    # Hierarchical summarization (Axis A): map-reduce the older messages
+    # (summarize groups, then summarize the group summaries) into one summary in
+    # the model's view, cached by content. None/False disables it.
+    hierarchical_summarize: bool = False
+    hierarchical_trigger_tokens: int = 8_000
+    hierarchical_keep_recent: int = 6
+    hierarchical_group_size: int = 5
 
 
 MEMORY_PRESETS: dict[str, MemoryConfig] = {
@@ -188,6 +211,24 @@ MEMORY_PRESETS: dict[str, MemoryConfig] = {
         summarization=False,
         history_retrieval_keep_recent=2,
         history_retrieval_top_k=3,
+    ),
+    # Delta summarization: a single running summary updated each trigger with only
+    # what changed (the prompt folds the prior summary + new turns into a fresh
+    # running summary). Summarization-style arm; isolates the summary STRATEGY vs
+    # prod/selective. Watch the F2 cache confound (prefix rewrite each trigger).
+    "delta_summarization": MemoryConfig(
+        name="delta_summarization",
+        context_editing=False,
+        summary_prompt=DELTA_SUMMARY_PROMPT,
+    ),
+    # Hierarchical summarization: map-reduce the older messages (summarize groups,
+    # then summarize the summaries) into one layered summary. Expected to preserve
+    # more structure than single-pass on long content; its extra summarization
+    # LLM calls are the cost it must justify. Summarization off (this replaces it).
+    "hierarchical_summarization": MemoryConfig(
+        name="hierarchical_summarization",
+        summarization=False,
+        hierarchical_summarize=True,
     ),
 }
 

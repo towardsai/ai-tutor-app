@@ -136,6 +136,9 @@ class ModelPricing:
 # - https://platform.claude.com/docs/en/about-claude/pricing
 MODEL_PRICING: dict[str, ModelPricing] = {
     "gemini-3.5-flash": ModelPricing(input=1.50, output=9.00, cache_read=0.15),
+    # Gemini 2.5 Flash (used by the knowledge-compaction study). Implicit
+    # caching read is ~25% of input.
+    "gemini-2.5-flash": ModelPricing(input=0.30, output=2.50, cache_read=0.075),
     "claude-haiku-4-5": ModelPricing(
         input=1.00, output=5.00, cache_read=0.10, cache_write=1.25
     ),

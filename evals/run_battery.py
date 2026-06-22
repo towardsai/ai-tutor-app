@@ -83,6 +83,13 @@ def parse_args() -> argparse.Namespace:
         help="Drop the run_kb_command tool + KB prompt (KB on/off ablation).",
     )
     parser.add_argument(
+        "--no-tools",
+        action="store_true",
+        help="Give the agent NO retrieval/KB tools (empty sources): it must "
+        "answer purely from the in-context conversation. Used by the "
+        "knowledge-compaction study to isolate compaction vs keeping context.",
+    )
+    parser.add_argument(
         "--retrieval-budget",
         type=int,
         default=0,
@@ -262,11 +269,14 @@ def build_request(
     from app.chat_types import ChatRequest
     from app.config import DEFAULT_MODEL_NAME, DEFAULT_SELECTED_SOURCE_KEYS
 
-    source_keys = (
-        (source_key,)
-        if (args.scope_sources and source_key)
-        else tuple(DEFAULT_SELECTED_SOURCE_KEYS)
-    )
+    if getattr(args, "no_tools", False):
+        # Empty sources -> include_local_tools is False in the app, so the agent
+        # gets no retrieval/KB tools and answers only from conversation context.
+        source_keys: tuple[str, ...] = ()
+    elif args.scope_sources and source_key:
+        source_keys = (source_key,)
+    else:
+        source_keys = tuple(DEFAULT_SELECTED_SOURCE_KEYS)
     return ChatRequest(
         query=query,
         history=history,

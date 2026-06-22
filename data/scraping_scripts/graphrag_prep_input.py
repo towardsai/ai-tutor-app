@@ -91,6 +91,13 @@ def parse_args() -> argparse.Namespace:
         "empty = all sources. Used to scope the GraphRAG index to the eval "
         "battery's sources and keep indexing within budget.",
     )
+    parser.add_argument(
+        "--doc-ids",
+        nargs="*",
+        default=[],
+        help="Restrict to these exact doc_ids (e.g. a single long lesson for the "
+        "knowledge-compaction study).",
+    )
     return parser.parse_args()
 
 
@@ -101,6 +108,9 @@ def main() -> None:
     if args.sources:
         wanted = set(args.sources)
         records = [r for r in records if r.get("source") in wanted]
+    if args.doc_ids:
+        wanted_ids = set(args.doc_ids)
+        records = [r for r in records if r.get("doc_id") in wanted_ids]
     if args.limit:
         records = records[: args.limit]
     rows = build_rows(records)
