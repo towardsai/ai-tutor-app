@@ -214,6 +214,18 @@ SOURCE_CONFIGS: dict[str, dict[str, Any]] = {
         "included_root_files": [],
         "url_extension": "",
     },
+    "llm_primer": {
+        "base_url": "",
+        "input_directory": "data/llm_primer",
+        "output_file": "data/llm_primer_data.jsonl",
+        "source_name": "llm_primer",
+        "use_include_list": False,
+        "included_dirs": [],
+        "excluded_dirs": [],
+        "excluded_root_files": [],
+        "included_root_files": [],
+        "url_extension": "",
+    },
 }
 
 DOC_SOURCE_KEYS = (
@@ -246,6 +258,7 @@ COURSE_SOURCE_KEYS = frozenset(
         "beginner_python_for_ai_engineering",
         "master_ai_for_work",
         "agentic_ai_engineering",
+        "llm_primer",
     }
 )
 
@@ -266,6 +279,7 @@ SOURCE_KEY_TO_LABEL = {
     "beginner_python_for_ai_engineering": "Beginner Python for AI Engineering",
     "master_ai_for_work": "Master AI For Work",
     "agentic_ai_engineering": "Agentic AI Engineering",
+    "llm_primer": "10-Hour Video-based Crash Course on LLM Fundamentals",
 }
 
 # Display metadata served to the UI via /api/tools. The frontend renders these
@@ -380,6 +394,16 @@ SOURCE_DISPLAY_INFO: dict[str, dict[str, str]] = {
         ),
         "url": "https://academy.towardsai.net/courses/agent-engineering",
     },
+    "llm_primer": {
+        "ui_label": "10-Hour LLM Primer",
+        "description": (
+            "Video-based crash course on LLM fundamentals: foundational AI "
+            "knowledge and using LLMs, building on top of LLMs, evaluating RAG "
+            "and LLM pipelines, workflows and agents, guardrails and "
+            "optimization, and re-training models."
+        ),
+        "url": "https://academy.towardsai.net/courses/llm-primer",
+    },
 }
 
 UI_SOURCE_KEYS = (
@@ -396,6 +420,7 @@ UI_SOURCE_KEYS = (
     "master_ai_for_work",
     "full_stack_ai_engineering",
     "beginner_python_for_ai_engineering",
+    "llm_primer",
 )
 SOURCE_UI_TO_KEY = {SOURCE_KEY_TO_LABEL[key]: key for key in UI_SOURCE_KEYS}
 AVAILABLE_SOURCES_UI = list(SOURCE_UI_TO_KEY.keys())
@@ -405,6 +430,7 @@ DEFAULT_SELECTED_SOURCE_KEYS = (
     "master_ai_for_work",
     "full_stack_ai_engineering",
     "beginner_python_for_ai_engineering",
+    "llm_primer",
     "openai_docs",
     "claude_code_docs",
     "langgraph",

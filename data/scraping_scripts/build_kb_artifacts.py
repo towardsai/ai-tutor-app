@@ -192,11 +192,23 @@ def markdown_with_frontmatter(
     return "\n".join(lines) + body + "\n"
 
 
+# Cap slug length so the generated filename stays well under the 255-byte
+# per-component limit on macOS/most filesystems. Headroom is needed beyond the
+# ".md" because `huggingface_hub.upload_large_folder` mirrors each file under
+# data/.cache/huggingface/upload/ and appends ".lock"/".metadata"; an unbounded
+# slug (e.g. a llama_index page slugified from a full colab-badge <a href> link)
+# overflowed that limit and aborted the upload. Collisions from truncation are
+# handled downstream by the content-hash + counter suffix in unique_output_path.
+MAX_SLUG_LEN = 150
+
+
 def record_slug(record: CorpusRecord) -> str:
     basis = record.source_path or record.title or record.doc_id
     slug = slugify_identifier(basis)
     if slug == "untitled":
         slug = record.content_hash.removeprefix("sha256:")[:12]
+    if len(slug) > MAX_SLUG_LEN:
+        slug = slug[:MAX_SLUG_LEN].rstrip("-") or slug[:MAX_SLUG_LEN]
     return slug
 
 

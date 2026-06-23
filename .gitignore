@@ -173,6 +173,7 @@ data/full_stack_ai_engineering/
 data/beginner_python_for_ai_engineering/
 data/master_ai_for_work/
 data/agentic_ai_engineering/
+data/llm_primer/
 data/*_data.jsonl
 data/all_sources_data.jsonl
 data/all_sources_contextual_nodes.pkl
