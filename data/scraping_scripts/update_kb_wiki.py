@@ -24,6 +24,8 @@ TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
     "model-loading": ("from_pretrained", "automodel", "tokenizer", "device_map"),
     "tool-calling": ("tool calling", "function calling", "tools", "schema"),
     "evaluation": ("evaluation", "eval", "benchmark", "metrics"),
+    "guardrails": ("guardrail", "jailbreak", "prompt injection", "moderation"),
+    "serving": ("vllm", "sglang", "pagedattention", "kv cache", "serving"),
 }
 
 
