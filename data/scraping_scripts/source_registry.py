@@ -278,7 +278,7 @@ SOURCE_KEY_TO_LABEL = {
     "full_stack_ai_engineering": "Full Stack AI Engineering",
     "beginner_python_for_ai_engineering": "Beginner Python for AI Engineering",
     "master_ai_for_work": "Master AI For Work",
-    "agentic_ai_engineering": "Agentic AI Engineering",
+    "agentic_ai_engineering": "Agent Engineering: Building Multi-Agent Systems",
     "llm_primer": "10-Hour Video-based Crash Course on LLM Fundamentals",
 }
 
@@ -387,7 +387,7 @@ SOURCE_DISPLAY_INFO: dict[str, dict[str, str]] = {
         "url": "https://academy.towardsai.net/courses/ai-business-professionals",
     },
     "agentic_ai_engineering": {
-        "ui_label": "Agentic AI Engineering",
+        "ui_label": "Agent Engineering: Building Multi-Agent Systems",
         "description": (
             "Designing, building, evaluating, and deploying production-grade "
             "AI agents end-to-end."
