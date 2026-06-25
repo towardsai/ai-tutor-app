@@ -217,3 +217,15 @@ data/eval/review_log_v1.md
 # Same data also lives in the top-level eval/ working dir; ignore it wholesale
 # so non-.jsonl files (review_log_v1.md, review_batches/*.json) can't slip in.
 eval/
+
+# Local workshop analysis docs, context-rot / SLM eval outputs, and slide decks.
+# Never commit -- this branch deploys to the public HF experiments Space.
+context_rot.md
+slm_7b_vs_32b.md
+compaction_master_analysis.md
+cost_at_scale.md
+deepseek_eval_results.md
+HANDOFF.md
+data/context_rot*/
+data/compaction_slm*/
+*.pptx
