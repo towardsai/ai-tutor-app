@@ -582,8 +582,269 @@ export const EXPERIMENTS: Experiment[] = [
   },
 
   {
-    slug: "comparison",
+    slug: "bigger-local",
     order: 5,
+    navLabel: "Bigger local",
+    shortTitle: "Does a bigger local model change it?",
+    title: "Bigger local model: same verdict, more cost",
+    badge: "Local · qwen2.5:32b",
+    accent: "#6c5ce7",
+    question:
+      "If keep-everything breaks on a small local model, does a 4-5x bigger local model fix it?",
+    takeaway:
+      "No. RAG still wins the document task at 100% on the 32B, the win is the right ~3k tokens, not model size. Conversation memory stays pinned in a 27-40% band whatever the method, because the 32k window, not capability, is the binding constraint. A bigger model answers better per turn but does not change the verdict, and it is slower.",
+    highlights: [
+      { label: "Model", value: "qwen2.5:32b (M4 Max, 128 GB)" },
+      { label: "vs", value: "the 7B/8B SLMs, same battery" },
+      { label: "Documents", value: "RAG 100%, full_context overflows" },
+      { label: "Conversation", value: "27-40% band, window-bound" },
+    ],
+    groups: [
+      {
+        title: "Fitting a document on the 32B (Axis B)",
+        intro:
+          "One long lesson, answered four ways on the 32B. RAG, giving the model the right ~3k tokens, wins outright. Going 4-5x bigger did not make trimming or selective compaction competitive; the win is the tokens, not the model.",
+        views: [
+          {
+            kind: "bars",
+            key: "docs",
+            label: "Answer quality (32B)",
+            metricLabel: "Judge pass, n=15 (higher is better)",
+            bars: [
+              { label: "rag", pct: 100, value: "100%", winner: true, tone: "good" },
+              { label: "trim", pct: 53, value: "53%", tone: "neutral" },
+              { label: "selective", pct: 47, value: "47%", tone: "neutral" },
+              { label: "full_context", pct: 2, value: "overflows", sub: "fills the 32k window, 1-token output", tone: "bad" },
+            ],
+            caption:
+              "full_context overflows the 32k window every turn; the document fills the window and leaves no room to generate, so its 'score' is not a real quality number. RAG matches it at 1/13th the tokens with zero overflow.",
+          },
+        ],
+      },
+      {
+        title: "Compacting a conversation on the 32B (Axis A)",
+        intro:
+          "The lesson is loaded turn 0, questions accumulate with retrieval off, and each memory preset manages the growing context. Every method lands in a tight band, the same ceiling the 7B/8B hit.",
+        views: [
+          {
+            kind: "bars",
+            key: "conv",
+            label: "Conversation memory (32B)",
+            metricLabel: "Judge pass, n=15 (higher is better)",
+            bars: [
+              { label: "incontext_history_retrieval", pct: 40, value: "40%", tone: "neutral" },
+              { label: "selective_retention", pct: 40, value: "40%", tone: "neutral" },
+              { label: "summarization_only", pct: 40, value: "40%", tone: "neutral" },
+              { label: "full_history", pct: 33, value: "33%", tone: "neutral" },
+              { label: "prompt_compression", pct: 33, value: "33%", tone: "neutral" },
+              { label: "sliding_window", pct: 27, value: "27%", tone: "bad" },
+              { label: "delta_summarization", pct: 27, value: "27%", tone: "bad" },
+            ],
+            caption:
+              "A tight 27-40% band, the same ceiling the 7B/8B hit. The 32k window, not model capability, is the binding constraint; scaling the model up does not widen the window.",
+          },
+        ],
+      },
+      {
+        title: "What it means",
+        intro: "Why a bigger local model does not rescue keep-everything.",
+        views: [
+          {
+            kind: "findings",
+            key: "outcomes",
+            label: "Findings",
+            findings: [
+              {
+                title: "RAG's win is model-size-invariant",
+                stat: "100%",
+                text: "RAG hit 100% at 32B just as it did on the 7B/8B. The advantage comes from giving the model the right ~3k tokens, not from model capacity.",
+              },
+              {
+                title: "Conversation memory is window-bound, not method-bound",
+                stat: "27-40%",
+                text: "Every compaction method landed in the same narrow band regardless of model size. Once the conversation exceeds the 32k window the content is gone; a smarter model does not widen the window.",
+              },
+              {
+                title: "Bigger model, worse throughput",
+                stat: "20s -> 65s",
+                text: "RAG latency rose from ~20s on a 7B to ~65s on the 32B for the same ~3k context. You would pick the smallest model that clears your quality bar, not the biggest.",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    setup: [
+      "Re-ran the SLM bake-off (same lesson, same 15-question battery, 32k window) on qwen2.5:32b, ~4-5x the parameters of the 7B/8B models, on an M4 Max.",
+      "Axis B: fit one ~37.7k lesson; Axis A: compact a growing conversation. Gemini 2.5 Flash judges against the full lesson.",
+    ],
+    caveats: [
+      "n=15 per arm (Axis B) and 15 probes per preset (Axis A), 1 trial: rankings, not rates.",
+      "full_context on the 32B overflowed the window every turn and produced degenerate output, so its quality is not a real score.",
+    ],
+    links: [
+      { label: "SLM PR #3", href: `${REPO}/pull/3` },
+      { label: "Repository", href: REPO },
+    ],
+  },
+
+  {
+    slug: "context-rot",
+    order: 6,
+    navLabel: "Context rot",
+    shortTitle: "Context rot: keep-all can lose on quality",
+    title: "Context rot: when keeping everything answers worse",
+    badge: "Cloud + Local · DeepSeek + qwen2.5:32b",
+    accent: "#d2553c",
+    question:
+      "Keep-everything fits and is cheap under caching. But does it quietly answer worse when the fact you need is buried in a big context?",
+    takeaway:
+      "Yes, and this is the one axis where keep-everything can lose even when nothing is truncated and nothing is expensive. On a ~1M-token DeepSeek window, a fact buried in the middle of a long context is recovered only ~40% of the time at 200k+, vs ~96% when it leads. On a 32k local model it is a hard cliff: 100% inside the window, 0% the instant it overflows. Retrieval restores it, but the retriever matters.",
+    highlights: [
+      { label: "Models", value: "DeepSeek-V4-Flash (~1M) + qwen2.5:32b (32k)" },
+      { label: "Method", value: "NIAH sweep, retrieval off, n=5/cell" },
+      { label: "Big-window rot", value: "middle 100% -> 40% past 200k" },
+      { label: "DeepSeek wall", value: "hard limit 1,048,576 tokens" },
+    ],
+    groups: [
+      {
+        title: "Big window: position dominates",
+        intro:
+          "Plant one fact in a long DeepSeek context and ask for it, with retrieval off. The fact is found almost always when it leads, and far less reliably once it is buried. Aggregated across all lengths.",
+        views: [
+          {
+            kind: "bars",
+            key: "position",
+            label: "Recall by position",
+            metricLabel: "Recall, all lengths (higher is better)",
+            bars: [
+              { label: "start", pct: 96, value: "96%", winner: true, tone: "good" },
+              { label: "middle", pct: 72, value: "72%", tone: "neutral" },
+              { label: "end", pct: 64, value: "64%", tone: "neutral" },
+            ],
+            caption:
+              "Primacy is strong even at 400k. The middle and the tail are where recall leaks.",
+          },
+        ],
+      },
+      {
+        title: "Big window: the middle collapses as you fill it",
+        intro:
+          "Hold the fact in the middle and sweep the context length. Below ~100k it is reliably recovered; at 200k and beyond it drops to 40%, even though the context fits with no truncation and is cached cheaply.",
+        views: [
+          {
+            kind: "table",
+            key: "grid",
+            label: "Recall grid (DeepSeek)",
+            columns: ["context", "start", "middle", "end"],
+            rows: [
+              ["10k", "100%", "100%", "60%"],
+              ["50k", "100%", "80%", "40%"],
+              ["100k", "100%", "100%", "60%"],
+              ["200k", "80%", "40%", "80%"],
+              ["400k", "100%", "40%", "80%"],
+              ["600k", "100%", "80%", "80%"],
+              ["800k", "60%", "40%", "60%"],
+            ],
+            caption:
+              "412k was accepted with no truncation. By 800k even the start position slips. Past the model's hard limit of 1,048,576 tokens DeepSeek rejects the request, it does not compress to fit.",
+          },
+        ],
+      },
+      {
+        title: "Small local model: a hard cliff",
+        intro:
+          "The same sweep on qwen2.5:32b at a 32k window. In-window the fact is recovered 100% at every position; the instant the context exceeds the window, recall collapses to zero everywhere (the runtime truncates and the generation breaks).",
+        views: [
+          {
+            kind: "bars",
+            key: "cliff",
+            label: "Recall by fill (local 32B)",
+            metricLabel: "Recall vs % of the 32k window",
+            bars: [
+              { label: "20% fill", pct: 100, value: "100%", tone: "good" },
+              { label: "40% fill", pct: 100, value: "100%", tone: "good" },
+              { label: "60% fill", pct: 100, value: "100%", tone: "good" },
+              { label: "80% fill", pct: 100, value: "100%", tone: "good" },
+              { label: "110% (over the wall)", pct: 0, value: "0%", tone: "bad" },
+            ],
+            caption:
+              "Big cached cloud = a soft slope (lost-in-the-middle). Small local = a hard cliff. Same fix either way: surface the fact, do not keep it buried.",
+          },
+        ],
+      },
+      {
+        title: "Retrieval restores recall, and the retriever matters",
+        intro:
+          "Rerun the rotted cells with retrieval on: answer from ~2.7k retrieved tokens instead of stuffing all 50-400k. Both retrievers read under 1% of the haystack and beat keep-everything, but dense-only breaks at scale.",
+        views: [
+          {
+            kind: "bars",
+            key: "retrieval",
+            label: "Recall on the rotted cells",
+            metricLabel: "Recall after retrieval (higher is better)",
+            bars: [
+              { label: "stuffed (keep all)", pct: 60, value: "60%", tone: "neutral" },
+              { label: "dense RAG (embed + rerank)", pct: 77, value: "77%", tone: "neutral" },
+              { label: "hybrid / BM25", pct: 100, value: "100%", winner: true, tone: "good" },
+            ],
+            caption:
+              "Dense-only collapsed to 0% at 400k-middle (the rerank never surfaced the needle among ~500 chunks). The needles are distinctive strings, so exact-match catches what dense similarity misses. Production RAG is hybrid (the tutor already is).",
+          },
+        ],
+      },
+      {
+        title: "What it means",
+        intro: "The boundary where keep-everything stops winning.",
+        views: [
+          {
+            kind: "findings",
+            key: "outcomes",
+            label: "Findings",
+            findings: [
+              {
+                title: "It fits, it is cheap, and it still answers wrong",
+                stat: "40%",
+                text: "At 200k+ a buried-middle fact is recovered ~40% of the time, even though the 412k context is accepted with no truncation and is cached. This is the only failure that hits keep-everything on the axis users care about: was the answer right?",
+              },
+              {
+                title: "Failure is 'cannot find,' not a wrong value",
+                stat: "13 / 17",
+                text: "13 of 17 failures had the model say it could not locate the fact, rather than stating a wrong value. That is the clean lost-in-the-middle signature: the fact is in-window but not attended to.",
+              },
+              {
+                title: "Even frontier windows have a hard wall",
+                stat: "1,048,576",
+                text: "DeepSeek genuinely ingests up to ~819k tokens (input scales linearly) and then rejects anything over its 1,048,576-token limit. It does not silently compress to fit, so keep-everything cannot scale forever.",
+              },
+              {
+                title: "The fix is to surface the fact",
+                stat: "60 -> 100%",
+                text: "Retrieving the relevant ~2.7k tokens restored recall from 60% to 100% at a fraction of the cost. For distinctive facts at scale that means hybrid retrieval (dense + lexical), not dense alone.",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    setup: [
+      "Stuffed single-turn, retrieval OFF, so the only path to the answer is reading the buried fact.",
+      "Synthetic needle facts absent from the corpus, plus near-miss distractors; a calibration cell at small fill passes ~100%, so any drop at length is rot, not a hard question.",
+      "Semantic judge (Gemini 2.5 Flash) grades against the needle. n=5 needles per cell, single trial. DeepSeek via OpenRouter (a quality test, so caching and cost are irrelevant); qwen2.5:32b local for the cliff.",
+    ],
+    caveats: [
+      "n=5 per cell, single trial: directional. The robust signals are the position effect, the middle collapse at 200k+, and the local cliff.",
+      "Synthetic needles plus distractors are a controlled probe, cleaner than messy real questions.",
+    ],
+    links: [
+      { label: "Harness: evals/context_rot.py", href: `${REPO}/blob/experiment/context-rot/evals/context_rot.py` },
+      { label: "Repository", href: REPO },
+    ],
+  },
+
+  {
+    slug: "comparison",
+    order: 7,
     navLabel: "Final takeaway",
     shortTitle: "Cross-model: what to actually do",
     title: "Cross-model: cost, latency, quality, and the call",
@@ -677,13 +938,18 @@ export const EXPERIMENTS: Experiment[] = [
                 stat: "qwen3 > the rest",
                 text: "Among the SLMs, the stronger model scored 40-73% across every compaction method while the weakest sat at 0-40%. Picking a better small model bought more than picking the best compaction strategy.",
               },
+              {
+                title: "Even keep-everything can rot on quality",
+                stat: "96% -> 40%",
+                text: "A big cached window is cheap, but a fact buried in the middle of a long context is recovered only ~40% of the time (vs ~96% at the start), even when nothing is truncated. So the cloud regime is not unconditional: when a needed fact is buried, surface it (retrieve, or position it early) rather than leaving it buried. And every window has a hard wall, DeepSeek rejects anything past 1,048,576 tokens.",
+              },
             ],
           },
         ],
       },
     ],
     setup: [
-      "This page synthesizes the four studies; it does not introduce a new run.",
+      "This page synthesizes the studies in this showcase; it does not introduce a new run.",
       "Cost figures are per-turn estimates on each study's own battery and tier, so treat them as orders of magnitude, not a single benchmark.",
     ],
     caveats: [
