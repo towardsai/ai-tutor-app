@@ -15,6 +15,20 @@ logger = logging.getLogger(__name__)
 KB_DOC_SCHEME_RE = re.compile(r"^kb://doc/(?P<doc_id>[^)\]\s]+)$")
 RAW_PATH_RE = re.compile(r"(?:data/kb/)?raw/[^\s)\]>,:]+?\.(?:mdx|md)")
 
+# Strip fenced and inline code before harvesting citations: a URL or path shown
+# as a code example (e.g. ``git clone https://…`` in a fence, or an inline span
+# explaining "the part starting with `https://`") is documentation, not a
+# citation. Mirrors the frontend's stripCodeSegments (frontend/lib/chat-ui.ts)
+# so the server's chip set matches the references the client is willing to
+# number; otherwise such URLs surface as orphan, sometimes malformed, chips.
+_FENCED_CODE_RE = re.compile(r"```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)")
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+
+
+def _strip_code_segments(text: str) -> str:
+    text = _FENCED_CODE_RE.sub(" ", text)
+    return _INLINE_CODE_RE.sub(" ", text)
+
 
 @dataclass(frozen=True, slots=True)
 class KbManifestEntry:
@@ -201,18 +215,24 @@ def extract_raw_paths(text: str) -> list[str]:
 
 
 def parse_markdown_citations(text: str) -> list[tuple[str, str]]:
+    # Scan code-stripped text so URLs/paths that only appear inside code
+    # examples are never harvested as citations (see _strip_code_segments).
+    scannable = _strip_code_segments(text)
     citations: list[tuple[str, str]] = []
     link_re = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-    for match in link_re.finditer(text):
+    for match in link_re.finditer(scannable):
         citations.append((match.group(1).strip(), match.group(2).strip()))
 
     linked_refs = {ref for _label, ref in citations}
-    bare_re = re.compile(r"(?<!\()(?P<ref>https?://[^\s<>()]+|kb://doc/[^\s<>()]+)")
-    for match in bare_re.finditer(text):
+    # Backticks are excluded from the URL body: even past code stripping, a
+    # stray unbalanced backtick must never become part of a captured URL (which
+    # is how "https://`" leaked through before).
+    bare_re = re.compile(r"(?<!\()(?P<ref>https?://[^\s<>()`]+|kb://doc/[^\s<>()`]+)")
+    for match in bare_re.finditer(scannable):
         ref = match.group("ref").rstrip(".,;")
         if ref not in linked_refs:
             citations.append(("", ref))
-    for path in extract_raw_paths(text):
+    for path in extract_raw_paths(scannable):
         if path not in linked_refs:
             citations.append(("", path))
     return citations

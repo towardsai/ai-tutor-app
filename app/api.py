@@ -243,6 +243,13 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
     if memory_preset and memory_preset not in MEMORY_PRESETS:
         raise HTTPException(status_code=422, detail="Unknown memory preset")
     if payload.enabledTools is None:
+        # `active` only governs the frontend's initial checkbox state; the
+        # browser always sends an explicit enabledTools list (possibly []). A
+        # direct API caller that OMITS the field falls through to here and gets
+        # every toggle tool enabled regardless of `active` -- so url_context is
+        # on, and keep_unresolved_sources with it. To keep url_context off (the
+        # UI default), send an explicit enabledTools list, e.g. [] or
+        # ["web_search"].
         enabled_tools = tuple(
             tool["key"]
             for tool in _tool_catalog(model_name)
@@ -655,8 +662,13 @@ def _tool_catalog(model_name: str) -> list[dict[str, Any]]:
             {
                 "key": "url_context",
                 "label": "URL reading",
+                # Default OFF. The frontend seeds its initial toggle state from
+                # `active`, so url_context starts unchecked on a fresh load.
+                # Enabling it flips keep_unresolved_sources=True for that turn
+                # (chat_service.stream_chat), which surfaces cited-but-ungrounded
+                # URLs as low-trust Web chips; users opt in per turn.
                 "kind": "toggle",
-                "active": True,
+                "active": False,
             }
         )
     elif is_anthropic_model(model_name):

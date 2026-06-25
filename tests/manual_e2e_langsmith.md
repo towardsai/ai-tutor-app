@@ -100,6 +100,22 @@ cat >/tmp/ai_tutor_e2e_payload.json <<'JSON'
 JSON
 ```
 
+On `enabledTools`: it is an explicit allowlist of the toggle tools for the turn.
+`[]` (as above) disables web search and URL reading, so this run exercises only
+the corpus retrieval + KB shell citation paths. Two things to know:
+
+- **`url_context` defaults to off in the UI** (`active: False` in `_tool_catalog`,
+  `app/api.py`), so a browser turn only sends it when the user opts in. Enabling
+  it flips `keep_unresolved_sources=True` for that turn, which surfaces cited
+  http(s) URLs that match no evidence as low-trust **Web** chips (`group="web"`).
+  With it off, such URLs are dropped from the source cards (they still render as
+  plain links in the answer prose).
+- **Omitting `enabledTools` entirely is not the same as `[]`.** A direct API
+  caller that drops the field falls through to a server default that enables
+  *every* toggle tool regardless of the UI `active` flag (including
+  `url_context`). Send an explicit list to control this; see `build_chat_request`
+  in `app/api.py`.
+
 Send the request and save the server-sent event stream:
 
 ```bash

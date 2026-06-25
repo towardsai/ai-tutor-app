@@ -7,6 +7,7 @@ from app.chat_types import SourceMatch
 from app.kb_manifest import (
     kb_root_path,
     load_manifest_entries,
+    parse_markdown_citations,
     resolve_manifest_reference,
     source_match_payload,
 )
@@ -211,6 +212,59 @@ class SourceMatchPayloadTestCase(unittest.TestCase):
 
         self.assertEqual(payload["path"], "raw/docs/peft/lora.md")
         self.assertNotIn("call_id", payload)
+
+
+class ParseMarkdownCitationsTestCase(unittest.TestCase):
+    # Faithful excerpt of the answer from LangSmith trace
+    # 019f004f-af13-7e42-ae3d-9ffd4a1de6d9 ("I'm having trouble cloning the
+    # course GitHub repository..."), which produced an orphan "https://`" chip.
+    GIT_CLONE_ANSWER = (
+        "The official course repository is hosted on GitHub "
+        "[Lesson 1, Part 2: Course Admin](https://academy.towardsai.net/lesson-1). "
+        "To clone it locally, run:\n"
+        "```bash\n"
+        "git clone https://github.com/towardsai/agentic-ai-engineering-course.git\n"
+        "```\n"
+        "or for the RAG system:\n"
+        "```bash\n"
+        "git clone https://github.com/towardsai/ai-tutor-rag-system.git\n"
+        "```\n"
+        "**Windows:** Download Git from the "
+        "[Git for Windows website](https://git-scm.com/download/win).\n"
+        "Always default to the **HTTPS** URLs (the ones starting with "
+        "`https://`). HTTPS does not require SSH keys.\n"
+    )
+
+    def test_does_not_harvest_inline_code_url(self) -> None:
+        refs = [ref for _label, ref in parse_markdown_citations(self.GIT_CLONE_ANSWER)]
+        # The bug: the inline span `https://` was captured (with the trailing
+        # backtick) as a bare-URL citation and surfaced as a broken chip.
+        self.assertNotIn("https://`", refs)
+        self.assertNotIn("https://", refs)
+
+    def test_does_not_harvest_code_fence_urls(self) -> None:
+        refs = [ref for _label, ref in parse_markdown_citations(self.GIT_CLONE_ANSWER)]
+        # `git clone` URLs are code examples, not citations.
+        self.assertNotIn(
+            "https://github.com/towardsai/agentic-ai-engineering-course.git", refs
+        )
+        self.assertNotIn("https://github.com/towardsai/ai-tutor-rag-system.git", refs)
+
+    def test_keeps_genuine_markdown_links(self) -> None:
+        citations = parse_markdown_citations(self.GIT_CLONE_ANSWER)
+        refs = [ref for _label, ref in citations]
+        self.assertIn("https://academy.towardsai.net/lesson-1", refs)
+        self.assertIn("https://git-scm.com/download/win", refs)
+        # Only the two real inline links survive; no code-derived noise.
+        self.assertEqual(len(citations), 2)
+
+    def test_still_harvests_bare_url_in_prose(self) -> None:
+        # Regression guard: a bare URL in actual prose (not code) is still a
+        # valid citation and must keep being harvested.
+        citations = parse_markdown_citations(
+            "See the docs at https://example.com/guide for details."
+        )
+        self.assertEqual(citations, [("", "https://example.com/guide")])
 
 
 if __name__ == "__main__":
