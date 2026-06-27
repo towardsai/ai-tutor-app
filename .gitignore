@@ -225,7 +225,14 @@ slm_7b_vs_32b.md
 compaction_master_analysis.md
 cost_at_scale.md
 deepseek_eval_results.md
+samridhi_speaker_notes.md
 HANDOFF.md
 data/context_rot*/
 data/compaction_slm*/
 *.pptx
+
+# Slide handouts, exported slide assets, Q&A armor, and *.OLD.* backups (keep out of git).
+qa_armor.md
+samridhi_decision_tree_handout*.pdf
+slide_assets/
+*.OLD.*

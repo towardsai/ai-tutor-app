@@ -692,62 +692,61 @@ export const EXPERIMENTS: Experiment[] = [
     slug: "context-rot",
     order: 6,
     navLabel: "Context rot",
-    shortTitle: "Context rot: keep-all can lose on quality",
-    title: "Context rot: when keeping everything answers worse",
+    shortTitle: "Context rot: mostly a myth, once measured right",
+    title: "Context rot: the collapse was a measurement bug",
     badge: "Cloud + Local · DeepSeek + qwen2.5:32b",
     accent: "#d2553c",
     question:
       "Keep-everything fits and is cheap under caching. But does it quietly answer worse when the fact you need is buried in a big context?",
     takeaway:
-      "Yes, and this is the one axis where keep-everything can lose even when nothing is truncated and nothing is expensive. On a ~1M-token DeepSeek window, a fact buried in the middle of a long context is recovered only ~40% of the time at 200k+, vs ~96% when it leads. On a 32k local model it is a hard cliff: 100% inside the window, 0% the instant it overflows. Retrieval restores it, but the retriever matters.",
+      "Mostly no, once you measure it right. My first run showed middle recall collapsing to ~40% past 200k. That was an artifact: a 300-token answer cap cut the model off before it could state the fact. With the cap removed (0 truncated cells), distinctive facts (codenames, dates) hold ~95% out to 800k, with only a mild end dip. The misses concentrate on ambiguous facts (a number among look-alike numbers), so the driver is ambiguity, not length. The real cliff is local overflow: a 32k model is 100% in-window and 0% the instant it spills over.",
     highlights: [
       { label: "Models", value: "DeepSeek-V4-Flash (~1M) + qwen2.5:32b (32k)" },
-      { label: "Method", value: "NIAH sweep, retrieval off, n=5/cell" },
-      { label: "Big-window rot", value: "middle 100% -> 40% past 200k" },
-      { label: "DeepSeek wall", value: "hard limit 1,048,576 tokens" },
+      { label: "Method", value: "NIAH sweep, retrieval off, n=10 to 400k" },
+      { label: "Distinctive facts", value: "~95% to 800k, no length collapse" },
+      { label: "The old 40%", value: "an answer-cap artifact, now 0 truncated" },
     ],
     groups: [
       {
-        title: "Big window: position dominates",
+        title: "Big window: it is the fact, not the length",
         intro:
-          "Plant one fact in a long DeepSeek context and ask for it, with retrieval off. The fact is found almost always when it leads, and far less reliably once it is buried. Aggregated across all lengths.",
+          "Plant one fact in a long DeepSeek context and ask for it, with retrieval off. Split the needles by type: distinctive facts (codenames, dates) versus ambiguous facts (a number sitting among look-alike numbers). Recall tracks the fact type, not how long the context is.",
         views: [
           {
             kind: "bars",
-            key: "position",
-            label: "Recall by position",
-            metricLabel: "Recall, all lengths (higher is better)",
+            key: "facttype",
+            label: "Recall by fact type",
+            metricLabel: "Recall, all lengths to 800k (higher is better)",
             bars: [
-              { label: "start", pct: 96, value: "96%", winner: true, tone: "good" },
-              { label: "middle", pct: 72, value: "72%", tone: "neutral" },
-              { label: "end", pct: 64, value: "64%", tone: "neutral" },
+              { label: "distinctive (codenames, dates)", pct: 95, value: "95%", winner: true, tone: "good" },
+              { label: "ambiguous (number among look-alikes)", pct: 71, value: "71%", tone: "neutral" },
             ],
             caption:
-              "Primacy is strong even at 400k. The middle and the tail are where recall leaks.",
+              "Distinctive facts are recovered almost every time at any depth. The misses are ambiguous numeric facts the model cannot tell apart from the decoys, which is a matching problem, not a position one.",
           },
         ],
       },
       {
-        title: "Big window: the middle collapses as you fill it",
+        title: "Big window: the full grid, length x position",
         intro:
-          "Hold the fact in the middle and sweep the context length. Below ~100k it is reliably recovered; at 200k and beyond it drops to 40%, even though the context fits with no truncation and is cached cheaply.",
+          "Sweep the context length against the needle position, retrieval off. There is no clean middle-collapse and no monotonic decay with length. The dips are mostly the two ambiguous numeric needles, plus sampling noise at the longest cells.",
         views: [
           {
             kind: "table",
             key: "grid",
-            label: "Recall grid (DeepSeek)",
+            label: "Recall grid (DeepSeek, corrected)",
             columns: ["context", "start", "middle", "end"],
             rows: [
-              ["10k", "100%", "100%", "60%"],
-              ["50k", "100%", "80%", "40%"],
-              ["100k", "100%", "100%", "60%"],
-              ["200k", "80%", "40%", "80%"],
-              ["400k", "100%", "40%", "80%"],
-              ["600k", "100%", "80%", "80%"],
-              ["800k", "60%", "40%", "60%"],
+              ["10k", "100%", "90%", "90%"],
+              ["50k", "90%", "80%", "80%"],
+              ["100k", "100%", "90%", "100%"],
+              ["200k", "100%", "70%", "60%"],
+              ["400k", "90%", "80%", "60%"],
+              ["600k", "80%", "100%", "100%"],
+              ["800k", "80%", "60%", "100%"],
             ],
             caption:
-              "412k was accepted with no truncation. By 800k even the start position slips. Past the model's hard limit of 1,048,576 tokens DeepSeek rejects the request, it does not compress to fit.",
+              "n=10 per cell to 400k, n=5 above (treat the longest cells as directional). The context is accepted with no truncation. Past the model's hard limit of 1,048,576 tokens DeepSeek rejects the request, it does not compress to fit.",
           },
         ],
       },
@@ -769,33 +768,33 @@ export const EXPERIMENTS: Experiment[] = [
               { label: "110% (over the wall)", pct: 0, value: "0%", tone: "bad" },
             ],
             caption:
-              "Big cached cloud = a soft slope (lost-in-the-middle). Small local = a hard cliff. Same fix either way: surface the fact, do not keep it buried.",
+              "On the cloud the degradation is soft and fact-dependent (only ambiguous facts, never a clean collapse). The local 32k window is a hard cliff: 100% in-window, then 0% the instant the input overflows and the generation breaks.",
           },
         ],
       },
       {
-        title: "Retrieval restores recall, and the retriever matters",
+        title: "If you retrieve, the retriever matters",
         intro:
-          "Rerun the rotted cells with retrieval on: answer from ~2.7k retrieved tokens instead of stuffing all 50-400k. Both retrievers read under 1% of the haystack and beat keep-everything, but dense-only breaks at scale.",
+          "Rerun the failing cells with retrieval on: answer from ~2.7k retrieved tokens (under 1% of the haystack) instead of stuffing all 50-400k. Stuffing already got ~72% here, so retrieval is not a big rescue on quality. The real gap is between retrievers.",
         views: [
           {
             kind: "bars",
             key: "retrieval",
-            label: "Recall on the rotted cells",
-            metricLabel: "Recall after retrieval (higher is better)",
+            label: "Recall on the buried-fact cells",
+            metricLabel: "Recall (higher is better)",
             bars: [
-              { label: "stuffed (keep all)", pct: 60, value: "60%", tone: "neutral" },
-              { label: "dense RAG (embed + rerank)", pct: 77, value: "77%", tone: "neutral" },
+              { label: "stuffed (keep all)", pct: 72, value: "72%", tone: "neutral" },
+              { label: "dense RAG (embed + rerank)", pct: 80, value: "~80% (0% at 400k)", tone: "neutral" },
               { label: "hybrid / BM25", pct: 100, value: "100%", winner: true, tone: "good" },
             ],
             caption:
-              "Dense-only collapsed to 0% at 400k-middle (the rerank never surfaced the needle among ~500 chunks). The needles are distinctive strings, so exact-match catches what dense similarity misses. Production RAG is hybrid (the tutor already is).",
+              "Dense held ~80% at moderate lengths but collapsed to 0% at 400k (the rerank never surfaced the needle among ~500 chunks). A made-up codename means almost nothing to an embedding, so exact-match catches what dense misses. Production RAG is hybrid, the tutor already is.",
           },
         ],
       },
       {
         title: "What it means",
-        intro: "The boundary where keep-everything stops winning.",
+        intro: "Measure carefully before you believe a scary number.",
         views: [
           {
             kind: "findings",
@@ -803,24 +802,34 @@ export const EXPERIMENTS: Experiment[] = [
             label: "Findings",
             findings: [
               {
-                title: "It fits, it is cheap, and it still answers wrong",
-                stat: "40%",
-                text: "At 200k+ a buried-middle fact is recovered ~40% of the time, even though the 412k context is accepted with no truncation and is cached. This is the only failure that hits keep-everything on the axis users care about: was the answer right?",
+                title: "The 40% collapse was a measurement bug",
+                stat: "0 truncated",
+                text: "A 300-token answer cap cut the verbose model off before it stated the buried fact, so the judge scored an empty answer as a miss. Removing the cap erased the collapse: the corrected grid has 0 truncated cells.",
               },
               {
-                title: "Failure is 'cannot find,' not a wrong value",
-                stat: "13 / 17",
-                text: "13 of 17 failures had the model say it could not locate the fact, rather than stating a wrong value. That is the clean lost-in-the-middle signature: the fact is in-window but not attended to.",
+                title: "Distinctive facts hold the whole way to 800k",
+                stat: "~95%",
+                text: "Codenames and dates are recovered almost every time at any depth, with only a mild end dip. There is no monotonic decay with length, so for a clearly-stated fact, keep-everything does not rot on quality.",
+              },
+              {
+                title: "The driver is ambiguity, not length",
+                stat: "~71%",
+                text: "The misses concentrate on ambiguous numeric facts, a number among look-alike numbers, that the model cannot separate from the decoys. That is a matching problem, the kind hybrid retrieval fixes, not a position problem.",
+              },
+              {
+                title: "Every miss is an abstention",
+                stat: "26 / 26",
+                text: "After the fix, every miss was the model saying it could not find the fact. Zero confident wrong answers and zero blanks, so the failure is safe-by-default: it does not invent a value.",
+              },
+              {
+                title: "Local overflow is the real cliff",
+                stat: "100% -> 0%",
+                text: "A 32k local model is 100% in-window at every position, then drops to 0% the instant the input overflows (the same one-token break from the window study). That hard cliff, not soft cloud rot, is where keep-everything actually breaks.",
               },
               {
                 title: "Even frontier windows have a hard wall",
                 stat: "1,048,576",
-                text: "DeepSeek genuinely ingests up to ~819k tokens (input scales linearly) and then rejects anything over its 1,048,576-token limit. It does not silently compress to fit, so keep-everything cannot scale forever.",
-              },
-              {
-                title: "The fix is to surface the fact",
-                stat: "60 -> 100%",
-                text: "Retrieving the relevant ~2.7k tokens restored recall from 60% to 100% at a fraction of the cost. For distinctive facts at scale that means hybrid retrieval (dense + lexical), not dense alone.",
+                text: "DeepSeek ingests up to ~819k tokens and then rejects anything over its 1,048,576-token limit. It does not silently compress to fit, so keep-everything cannot scale forever.",
               },
             ],
           },
@@ -829,15 +838,15 @@ export const EXPERIMENTS: Experiment[] = [
     ],
     setup: [
       "Stuffed single-turn, retrieval OFF, so the only path to the answer is reading the buried fact.",
-      "Synthetic needle facts absent from the corpus, plus near-miss distractors; a calibration cell at small fill passes ~100%, so any drop at length is rot, not a hard question.",
-      "Semantic judge (Gemini 2.5 Flash) grades against the needle. n=5 needles per cell, single trial. DeepSeek via OpenRouter (a quality test, so caching and cost are irrelevant); qwen2.5:32b local for the cliff.",
+      "Synthetic needle facts absent from the corpus, plus near-miss distractors; a calibration cell at small fill passes ~90-100%, so a drop at length is rot, not a hard question.",
+      "Answer budget raised to 2000 tokens with a truncation guard, after a 300-token cap produced the false collapse. Semantic judge (Gemini 2.5 Flash) grades against the needle. n=10 per cell to 400k, n=5 above. DeepSeek via OpenRouter (a quality test, so caching and cost are irrelevant); qwen2.5:32b local for the cliff.",
     ],
     caveats: [
-      "n=5 per cell, single trial: directional. The robust signals are the position effect, the middle collapse at 200k+, and the local cliff.",
+      "n=5 per cell at 600-800k: directional. The robust signals are the distinctive-vs-ambiguous gap and the local overflow cliff.",
+      "DeepSeek runs via OpenRouter, so provider quantization can drift between runs; a first-party key would pin it.",
       "Synthetic needles plus distractors are a controlled probe, cleaner than messy real questions.",
     ],
     links: [
-      { label: "Harness: evals/context_rot.py", href: `${REPO}/blob/experiment/context-rot/evals/context_rot.py` },
       { label: "Repository", href: REPO },
     ],
   },
@@ -939,9 +948,9 @@ export const EXPERIMENTS: Experiment[] = [
                 text: "Among the SLMs, the stronger model scored 40-73% across every compaction method while the weakest sat at 0-40%. Picking a better small model bought more than picking the best compaction strategy.",
               },
               {
-                title: "Even keep-everything can rot on quality",
-                stat: "96% -> 40%",
-                text: "A big cached window is cheap, but a fact buried in the middle of a long context is recovered only ~40% of the time (vs ~96% at the start), even when nothing is truncated. So the cloud regime is not unconditional: when a needed fact is buried, surface it (retrieve, or position it early) rather than leaving it buried. And every window has a hard wall, DeepSeek rejects anything past 1,048,576 tokens.",
+                title: "Context rot is mostly ambiguity, not length",
+                stat: "~95% to 800k",
+                text: "A scary first result (middle recall ~40%) turned out to be an answer-cap measurement bug. Corrected, distinctive facts hold ~95% out to 800k on the big cached window; only ambiguous numeric facts dip, which is a retrieval-matching problem. The place keep-everything actually breaks is a small local window, where overflow is a hard 100% to 0% cliff. And every window has a hard wall, DeepSeek rejects anything past 1,048,576 tokens.",
               },
             ],
           },
