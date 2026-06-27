@@ -149,6 +149,9 @@ def complete(
         "model": cfg.model,
         "messages": messages,
         "temperature": temperature,
+        # Large-context calls on a slow local 32B (full_context prefill, full-doc
+        # summary builds) exceed litellm's 600s default; raise it so they finish.
+        "timeout": 1800,
     }
     if cfg.api_base:
         kwargs["api_base"] = cfg.api_base
