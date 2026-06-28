@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/towardsai/ai-tutor-app/security/advisories/new
+    about: Report security issues privately, not as a public issue.
+  - name: Try the live demo
+    url: https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot
+    about: Use the deployed AI Tutor.
