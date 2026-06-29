@@ -270,6 +270,37 @@ uv run -m data.scraping_scripts.retire_source_workflow --sources 8-hour_primer -
 Use `--keep-source-registry` only if you want to remove existing chunks while
 leaving the source configured as active for a future rebuild.
 
+## Publishing the public docs-only bundle
+
+The production bundle in `towardsai-tutors/ai-tutor-vector-db` is **private** and
+holds every source, including gated course content, so cold-starting the app
+needs an `HF_TOKEN` with read access. To let anyone run the chatbot without that
+token, we publish a **public, docs-only** bundle to
+`towardsai-tutors/ai-tutor-vector-db-public` (the 9 documentation/reference
+sources, no courses). The runtime (`app.config.ensure_local_vector_db`) downloads
+the full private bundle when a usable `HF_TOKEN` is present and falls back to the
+public one otherwise; the picker hides course sources when running on it.
+
+This is a **standalone, manual** step — it is **not** wired into the docs/course
+workflows. Refresh the public bundle whenever the docs sources change materially:
+
+```bash
+# Refresh the prod bundle first (so data/chroma-db-all_sources, data/kb,
+# data/all_sources_data.jsonl are current), then:
+uv run -m data.scraping_scripts.build_public_docs_bundle              # build + upload
+uv run -m data.scraping_scripts.build_public_docs_bundle --skip-upload  # build only, inspect first
+```
+
+It **derives** the docs-only bundle from the already-built prod artifacts (no
+re-embedding, $0 Cohere): it copies the Chroma collection and deletes the course
+chunks, rebuilds the BM25 / document-dict pkls from a docs-only view of
+`all_sources_data.jsonl`, and copies `data/kb` while pruning `raw/courses`,
+`wiki/courses`, and the course rows from the generated indexes. The staged tree
+lives in `data/public_docs_bundle/` (gitignored). Uploading needs an `HF_TOKEN`
+with write access to the `towardsai-tutors` org; the script creates the public
+repo on first run. Pass `--include-contextual` to also ship a docs-only
+`all_sources_contextual_nodes.pkl` (off by default to keep the download small).
+
 ## Tips for New Team Members
 
 1. To update the AI Tutor with new content:

@@ -47,6 +47,14 @@ VECTOR_COLLECTION_NAME = "chroma-db-all_sources"
 DOCUMENT_DICT_PATH = f"{VECTOR_DB_DIR}/document_dict_all_sources.pkl"
 BM25_INDEX_PATH = f"{VECTOR_DB_DIR}/bm25_index_all_sources.pkl"
 CHROMA_SQLITE_PATH = f"{VECTOR_DB_DIR}/chroma.sqlite3"
+# The full bundle (all sources, incl. gated course content) lives in the
+# private repo; cold-starting from it needs an HF_TOKEN with read access. When
+# that token is missing or lacks access, we fall back to the public docs-only
+# bundle (the 9 documentation sources, no courses) built by
+# data/scraping_scripts/build_public_docs_bundle.py. Both repos share the same
+# tree layout, so only the download source changes here.
+VECTOR_DB_REPO_ID = "towardsai-tutors/ai-tutor-vector-db"
+PUBLIC_VECTOR_DB_REPO_ID = "towardsai-tutors/ai-tutor-vector-db-public"
 KB_DIR = "data/kb"
 KB_MANIFEST_PATH = f"{KB_DIR}/generated/corpus_manifest.jsonl"
 KB_INDEX_PATH = f"{KB_DIR}/wiki/index.md"
@@ -101,6 +109,85 @@ def ensure_kb_agents_md() -> None:
         os.replace(tmp_path, target)
 
 
+def _snapshot_bundle(repo_id: str, *, token: str | None) -> None:
+    """Download a vector-db/KB bundle snapshot into ``data/``.
+
+    Mutes httpx's per-file flood during the cold-start download only. The
+    GraphRAG experiment index (~150 MB) lives in the private repo for
+    reproducibility but prod does not use it; skip it on cold start. Pull it
+    explicitly to run that eval. (The public bundle has no graphrag/ tree, so
+    the pattern is simply a no-op there.)
+    """
+    from huggingface_hub import snapshot_download
+
+    httpx_logger = logging.getLogger("httpx")
+    previous_level = httpx_logger.level
+    httpx_logger.setLevel(logging.WARNING)
+    try:
+        snapshot_download(
+            repo_id=repo_id,
+            local_dir="data",
+            repo_type="dataset",
+            token=token,
+            ignore_patterns=["graphrag/**"],
+        )
+    finally:
+        httpx_logger.setLevel(previous_level)
+
+
+def _download_bundle() -> None:
+    """Download the bundle, falling back to the public docs-only one.
+
+    With a usable ``HF_TOKEN`` we pull the full private bundle (all sources,
+    incl. gated course content). When the token is absent, or present but
+    without access to the private repo, we fall back to the public docs-only
+    bundle so the app can still cold-start (documentation sources only). Any
+    non-access error (e.g. a network failure) propagates instead of silently
+    degrading to the smaller bundle.
+    """
+    try:
+        from huggingface_hub.errors import (
+            GatedRepoError,
+            RepositoryNotFoundError,
+        )
+    except ImportError:  # older huggingface_hub
+        from huggingface_hub.utils import (
+            GatedRepoError,
+            RepositoryNotFoundError,
+        )
+
+    # Resolve the token the way huggingface_hub itself does: the HF_TOKEN env
+    # var first, then a cached `huggingface-cli login`. Keying off os.getenv
+    # alone would skip a cached login that the old implicit-token download honored.
+    try:
+        from huggingface_hub import get_token
+
+        token = get_token()
+    except Exception:  # pragma: no cover - very old hub without get_token
+        token = os.getenv("HF_TOKEN") or None
+
+    if not token:
+        logger.warning(
+            "No Hugging Face token found; downloading the public docs-only "
+            "bundle from %s (documentation sources only, no course content).",
+            PUBLIC_VECTOR_DB_REPO_ID,
+        )
+        _snapshot_bundle(PUBLIC_VECTOR_DB_REPO_ID, token=None)
+        return
+
+    try:
+        _snapshot_bundle(VECTOR_DB_REPO_ID, token=token)
+    except (GatedRepoError, RepositoryNotFoundError) as exc:
+        logger.warning(
+            "HF_TOKEN cannot access the private bundle %s (%s); falling back to "
+            "the public docs-only bundle %s.",
+            VECTOR_DB_REPO_ID,
+            type(exc).__name__,
+            PUBLIC_VECTOR_DB_REPO_ID,
+        )
+        _snapshot_bundle(PUBLIC_VECTOR_DB_REPO_ID, token=None)
+
+
 def ensure_local_vector_db() -> None:
     """Make sure the vector-db/KB bundle and AGENTS.md exist locally.
 
@@ -119,24 +206,7 @@ def ensure_local_vector_db() -> None:
                 "Vector database missing or incomplete locally, downloading "
                 "from Hugging Face"
             )
-            from huggingface_hub import snapshot_download
-
-            # Mute httpx's per-file flood during the cold-start download only.
-            httpx_logger = logging.getLogger("httpx")
-            previous_level = httpx_logger.level
-            httpx_logger.setLevel(logging.WARNING)
-            try:
-                snapshot_download(
-                    repo_id="towardsai-tutors/ai-tutor-vector-db",
-                    local_dir="data",
-                    repo_type="dataset",
-                    # The GraphRAG experiment index (~150 MB) lives in the same
-                    # repo for reproducibility but prod does not use it; skip it
-                    # on cold start. Pull it explicitly to run that eval.
-                    ignore_patterns=["graphrag/**"],
-                )
-            finally:
-                httpx_logger.setLevel(previous_level)
+            _download_bundle()
         ensure_kb_agents_md()
         _BUNDLE_READY = _bundle_complete() and os.path.exists(KB_AGENTS_PATH)
 

@@ -1,6 +1,7 @@
 """Upload the Chroma vector database to a Hugging Face dataset repository."""
 
 import argparse
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -82,21 +83,45 @@ def _prune_stale_remote_files(
     )
 
 
-def upload_vector_db(repo_id: str = DEFAULT_REPO_ID) -> None:
-    try:
-        api = validate_hf_access(repo_id=repo_id)
-    except HuggingFaceAuthError as exc:
-        print(exc)
-        raise SystemExit(1) from exc
+def upload_bundle(
+    repo_id: str = DEFAULT_REPO_ID,
+    *,
+    folder_path: str = FOLDER_PATH,
+    allow_patterns: list[str] | None = None,
+    ignore_patterns: list[str] | None = None,
+    create_public: bool = False,
+) -> None:
+    """Prune stale remote files, then upload ``folder_path`` to ``repo_id``.
+
+    The default arguments reproduce the production upload (the private
+    all-sources bundle). ``build_public_docs_bundle`` reuses this with a
+    different folder/repo/patterns and ``create_public=True`` to publish the
+    docs-only bundle to a public dataset repo it may need to create first.
+    """
+    allow = allow_patterns if allow_patterns is not None else ALLOW_PATTERNS
+    ignore = ignore_patterns if ignore_patterns is not None else IGNORE_PATTERNS
+
+    if create_public:
+        # The public repo may not exist yet, so we cannot validate access to it
+        # up front (validate_hf_access requires the repo to exist). Create it as
+        # a public dataset (idempotent), which also proves the token can write.
+        api = HfApi(token=os.getenv("HF_TOKEN"))
+        api.create_repo(repo_id, repo_type="dataset", private=False, exist_ok=True)
+    else:
+        try:
+            api = validate_hf_access(repo_id=repo_id)
+        except HuggingFaceAuthError as exc:
+            print(exc)
+            raise SystemExit(1) from exc
 
     # Step 1: prune. Restore the auto-cleanup we lost when moving off
     # `upload_folder(..., delete_patterns=["*"])`. See helper docstring.
     _prune_stale_remote_files(
         api,
         repo_id,
-        folder_path=FOLDER_PATH,
-        allow_patterns=ALLOW_PATTERNS,
-        ignore_patterns=IGNORE_PATTERNS,
+        folder_path=folder_path,
+        allow_patterns=allow,
+        ignore_patterns=ignore,
     )
 
     # Step 2: upload. `upload_large_folder` is the recommended path once the
@@ -105,12 +130,16 @@ def upload_vector_db(repo_id: str = DEFAULT_REPO_ID) -> None:
     # `upload_folder` tends to hit at this size. It is resumable: re-running
     # after a failure skips already-uploaded blobs.
     api.upload_large_folder(
-        folder_path=FOLDER_PATH,
+        folder_path=folder_path,
         repo_id=repo_id,
         repo_type="dataset",
-        allow_patterns=ALLOW_PATTERNS,
-        ignore_patterns=IGNORE_PATTERNS,
+        allow_patterns=allow,
+        ignore_patterns=ignore,
     )
+
+
+def upload_vector_db(repo_id: str = DEFAULT_REPO_ID) -> None:
+    upload_bundle(repo_id)
 
 
 GRAPHRAG_LOCAL_DIR = "data/graphrag/output"
@@ -126,7 +155,7 @@ def upload_graphrag_index(repo_id: str = DEFAULT_REPO_ID) -> None:
     it must never delete the production bundle. The runtime cold-start download
     (`config.ensure_local_vector_db`) ignores `graphrag/**`, so prod Spaces do
     not pull this ~150 MB experiment artifact; pull it explicitly to run the eval
-    (see evals_graphrag.md).
+    (see evals/graphrag.md).
     """
     try:
         api = validate_hf_access(repo_id=repo_id)

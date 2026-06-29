@@ -12,7 +12,7 @@ ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-confi
 
 - [GitHub repo](https://github.com/towardsai/ai-tutor-app)
 - [Live demo — prod Space](https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot) · [Dev Space (private)](https://huggingface.co/spaces/towardsai-tutors/ai-tutor)
-- [Vector DB + KB bundle](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-vector-db) · [Private raw JSONL data](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-data)
+- [Vector DB + KB bundle](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-vector-db) (private; full corpus incl. courses) · [Public docs-only bundle](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-vector-db-public) (no token needed; cold-start fallback) · [Private raw JSONL data](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-data)
 
 ## Where things live
 
@@ -91,11 +91,11 @@ uv run -m data.scraping_scripts.retire_source_workflow --sources KEY [--dry-run 
 
 ## Evaluation
 
-**`evals.md` is the entry point** (what we evaluate, the datasets, results, remaining work); `evals/` is the harness (`run_battery` → `grade` → `report`, plus `check_triggers` and the blinded `handgrade_workbook`). Eval datasets and run results contain **real student text**: they are gitignored and ship via the private `ai-tutor-data` HF dataset (`eval/`, `eval_runs/`) — download snippet in `evals.md`. Runs cost real API money (a 4-preset bake-off ≈ $73); grading and reporting re-run offline from saved bundles for free. **Running or contributing an experiment? Follow `evals_contributing.md`** (run → upload data to HF → record an `F<N>` finding → merge; with a definition-of-done gate).
+**`evals.md` is the entry point** (what we evaluate, the datasets, results, remaining work); `evals/` is the harness (`run_battery` → `grade` → `report`, plus `check_triggers` and the blinded `handgrade_workbook`). Eval datasets and run results contain **real student text**: they are gitignored and ship via the private `ai-tutor-data` HF dataset (`eval/`, `eval_runs/`) — download snippet in `evals.md`. Runs cost real API money (a 4-preset bake-off ≈ $323; the full eval program ≈ $590 across all Gemini 3.5 Flash runs); grading and reporting re-run offline from saved bundles for free. **Running or contributing an experiment? Follow `evals/contributing.md`** (run → upload data to HF → record an `F<N>` finding → merge; with a definition-of-done gate).
 
 ## Environment variables
 
-Chat runtime: `COHERE_API_KEY` (retrieval), one chat-model provider key (`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or — for open-model eval runs — `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY`), `HF_TOKEN` (first-start download). Optional: `LANGSMITH_*` (tracing), `AI_TUTOR_API_PORT`/`HOST`/`CORS_ALLOW_ORIGINS`, `AI_TUTOR_KB_DIR`, `AI_TUTOR_MEMORY_PRESET` (default memory preset; see `app/memory_presets.py`), `NEXT_PUBLIC_AI_TUTOR_API_BASE_URL`. Data workflows also need `GITHUB_TOKEN` and `GEMINI_API_KEY`/`GOOGLE_API_KEY` (context generation). See `.env.example`.
+Chat runtime: `COHERE_API_KEY` (retrieval), one chat-model provider key (`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or — for open-model eval runs — `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY`), `HF_TOKEN` (first-start download of the full private bundle; without it, cold start falls back to the public docs-only bundle — documentation sources only, course content hidden). Optional: `LANGSMITH_*` (tracing), `AI_TUTOR_API_PORT`/`HOST`/`CORS_ALLOW_ORIGINS`, `AI_TUTOR_KB_DIR`, `AI_TUTOR_MEMORY_PRESET` (default memory preset; see `app/memory_presets.py`), `NEXT_PUBLIC_AI_TUTOR_API_BASE_URL`. Data workflows also need `GITHUB_TOKEN` and `GEMINI_API_KEY`/`GOOGLE_API_KEY` (context generation). See `.env.example`.
 
 ## Deployment
 

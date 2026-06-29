@@ -77,6 +77,50 @@ def test_complete_bundle_skips_download_and_caches_readiness(tmp_path: Path) -> 
             assert snapshot_download.call_count == 0
 
 
+def _repo_not_found_error():
+    try:
+        from huggingface_hub.errors import RepositoryNotFoundError
+    except ImportError:  # older huggingface_hub
+        from huggingface_hub.utils import RepositoryNotFoundError
+    return RepositoryNotFoundError
+
+
+def test_download_bundle_uses_public_when_no_token() -> None:
+    with patch("huggingface_hub.get_token", return_value=None):
+        with patch("app.config._snapshot_bundle") as snapshot:
+            config._download_bundle()
+    snapshot.assert_called_once()
+    assert snapshot.call_args.args[0] == config.PUBLIC_VECTOR_DB_REPO_ID
+
+
+def test_download_bundle_uses_private_when_token_present() -> None:
+    with patch("huggingface_hub.get_token", return_value="tok"):
+        with patch("app.config._snapshot_bundle") as snapshot:
+            config._download_bundle()
+    snapshot.assert_called_once()
+    assert snapshot.call_args.args[0] == config.VECTOR_DB_REPO_ID
+
+
+def test_download_bundle_falls_back_to_public_on_no_access() -> None:
+    import requests
+
+    repo_error = _repo_not_found_error()
+    response = requests.Response()
+    response.status_code = 401
+    calls: list[str] = []
+
+    def side_effect(repo_id: str, *, token) -> None:
+        calls.append(repo_id)
+        if repo_id == config.VECTOR_DB_REPO_ID:
+            raise repo_error("no access", response=response)
+
+    with patch("huggingface_hub.get_token", return_value="tok"):
+        with patch("app.config._snapshot_bundle", side_effect=side_effect):
+            config._download_bundle()
+
+    assert calls == [config.VECTOR_DB_REPO_ID, config.PUBLIC_VECTOR_DB_REPO_ID]
+
+
 def test_ensure_kb_agents_md_writes_once_and_atomically(tmp_path: Path) -> None:
     _write_bundle_files(tmp_path)
 

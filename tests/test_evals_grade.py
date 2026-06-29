@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import csv
+import tempfile
 import unittest
+from pathlib import Path
 
 from evals.common import detect_battery_type, normalize_url, percentile
 from evals.grade import (
     behavior_heuristic,
+    evidence_is_complete,
+    faithfulness_evidence,
     grade_persona_question,
+    merge_handgrades,
+    quality_sheet_rows,
     retrieval_metrics,
 )
+from evals.judge import RUBRICS, build_prompt, rubric_for
 
 
 class CommonTests(unittest.TestCase):
@@ -145,6 +153,203 @@ class PersonaGradingTests(unittest.TestCase):
         result = grade_persona_question(question, "conda activate course")
         self.assertIsNone(result["auto_pass"])
         self.assertTrue(result["needs_judgment"])
+
+
+class FaithfulnessEvidenceTests(unittest.TestCase):
+    def test_collects_retrieval_and_kb_evidence(self) -> None:
+        bundle = {
+            "tool_calls": [
+                {
+                    "tool_name": "retrieve_tutor_context",
+                    "args_text": "context engineering",
+                    "output_text": "Lesson 3 covers context engineering.",
+                    "matches": [{"title": "Lesson 3", "url": "https://x/l3"}],
+                },
+                {
+                    "tool_name": "run_kb_command",
+                    "args_text": "rg foo",
+                    "output_text": "raw/courses/agent/lesson.md: foo bar",
+                },
+            ]
+        }
+        evidence = faithfulness_evidence(bundle)
+        self.assertIn("context engineering", evidence)
+        self.assertIn("SOURCES: Lesson 3 <https://x/l3>", evidence)
+        self.assertIn("raw/courses/agent/lesson.md", evidence)
+
+    def test_empty_when_no_retrieval_tool(self) -> None:
+        bundle = {"tool_calls": [{"tool_name": "some_other_tool", "output_text": "x"}]}
+        self.assertEqual(faithfulness_evidence(bundle), "")
+        self.assertEqual(faithfulness_evidence({}), "")
+
+    def test_respects_max_chars(self) -> None:
+        bundle = {
+            "tool_calls": [{"tool_name": "run_kb_command", "output_text": "z" * 5000}]
+        }
+        self.assertEqual(len(faithfulness_evidence(bundle, max_chars=100)), 100)
+
+
+class EvidenceCompletenessTests(unittest.TestCase):
+    def test_complete_when_no_truncation(self) -> None:
+        bundle = {
+            "tool_calls": [
+                {"tool_name": "run_kb_command", "output_text": "abc", "output_chars": 3}
+            ]
+        }
+        self.assertTrue(evidence_is_complete(bundle))
+
+    def test_incomplete_when_kb_output_truncated(self) -> None:
+        # output_chars (true length) exceeds captured output_text => truncated.
+        bundle = {
+            "tool_calls": [
+                {
+                    "tool_name": "run_kb_command",
+                    "output_text": "x" * 6000,
+                    "output_chars": 40000,
+                }
+            ]
+        }
+        self.assertFalse(evidence_is_complete(bundle))
+
+    def test_non_retrieval_truncation_is_ignored(self) -> None:
+        bundle = {
+            "tool_calls": [
+                {"tool_name": "some_tool", "output_text": "x", "output_chars": 99999}
+            ]
+        }
+        self.assertTrue(evidence_is_complete(bundle))
+
+    def test_faithfulness_row_gated_on_complete_evidence(self) -> None:
+        truncated = {
+            "run_id": "r",
+            "battery_type": "singleturn",
+            "preset": "prod",
+            "query": "q",
+            "answer": "a",
+            "tool_calls": [
+                {
+                    "tool_name": "run_kb_command",
+                    "args_text": "rg foo",
+                    "output_text": "y" * 6000,
+                    "output_chars": 40000,
+                }
+            ],
+        }
+        types = {r["item_type"] for r in quality_sheet_rows(truncated)}
+        self.assertIn("holistic", types)
+        self.assertNotIn("faithfulness", types)  # truncated -> no faithfulness
+
+        full = dict(truncated)
+        full["tool_calls"] = [
+            {
+                "tool_name": "run_kb_command",
+                "args_text": "rg foo",
+                "output_text": "y" * 100,
+                "output_chars": 100,
+            }
+        ]
+        types_full = {r["item_type"] for r in quality_sheet_rows(full)}
+        self.assertIn("faithfulness", types_full)  # full evidence -> emitted
+
+
+class JudgeRubricTests(unittest.TestCase):
+    def test_holistic_and_faithfulness_rubrics_exist(self) -> None:
+        self.assertIs(rubric_for("holistic"), RUBRICS["holistic"])
+        self.assertIs(rubric_for("faithfulness"), RUBRICS["faithfulness"])
+
+    def test_unknown_item_type_falls_back_to_key_point(self) -> None:
+        self.assertIs(rubric_for("mystery"), RUBRICS["key_point"])
+
+    def test_faithfulness_reference_labeled_as_evidence(self) -> None:
+        row = {
+            "item_type": "faithfulness",
+            "question": "q",
+            "criterion": "grounded?",
+            "reference": "RETRIEVED_TEXT_X",
+            "answer": "a",
+        }
+        prompt = build_prompt(row)
+        self.assertIn("RETRIEVED EVIDENCE", prompt)
+        self.assertNotIn("STAFF REFERENCE", prompt)
+
+    def test_other_item_types_keep_staff_reference_label(self) -> None:
+        row = {
+            "item_type": "key_point",
+            "question": "q",
+            "criterion": "claim",
+            "reference": "STAFF_TEXT",
+            "answer": "a",
+        }
+        self.assertIn("STAFF REFERENCE", build_prompt(row))
+
+
+class MergeHandgradesTests(unittest.TestCase):
+    FIELDS = [
+        "sheet_row_id",
+        "run_id",
+        "item_type",
+        "criterion",
+        "grade",
+        "note",
+    ]
+
+    def _merge(self, grades, filled_rows):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "filled.csv"
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=self.FIELDS)
+                writer.writeheader()
+                writer.writerows(filled_rows)
+            return merge_handgrades(grades, path)
+
+    def test_new_item_types_and_per_metric_source(self) -> None:
+        grades = [{"run_id": "r1"}]
+        filled = [
+            # human-graded key points
+            {
+                "sheet_row_id": "r1|key_point|a",
+                "run_id": "r1",
+                "item_type": "key_point",
+                "criterion": "k1",
+                "grade": "pass",
+                "note": "",
+            },
+            {
+                "sheet_row_id": "r1|key_point|b",
+                "run_id": "r1",
+                "item_type": "key_point",
+                "criterion": "k2",
+                "grade": "fail",
+                "note": "",
+            },
+            # judge-graded new dimensions
+            {
+                "sheet_row_id": "r1|holistic|c",
+                "run_id": "r1",
+                "item_type": "holistic",
+                "criterion": "h",
+                "grade": "pass",
+                "note": "[judge:high] good answer",
+            },
+            {
+                "sheet_row_id": "r1|faithfulness|d",
+                "run_id": "r1",
+                "item_type": "faithfulness",
+                "criterion": "f",
+                "grade": "fail",
+                "note": "[judge:low] fabricated param",
+            },
+        ]
+        merged = self._merge(grades, filled)[0]
+        self.assertEqual(merged["key_points_passed"], 1)
+        self.assertEqual(merged["key_points_total"], 2)
+        self.assertEqual(merged["key_points_source"], "human")
+        self.assertTrue(merged["holistic_pass"])
+        self.assertEqual(merged["holistic_source"], "judge")
+        self.assertFalse(merged["faithfulness_pass"])
+        self.assertEqual(merged["faithfulness_source"], "judge")
+        # human key-points + judge new dims => overall mixed
+        self.assertEqual(merged["grade_source"], "mixed")
 
 
 if __name__ == "__main__":

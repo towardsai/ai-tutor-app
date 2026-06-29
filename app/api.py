@@ -24,7 +24,7 @@ from .chat_service import (
     warm_up_retriever,
 )
 from .chat_types import ChatEvent, ChatRequest, ChatTurn
-from .kb_manifest import load_manifest_entries
+from .kb_manifest import available_source_keys, load_manifest_entries
 from .memory_presets import MEMORY_PRESETS
 from .config import (
     AVAILABLE_MODELS,
@@ -615,9 +615,16 @@ _SOURCE_VERSIONS: dict[str, dict[str, Any]] = _load_source_versions()
 
 def _source_entries() -> list[dict[str, Any]]:
     defaults = set(DEFAULT_SELECTED_SOURCES_UI)
+    # On the public docs-only bundle the course sources are absent, so hide
+    # them from the picker instead of offering sources that return nothing.
+    # `None` means the bundle is not loaded yet (advertise everything, the
+    # prod default); otherwise only advertise sources present in the bundle.
+    available = available_source_keys()
     entries: list[dict[str, Any]] = []
     for label in AVAILABLE_SOURCES_UI:
         key = SOURCE_UI_TO_KEY[label]
+        if available is not None and key not in available:
+            continue
         group = "courses" if key in COURSE_SOURCE_KEYS else "docs"
         display = SOURCE_DISPLAY_INFO.get(key, {})
         entry: dict[str, Any] = {

@@ -94,6 +94,37 @@ RUBRICS: dict[str, str] = {
         "The 'reference' shows the gold staff behavior. Pass if the BEHAVIOR "
         "matches the expected kind even if details differ."
     ),
+    "holistic": (
+        "ITEM TYPE = holistic tutor-answer quality (the staff-approval gate). "
+        "Decide as the course's expert tutor: would you approve sending this "
+        "answer to the student as-is? PASS only if ALL hold: (1) correct and not "
+        "misleading; (2) grounded in the right course/library material rather than "
+        "vague generic filler, for a course-content question; (3) it actually "
+        "helps the student LEARN -- explains or builds understanding at an "
+        "appropriate level, not just a bare dump, a wall of unexplained code, or "
+        "an unhelpful deflection; (4) appropriate scope and tone -- answers what "
+        "was asked, redirects platform/billing issues instead of inventing fixes, "
+        "acknowledges feedback without overpromising. FAIL if it is wrong, "
+        "ungrounded where grounding was needed, unhelpful for learning, or "
+        "off-scope. Judge the WHOLE answer, not a single claim; minor stylistic "
+        "nits alone are not a fail. Use confidence=low when it is a genuine "
+        "borderline 'I could see staff going either way'."
+    ),
+    "faithfulness": (
+        "ITEM TYPE = faithfulness / groundedness. The reference block is the "
+        "RETRIEVED EVIDENCE the tutor's own tools returned (corpus retrieval + KB "
+        "browse). Grade ONLY whether the answer's substantive factual and "
+        "technical claims are supported by that evidence. PASS if every "
+        "substantive claim is supported by, or a reasonable paraphrase/synthesis "
+        "of, the evidence. FAIL if the answer asserts specifics that are NOT in "
+        "the evidence -- fabricated API/function/parameter names, version numbers, "
+        "citations or URLs, course/lesson facts, or numeric claims (i.e. "
+        "hallucination beyond what the evidence supports). Widely-known general "
+        "programming facts an expert would accept need not appear in the evidence; "
+        "course-specific and library-specific specifics MUST. If the evidence is "
+        "empty or clearly insufficient to support the answer's specific claims, "
+        "FAIL (confidence=low if it is borderline)."
+    ),
     "replay_reply": (
         "ITEM TYPE = replay. The criterion asks whether this reply is about as "
         "helpful and correct as the real staff reply (shown as 'reference'). Pass "
@@ -127,9 +158,16 @@ def build_prompt(row: dict[str, str]) -> str:
         f"\nCRITERION:\n{row.get('criterion', '')}",
     ]
     if (row.get("reference") or "").strip():
-        parts.append(
-            f"\nSTAFF REFERENCE (context only, never shown to the tutor):\n{row['reference']}"
+        # For faithfulness the reference block IS the retrieved evidence to grade
+        # the answer's grounding against; for every other item type it is the
+        # staff answer, shown as context only.
+        label = (
+            "RETRIEVED EVIDENCE the tutor's tools returned (grade the answer's "
+            "grounding against THIS)"
+            if row["item_type"] == "faithfulness"
+            else "STAFF REFERENCE (context only, never shown to the tutor)"
         )
+        parts.append(f"\n{label}:\n{row['reference']}")
     parts.append(f"\nANSWER TO GRADE:\n{row.get('answer') or '(EMPTY)'}")
     return "\n".join(parts)
 

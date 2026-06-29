@@ -168,6 +168,8 @@ data/chroma-db**/
 evaluation_data/chroma-db**/
 # Build artifact; downloaded from HF on first run.
 data/kb/
+# Staging dir for the public docs-only bundle (build_public_docs_bundle.py).
+data/public_docs_bundle/
 data/*_md_files/
 data/full_stack_ai_engineering/
 data/beginner_python_for_ai_engineering/
@@ -234,3 +236,8 @@ data/eval/review_log_v1.md
 # so non-.jsonl files (review_log_v1.md, review_batches/*.json) can't slip in.
 eval/
 deepseek_eval_results.md
+
+# Local-only working dirs (internal review notes, workshop slide decks).
+# Never meant for the public repo; keep them from an accidental `git add -A`.
+code_review/
+workshop_AIE/
