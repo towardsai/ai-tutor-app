@@ -38,9 +38,15 @@ from .common import append_jsonl, detect_battery_type, load_jsonl, write_jsonl
 
 logger = logging.getLogger("evals.run_battery")
 
-# Full tool outputs can be 40k chars each; keep bundles browsable. The full
-# size is preserved in output_chars so truncation is visible.
-TOOL_OUTPUT_MAX_CHARS = 6_000
+# Capture the full tool output the agent saw: the KB shell returns up to
+# DEFAULT_MAX_OUTPUT_CHARS = 40k chars/call (app/kb_shell.py), so 40k preserves
+# everything the model grounded on. This matters for offline faithfulness
+# grading -- under the old 6k cap, KB-browse evidence was truncated, so a
+# faithfulness judge scored capture-completeness, not grounding (evals.md
+# F23/F24 class). output_chars still records the true length, so any rare
+# overflow stays visible. Bundles are bigger (KB-heavy turns ~40k x several
+# calls), which is an acceptable cost for local-only runs.
+TOOL_OUTPUT_MAX_CHARS = 40_000
 # Slowest observed turn is ~2.5 min; anything past this is a wedged stream
 # (e.g. laptop sleep killed the connection mid-turn). The turn records a
 # TimeoutError and the unit re-runs on resume instead of hanging forever.

@@ -117,6 +117,21 @@ def load_manifest_entries(kb_dir: str = KB_DIR) -> tuple[KbManifestEntry, ...]:
     return result
 
 
+def available_source_keys(kb_dir: str = KB_DIR) -> frozenset[str] | None:
+    """Source keys actually present in the downloaded KB bundle.
+
+    Returns ``None`` when the manifest is not available yet (the bundle may
+    still be downloading on first start), signalling callers to not filter.
+    Otherwise it is the distinct set of sources shipped in the bundle. On the
+    public docs-only bundle this excludes the course sources, so the UI source
+    picker can hide sources that have no data to query.
+    """
+    entries = load_manifest_entries(kb_dir)
+    if not entries:
+        return None
+    return frozenset(entry.source for entry in entries if entry.source)
+
+
 def manifest_indexes(
     kb_dir: str = KB_DIR,
 ) -> tuple[

@@ -50,6 +50,80 @@ RETRIEVAL_TOOLS = {"retrieve_tutor_context", "run_kb_command"}
 # in the command or its output reveal which corpus source the agent touched.
 KB_RAW_SOURCE_RE = re.compile(r"raw/(?:docs|courses)/([A-Za-z0-9_.\-]+)/")
 
+# Per-bundle evidence cap for faithfulness rows. Tool outputs in a bundle are each
+# capped at ~6000 chars; a few calls per turn, so ~12k keeps the gist of every
+# call without bloating the grading prompt.
+FAITHFULNESS_EVIDENCE_MAX = 12_000
+
+# Holistic = the "would staff approve sending this?" gate (evals/background.md
+# Layer 4). Emitted for every single-turn answer; the full rubric lives in
+# evals/judge.py RUBRICS["holistic"], this is the at-a-glance criterion.
+HOLISTIC_CRITERION = (
+    "Would an experienced course tutor approve sending this answer to the "
+    "student? Pass only if it is correct, grounded in the right material, and "
+    "genuinely helps them learn (builds understanding), with appropriate scope "
+    "and tone. (see README / judge rubric)"
+)
+# Faithfulness = is the answer grounded in the evidence the tutor actually
+# retrieved (catches hallucination on corpus questions). Emitted only when the
+# turn produced retrieval/KB evidence; rubric in judge.py RUBRICS["faithfulness"].
+FAITHFULNESS_CRITERION = (
+    "Are the answer's substantive factual/technical claims supported by the "
+    "retrieved evidence shown below? Fail on fabricated APIs, parameters, "
+    "versions, citations, or course/lesson specifics not in the evidence."
+)
+
+
+def faithfulness_evidence(
+    bundle: dict[str, Any], max_chars: int = FAITHFULNESS_EVIDENCE_MAX
+) -> str:
+    """Concatenate the retrieval/KB evidence the tutor saw, for grounding grades.
+
+    Joins each retrieval/KB tool call's command + output (and, for
+    `retrieve_tutor_context`, the ranked source titles/URLs) so the judge can
+    check the answer's claims against exactly what the tools returned. Empty when
+    the turn used no retrieval/KB tool (e.g. answer_general), which is the signal
+    to skip the faithfulness row for that case.
+    """
+    parts: list[str] = []
+    for call in bundle.get("tool_calls") or []:
+        name = call.get("tool_name")
+        if name not in RETRIEVAL_TOOLS:
+            continue
+        header = f"[{name}] {(call.get('args_text') or '').strip()}".strip()
+        body = (call.get("output_text") or "").strip()
+        matches = call.get("matches") or []
+        if matches:
+            cites = "; ".join(
+                f"{m.get('title', '')} <{m.get('url', '')}>" for m in matches[:10]
+            )
+            body = f"{body}\nSOURCES: {cites}".strip()
+        if header or body:
+            parts.append(f"{header}\n{body}".strip())
+    return "\n\n".join(parts)[:max_chars]
+
+
+def evidence_is_complete(bundle: dict[str, Any]) -> bool:
+    """True if every retrieval/KB tool output was captured in full.
+
+    Bundles cap each tool output at ``run_battery.TOOL_OUTPUT_MAX_CHARS`` but
+    preserve the true length in ``output_chars``. When a KB-browse output was
+    truncated, the judge sees only a slice of what the agent actually read, so a
+    faithfulness grade would measure capture-completeness, not grounding (the
+    same blind-signal class as evals.md F23/F24). Faithfulness is therefore
+    emitted ONLY when nothing the agent grounded on was truncated; after the
+    bundle cap is raised and a run is re-recorded, this returns True and the
+    column populates automatically.
+    """
+    for call in bundle.get("tool_calls") or []:
+        if call.get("tool_name") not in RETRIEVAL_TOOLS:
+            continue
+        full = call.get("output_chars")
+        kept = len(call.get("output_text") or "")
+        if isinstance(full, int) and full > kept:
+            return False
+    return True
+
 
 def index_battery(battery: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     index: dict[str, dict[str, Any]] = {}
@@ -207,6 +281,7 @@ def sheet_row(
     item_type: str,
     criterion: str,
     reference: str = "",
+    reference_max: int = 2000,
 ) -> dict[str, str]:
     return {
         # Stable hash (NOT builtin hash(), which is salted per process — that
@@ -221,10 +296,47 @@ def sheet_row(
         "question": bundle["query"][:600],
         "answer": (bundle.get("answer") or "")[:4000],
         "criterion": criterion,
-        "reference": reference[:2000],
+        "reference": reference[:reference_max],
         "grade": "",
         "note": "",
     }
+
+
+def quality_sheet_rows(
+    bundle: dict[str, Any], reference: str = ""
+) -> list[dict[str, str]]:
+    """Holistic + faithfulness sheet rows for one answered turn.
+
+    Shared by single-turn and session turns: holistic (would staff approve this
+    answer?) is emitted for every answered turn; faithfulness only when the turn
+    produced retrieval/KB evidence to ground against. ``reference`` is the staff
+    answer for single-turn cases (context for holistic) and empty for session
+    turns, which have no per-turn gold answer.
+    """
+    rows = [
+        sheet_row(
+            bundle=bundle,
+            item_type="holistic",
+            criterion=HOLISTIC_CRITERION,
+            reference=reference,
+        )
+    ]
+    # Faithfulness only when the agent's grounding was captured in full -- on
+    # bundles recorded under the old 6k tool-output cap, KB-browse evidence is
+    # truncated, so a faithfulness grade would score capture-completeness, not
+    # grounding (evals.md F23/F24 class). Re-record with the raised cap to enable.
+    evidence = faithfulness_evidence(bundle)
+    if evidence and evidence_is_complete(bundle):
+        rows.append(
+            sheet_row(
+                bundle=bundle,
+                item_type="faithfulness",
+                criterion=FAITHFULNESS_CRITERION,
+                reference=evidence,
+                reference_max=FAITHFULNESS_EVIDENCE_MAX,
+            )
+        )
+    return rows
 
 
 def grade_run(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
@@ -306,6 +418,11 @@ def grade_run(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]
                         reference=record.get("reference_answer") or "",
                     )
                 )
+            # Holistic (whole-answer staff-approval) + faithfulness (grounded in
+            # retrieved evidence); staff answer is context for holistic.
+            sheet.extend(
+                quality_sheet_rows(bundle, record.get("reference_answer") or "")
+            )
 
         elif bundle["battery_type"] == "sessions":
             probe = next(
@@ -332,6 +449,11 @@ def grade_run(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]
                         f"Rule: {probe['check_note']}",
                     )
                 )
+            # Holistic + faithfulness on every answered session turn (no per-turn
+            # gold answer, so no reference for holistic). Lets us see whether
+            # answer quality degrades on late turns under compaction.
+            if bundle.get("answer"):
+                sheet.extend(quality_sheet_rows(bundle))
 
         elif bundle["battery_type"] == "personas":
             result = grade_persona_question(record, bundle.get("answer") or "")
@@ -356,6 +478,11 @@ def grade_run(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]
                         criterion=" | ".join(llm_checks),
                     )
                 )
+            # Holistic + faithfulness on persona answers too (full quality
+            # coverage across batteries); the persona profile is the implicit
+            # reference, so no staff reference text here.
+            if bundle.get("answer"):
+                sheet.extend(quality_sheet_rows(bundle))
 
         elif bundle["battery_type"] == "replay":
             sheet.append(
@@ -391,22 +518,47 @@ def merge_handgrades(
             for r in rows
         }
         grade["grade_source"] = sources.pop() if len(sources) == 1 else "mixed"
+
+        def _src(row: dict[str, str]) -> str:
+            # Per-metric provenance so a run with human key-points but judge-filled
+            # holistic/faithfulness still reports each row's true grader (the
+            # overall grade_source above goes "mixed" in that case).
+            return (
+                "judge"
+                if (row.get("note") or "").lstrip().startswith("[judge")
+                else "human"
+            )
+
         key_points = [r for r in rows if r["item_type"] == "key_point"]
         if key_points:
             passed = sum(1 for r in key_points if r["grade"].lower() == "pass")
             grade["key_points_passed"] = passed
             grade["key_points_total"] = len(key_points)
+            kp_sources = {_src(r) for r in key_points}
+            grade["key_points_source"] = (
+                kp_sources.pop() if len(kp_sources) == 1 else "mixed"
+            )
         for row in rows:
             verdict = row["grade"].strip().lower() == "pass"
             if row["item_type"] == "behavior":
                 grade["behavior_pass"] = verdict
+                grade["behavior_source"] = _src(row)
             elif row["item_type"].startswith("probe:"):
                 grade["probe_pass"] = verdict
+                grade["probe_source"] = _src(row)
             elif row["item_type"] == "persona_llm_check":
                 # Combines with the regex auto result (both must pass).
                 grade["auto_pass"] = verdict and grade.get("auto_pass") is not False
+                grade["persona_source"] = _src(row)
             elif row["item_type"] == "replay_reply":
                 grade["replay_pass"] = verdict
+                grade["replay_source"] = _src(row)
+            elif row["item_type"] == "holistic":
+                grade["holistic_pass"] = verdict
+                grade["holistic_source"] = _src(row)
+            elif row["item_type"] == "faithfulness":
+                grade["faithfulness_pass"] = verdict
+                grade["faithfulness_source"] = _src(row)
     return grades
 
 

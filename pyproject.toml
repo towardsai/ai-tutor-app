@@ -31,7 +31,7 @@ dependencies = [
 # Eval-only: the GraphRAG-vs-RAG experiment (F28). Pulls graphrag + lancedb/litellm/
 # pandas, all imported lazily and only by the opt-in `graphrag` retriever — never on
 # the production path. Kept out of the default install so the Spaces image stays lean.
-# Reproduce the experiment with: uv sync --extra graphrag  (see evals_graphrag.md).
+# Reproduce the experiment with: uv sync --extra graphrag  (see evals/graphrag.md).
 graphrag = ["graphrag>=3.1.0"]
 
 [dependency-groups]

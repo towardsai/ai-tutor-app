@@ -97,6 +97,23 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
     def add(name: str, fn) -> None:
         rows.append([name] + [fn(run["grades"]) for run in runs])
 
+    def src_tag(source_key: str) -> str:
+        """Per-metric provenance tag across the shown runs: [judge]/[human]/[mixed].
+
+        Lets a single report mix human-graded rows (e.g. Part B key-points,
+        session probes) with judge-graded rows (the new holistic/faithfulness)
+        and label each honestly, even when a run's overall grade_source is mixed.
+        """
+        seen = {
+            g.get(source_key)
+            for run in runs
+            for g in run["grades"]
+            if g.get(source_key)
+        }
+        if not seen:
+            return ""
+        return f" [{seen.pop()}]" if len(seen) == 1 else " [mixed]"
+
     add("cases run", lambda g: str(len({x["unit_id"] for x in g})))
     add("errors", lambda g: str(sum(1 for x in g if x.get("error"))))
     # --- Work & cost: run-time-INDEPENDENT, the unconfounded headline ----------
@@ -212,8 +229,24 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
             "behavior proxy from code checks",
             lambda g: rate(col(g, "behavior_heuristic")),
         )
-        add("behavior (graded)", lambda g: rate(col(g, "behavior_pass")))
-        add("key-point coverage (graded)", lambda g: _kp_coverage(g))
+        add(
+            f"behavior (graded){src_tag('behavior_source')}",
+            lambda g: rate(col(g, "behavior_pass")),
+        )
+        add(
+            f"key-point coverage (graded){src_tag('key_points_source')}",
+            lambda g: _kp_coverage(g),
+        )
+        add(
+            f"holistic: staff-approval (graded){src_tag('holistic_source')}",
+            lambda g: rate(col(g, "holistic_pass")),
+        )
+        # NOTE: faithfulness-to-evidence is intentionally not reported. On bundles
+        # recorded under the old 6k tool-output cap, KB-browse evidence is
+        # truncated, so the judge can't see what the agent grounded on and the
+        # score tracks capture-completeness, not grounding (evals.md F23/F24
+        # class). grade.py only emits it once evidence is captured in full; re-add
+        # the row after raising TOOL_OUTPUT_MAX_CHARS and re-recording a run.
 
     if battery_type == "sessions":
         add("cumulative input tok (last turn, mean)", _final_cumulative)
@@ -224,8 +257,14 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
             ),
         )
         add(
-            "probe accuracy (graded)",
+            f"probe accuracy (graded){src_tag('probe_source')}",
             lambda g: rate([x.get("probe_pass") for x in g if x.get("is_probe")]),
+        )
+        # Answer quality across all session turns (not just probes): does holistic
+        # quality / faithfulness degrade under compaction over a long session?
+        add(
+            f"holistic: staff-approval (graded){src_tag('holistic_source')}",
+            lambda g: rate(col(g, "holistic_pass")),
         )
         for probe_type in sorted(
             {
@@ -255,9 +294,16 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
             "anti-pattern failures",
             lambda g: str(sum(1 for x in g if x.get("anti_pattern_hits"))),
         )
+        add(
+            f"holistic: staff-approval (graded){src_tag('holistic_source')}",
+            lambda g: rate(col(g, "holistic_pass")),
+        )
 
     if battery_type == "replay":
-        add("replay reply pass (human grade)", lambda g: rate(col(g, "replay_pass")))
+        add(
+            f"replay reply pass (graded){src_tag('replay_source')}",
+            lambda g: rate(col(g, "replay_pass")),
+        )
     return rows
 
 

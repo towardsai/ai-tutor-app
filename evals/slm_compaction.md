@@ -65,7 +65,7 @@ window is itself truncated at build time.
 
 **Naming caveat:** `full_context` here is *document-stuffing* (the whole lesson in
 the prompt), which is **not** `full_history`'s conversational-memory role. The
-sibling Gemini study (`evals_compaction.md`, F29) tests the same document-in-prompt
+sibling Gemini study (`evals/compaction.md`, F29) tests the same document-in-prompt
 idea but names that arm `full_history`, because it parks the lesson in turn 0 of a
 session — so don't read F29's `full_history` as the Axis-A memory policy.
 
@@ -137,7 +137,7 @@ Run on a **MacBook Pro, Apple M1 Pro, 16 GB**, one model at a time via
 3. **GraphRAG never wins outright — same verdict as the cloud experiment.** It ties
    `rag` on the qwens (100%) and edges it on llama (87% vs 80%), but at **~2.8× the
    context tokens (8.2k vs 2.9k) and ~2.5× the latency (~50-78s vs ~20-26s)**.
-   No quality gain justifies the cost (cf. `evals_graphrag.md`).
+   No quality gain justifies the cost (cf. `evals/graphrag.md`).
 
 4. **Summarization compaction degrades hard, worst on the smallest model.**
    `summary` and `hierarchical_summary` are the bottom methods (llama `summary`
