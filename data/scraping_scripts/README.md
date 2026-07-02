@@ -292,14 +292,25 @@ uv run -m data.scraping_scripts.build_public_docs_bundle --skip-upload  # build 
 ```
 
 It **derives** the docs-only bundle from the already-built prod artifacts (no
-re-embedding, $0 Cohere): it copies the Chroma collection and deletes the course
-chunks, rebuilds the BM25 / document-dict pkls from a docs-only view of
+re-embedding, $0 Cohere). Filtering is an **allowlist**: only sources in
+`DOC_SOURCE_KEYS` survive; anything unclassified fails closed (dropped, never
+published), and a registry invariant test keeps the doc/course split total. The
+script copies the Chroma collection and keeps only allowlisted chunks (scanning
+metadata, so chunks with missing/unknown `source` are dropped too), rebuilds
+the BM25 / document-dict pkls from a docs-only view of
 `all_sources_data.jsonl`, and copies `data/kb` while pruning `raw/courses`,
-`wiki/courses`, and the course rows from the generated indexes. The staged tree
-lives in `data/public_docs_bundle/` (gitignored). Uploading needs an `HF_TOKEN`
-with write access to the `towardsai-tutors` org; the script creates the public
-repo on first run. Pass `--include-contextual` to also ship a docs-only
-`all_sources_contextual_nodes.pkl` (off by default to keep the download small).
+`wiki/courses`, and the non-doc rows from the generated indexes. The staged
+wiki is then **publicized**: the scaffolder regenerates AUTO-GENERATED blocks
+from the filtered manifest, course references in maintainer prose are pruned,
+and a `(maintainer)` entry is appended to `wiki/log.md` (see
+`data/kb/MAINTAINER.md`). Every build ends with a **leak audit** that fails the
+build if any course path, course key, or non-allowlisted row survives.
+
+The staged tree lives in `data/public_docs_bundle/` (gitignored). Uploading
+needs an `HF_TOKEN` with write access to the `towardsai-tutors` org; the script
+creates the public repo on first run. Pass `--include-contextual` to also ship
+a docs-only `all_sources_contextual_nodes.pkl` (off by default to keep the
+download small).
 
 ## Tips for New Team Members
 

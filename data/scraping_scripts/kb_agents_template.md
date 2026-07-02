@@ -13,8 +13,10 @@ to find, your FIRST `run_kb_command` must be one of:
 
 - `cat wiki/index.md` — for any "tell me about X" / "what is X" / comparison
   / recipe question where X is a broad topic.
-- `cat wiki/frameworks/<source>.md` or `cat wiki/courses/<source>.md` — when
-  the question is already scoped to one known source.
+- `cat wiki/frameworks/<source>.md` (or `cat wiki/courses/<source>.md`, when
+  course sources are present in this KB) — when the question is already
+  scoped to one known source. `wiki/index.md` lists which sources exist; do
+  not assume a source page is there if the index does not name it.
 
 Do NOT start with `rg`, `grep`, `find`, or `ls` over `raw/` as the first
 command. The wiki pages already give you the source map, so doing your own

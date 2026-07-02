@@ -109,8 +109,13 @@ def ensure_kb_agents_md() -> None:
         os.replace(tmp_path, target)
 
 
-def _snapshot_bundle(repo_id: str, *, token: str | None) -> None:
+def _snapshot_bundle(repo_id: str, *, token: str | bool | None) -> None:
     """Download a vector-db/KB bundle snapshot into ``data/``.
+
+    ``token=False`` means download anonymously: ``None`` would make
+    huggingface_hub re-resolve and send the cached/env token, and a token the
+    Hub rejects fails the request even against a public repo. Public-bundle
+    downloads must always pass ``False``.
 
     Mutes httpx's per-file flood during the cold-start download only. The
     GraphRAG experiment index (~150 MB) lives in the private repo for
@@ -172,7 +177,7 @@ def _download_bundle() -> None:
             "bundle from %s (documentation sources only, no course content).",
             PUBLIC_VECTOR_DB_REPO_ID,
         )
-        _snapshot_bundle(PUBLIC_VECTOR_DB_REPO_ID, token=None)
+        _snapshot_bundle(PUBLIC_VECTOR_DB_REPO_ID, token=False)
         return
 
     try:
@@ -185,7 +190,7 @@ def _download_bundle() -> None:
             type(exc).__name__,
             PUBLIC_VECTOR_DB_REPO_ID,
         )
-        _snapshot_bundle(PUBLIC_VECTOR_DB_REPO_ID, token=None)
+        _snapshot_bundle(PUBLIC_VECTOR_DB_REPO_ID, token=False)
 
 
 def ensure_local_vector_db() -> None:
