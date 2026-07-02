@@ -91,6 +91,9 @@ def test_download_bundle_uses_public_when_no_token() -> None:
             config._download_bundle()
     snapshot.assert_called_once()
     assert snapshot.call_args.args[0] == config.PUBLIC_VECTOR_DB_REPO_ID
+    # token=False = anonymous; None would let huggingface_hub re-resolve and
+    # send a cached token, which can 401 even against the public repo.
+    assert snapshot.call_args.kwargs["token"] is False
 
 
 def test_download_bundle_uses_private_when_token_present() -> None:
@@ -107,10 +110,10 @@ def test_download_bundle_falls_back_to_public_on_no_access() -> None:
     repo_error = _repo_not_found_error()
     response = requests.Response()
     response.status_code = 401
-    calls: list[str] = []
+    calls: list[tuple[str, object]] = []
 
     def side_effect(repo_id: str, *, token) -> None:
-        calls.append(repo_id)
+        calls.append((repo_id, token))
         if repo_id == config.VECTOR_DB_REPO_ID:
             raise repo_error("no access", response=response)
 
@@ -118,7 +121,33 @@ def test_download_bundle_falls_back_to_public_on_no_access() -> None:
         with patch("app.config._snapshot_bundle", side_effect=side_effect):
             config._download_bundle()
 
-    assert calls == [config.VECTOR_DB_REPO_ID, config.PUBLIC_VECTOR_DB_REPO_ID]
+    assert calls == [
+        (config.VECTOR_DB_REPO_ID, "tok"),
+        # The fallback must be anonymous (False), not token re-resolution.
+        (config.PUBLIC_VECTOR_DB_REPO_ID, False),
+    ]
+
+
+def test_extract_kb_archive_unpacks_and_removes_archive(tmp_path: Path) -> None:
+    import tarfile
+
+    kb_src = tmp_path / "src" / "kb"
+    (kb_src / "wiki").mkdir(parents=True)
+    (kb_src / "wiki" / "index.md").write_text("# Index\n", encoding="utf-8")
+    archive = tmp_path / "data" / "kb.tar.gz"
+    archive.parent.mkdir()
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(kb_src, arcname="kb")
+
+    config._extract_kb_archive(base_dir=str(tmp_path / "data"))
+
+    extracted = tmp_path / "data" / "kb" / "wiki" / "index.md"
+    assert extracted.read_text(encoding="utf-8") == "# Index\n"
+    assert not archive.exists()  # deleted after successful extraction
+
+
+def test_extract_kb_archive_noop_without_archive(tmp_path: Path) -> None:
+    config._extract_kb_archive(base_dir=str(tmp_path))  # must not raise
 
 
 def test_ensure_kb_agents_md_writes_once_and_atomically(tmp_path: Path) -> None:
