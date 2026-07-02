@@ -170,6 +170,9 @@ evaluation_data/chroma-db**/
 data/kb/
 # Staging dir for the public docs-only bundle (build_public_docs_bundle.py).
 data/public_docs_bundle/
+# KB archive from the public bundle (extracted then deleted at startup; kept
+# ignored in case a cold start is interrupted mid-extract).
+data/kb.tar.gz
 data/*_md_files/
 data/full_stack_ai_engineering/
 data/beginner_python_for_ai_engineering/

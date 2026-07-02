@@ -306,6 +306,13 @@ and a `(maintainer)` entry is appended to `wiki/log.md` (see
 `data/kb/MAINTAINER.md`). Every build ends with a **leak audit** that fails the
 build if any course path, course key, or non-allowlisted row survives.
 
+After the audit, the KB tree is packed into a single **`kb.tar.gz`** and the
+unpacked tree is dropped from staging: the public repo ships ~6 files instead
+of ~3,000, which keeps a token-free cold start clear of HF's anonymous
+per-request rate limits (~15 min unpacked vs a few min archived). The runtime
+extracts the archive after download (`app.config._extract_kb_archive`); the
+private bundle still ships the unpacked KB tree and is unaffected.
+
 The staged tree lives in `data/public_docs_bundle/` (gitignored). Uploading
 needs an `HF_TOKEN` with write access to the `towardsai-tutors` org; the script
 creates the public repo on first run. Pass `--include-contextual` to also ship

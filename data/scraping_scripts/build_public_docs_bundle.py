@@ -40,6 +40,15 @@ same way prod does, minus the non-doc rows:
 Every build ends with a **leak audit** that fails the build if any course
 path, course source key, or non-allowlisted row survives in the staged KB.
 
+After the audit, the staged ``kb/`` tree is packed into a single
+``kb.tar.gz`` and the tree is removed from staging. The public repo ships the
+archive, not the ~3,000 individual KB files: anonymous downloads are
+rate-limited per request, so the file-per-page layout stretched a token-free
+cold start to ~15 minutes. The runtime extracts the archive after download
+(``app.config._extract_kb_archive``). ``kb/**`` stays in the upload allow
+patterns so the prune step clears the unpacked tree that earlier publishes
+left in the repo.
+
 Usage::
 
     # build into data/public_docs_bundle/ and upload to the public repo
@@ -64,6 +73,7 @@ import logging
 import re
 import shutil
 import sqlite3
+import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -128,6 +138,7 @@ VECTOR_COLLECTION_NAME = "chroma-db-all_sources"
 DOCUMENT_DICT_FILE = "document_dict_all_sources.pkl"
 BM25_INDEX_FILE = "bm25_index_all_sources.pkl"
 KB_DIR_NAME = "kb"
+KB_ARCHIVE_NAME = "kb.tar.gz"
 
 PUBLIC_REPO_ID = "towardsai-tutors/ai-tutor-vector-db-public"
 DEFAULT_SOURCE_DIR = Path("data")
@@ -574,6 +585,26 @@ respective licenses.
     (stage_dir / "README.md").write_text(card, encoding="utf-8")
 
 
+def archive_kb(stage_dir: Path) -> dict:
+    """Pack the audited ``kb/`` tree into ``kb.tar.gz`` and drop the tree.
+
+    One archive instead of ~3,000 files keeps a token-free cold start out of
+    HF's anonymous per-request rate limits. Removing the tree afterwards makes
+    the prune step delete the unpacked ``kb/**`` files that earlier publishes
+    left in the repo (prune deletes remote files that match the allow patterns
+    but no longer exist locally).
+    """
+    kb_dir = stage_dir / KB_DIR_NAME
+    archive_path = stage_dir / KB_ARCHIVE_NAME
+    logger.info("Archiving %s -> %s", kb_dir, archive_path)
+    with tarfile.open(archive_path, "w:gz") as tar:
+        tar.add(kb_dir, arcname=KB_DIR_NAME)
+    shutil.rmtree(kb_dir)
+    size_mb = archive_path.stat().st_size / 1e6
+    logger.info("KB archive: %.1f MB (kb/ tree removed from staging)", size_mb)
+    return {"kb_archive_mb": round(size_mb, 1)}
+
+
 def build_bundle(
     *,
     source_dir: Path = DEFAULT_SOURCE_DIR,
@@ -595,11 +626,20 @@ def build_bundle(
     if include_contextual:
         summary["contextual_chunks"] = stage_contextual_nodes(source_dir, stage_dir)
     audit_staged_kb(stage_dir)
+    summary.update(archive_kb(stage_dir))
     return summary
 
 
 def public_allow_patterns(*, include_contextual: bool) -> list[str]:
-    patterns = [f"{VECTOR_DB_DIR}/**", f"{KB_DIR_NAME}/**", "README.md"]
+    # kb/** stays in the list even though staging only holds kb.tar.gz: the
+    # prune step deletes remote files that match the patterns but are absent
+    # locally, which clears the unpacked kb tree from pre-archive publishes.
+    patterns = [
+        f"{VECTOR_DB_DIR}/**",
+        f"{KB_DIR_NAME}/**",
+        KB_ARCHIVE_NAME,
+        "README.md",
+    ]
     if include_contextual:
         patterns.append(Path(CONTEXTUAL_NODES_PKL).name)
     return patterns
@@ -652,6 +692,7 @@ def main() -> None:
     )
     if "contextual_chunks" in summary:
         print(f"  contextual:     {summary['contextual_chunks']} chunks")
+    print(f"  KB archive:     {summary['kb_archive_mb']} MB (kb.tar.gz)")
     print(f"  staged at:      {stage_dir}")
     print("  leak audit:     passed")
 

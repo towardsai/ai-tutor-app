@@ -187,9 +187,33 @@ def test_rebuild_retrieval_pkls_drops_course_documents(tmp_path: Path) -> None:
 
 def test_public_allow_patterns_toggles_contextual() -> None:
     base = builder.public_allow_patterns(include_contextual=False)
-    assert base == ["chroma-db-all_sources/**", "kb/**", "README.md"]
+    # kb/** must stay listed even though staging ships kb.tar.gz: the prune
+    # step needs it to delete the unpacked tree from pre-archive publishes.
+    assert base == ["chroma-db-all_sources/**", "kb/**", "kb.tar.gz", "README.md"]
     with_ctx = builder.public_allow_patterns(include_contextual=True)
     assert "all_sources_contextual_nodes.pkl" in with_ctx
+
+
+def test_archive_kb_packs_tree_and_removes_it(tmp_path: Path) -> None:
+    kb = tmp_path / "kb"
+    (kb / "wiki").mkdir(parents=True)
+    (kb / "wiki" / "index.md").write_text("# Index\n", encoding="utf-8")
+    (kb / "generated").mkdir()
+    (kb / "generated" / "corpus_manifest.jsonl").write_text("{}\n", encoding="utf-8")
+
+    summary = builder.archive_kb(tmp_path)
+
+    archive = tmp_path / "kb.tar.gz"
+    assert archive.exists()
+    assert not kb.exists()  # tree dropped so the remote unpacked tree prunes
+    assert summary["kb_archive_mb"] >= 0
+
+    import tarfile
+
+    with tarfile.open(archive, "r:gz") as tar:
+        names = tar.getnames()
+    assert "kb/wiki/index.md" in names
+    assert "kb/generated/corpus_manifest.jsonl" in names
 
 
 def test_dataset_card_names_only_public_sources(tmp_path: Path) -> None:
