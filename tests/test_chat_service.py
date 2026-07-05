@@ -25,6 +25,7 @@ from app.chat_service import (
     checkpoint_messages_to_history,
     effective_tool_names,
     extract_query_urls,
+    extract_shell_source_matches,
     resolve_answer_citations,
     retrieve_tutor_context,
     sync_thread_with_history,
@@ -430,6 +431,89 @@ class ChatServiceTestCase(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0].url, "https://unsourced.example/page")
         self.assertEqual(kept[0].group, "web")
+
+    def test_extract_shell_source_matches_reader_body_links_are_reference_only(
+        self,
+    ) -> None:
+        # Regression for LangSmith trace 019f29f4-4e21-7a01-86b8-053161eb08d6:
+        # cat'ing one wiki topic page put all 20 docs it links to into the tool
+        # event, so the activity pill showed "20 sources" for a turn that read
+        # 2 docs. Links in a read file's body stay citable evidence but must
+        # not count as consulted sources.
+        def fake_resolve(reference, **_kwargs):
+            key = reference.rsplit("/", 1)[-1].removesuffix(".md")
+            if "raw/" not in reference:
+                return None
+            return SourceMatch(
+                doc_id=f"doc:{key}",
+                title=key,
+                url=f"https://example.com/{key}",
+                source_key="peft",
+                source_label="PEFT Docs",
+                score=1.0,
+                group="docs",
+            )
+
+        wiki_body = (
+            "## Evaluation\n"
+            "- [Lesson 29](raw/courses/agentic_ai_engineering/lesson-29.md)\n"
+            "- [Best practices](raw/docs/openai_docs/evaluation-best-practices.md)\n"
+        )
+        with patch(
+            "app.chat_service.resolve_manifest_reference", side_effect=fake_resolve
+        ):
+            wiki_cat = extract_shell_source_matches(
+                "cat wiki/topics/evaluation.md", wiki_body
+            )
+            doc_cat = extract_shell_source_matches(
+                "cat raw/courses/agentic_ai_engineering/lesson-29.md",
+                "Lesson body links [elsewhere](raw/docs/peft/lora.md).",
+            )
+            doc_sed = extract_shell_source_matches(
+                "sed -n '1,40p' raw/docs/peft/lora.md", "chunk of the lesson body"
+            )
+
+        # The wiki page itself is not a corpus doc; its linked docs are
+        # evidence only.
+        self.assertEqual(wiki_cat.browsed, [])
+        self.assertEqual(
+            [match.doc_id for match in wiki_cat.referenced],
+            ["doc:lesson-29", "doc:evaluation-best-practices"],
+        )
+        # Reading a corpus doc (fully or partially) counts it as browsed; the
+        # docs its body links to remain evidence only.
+        self.assertEqual([match.doc_id for match in doc_cat.browsed], ["doc:lesson-29"])
+        self.assertEqual(
+            [match.doc_id for match in doc_cat.referenced],
+            ["doc:lesson-29", "doc:lora"],
+        )
+        self.assertEqual([match.doc_id for match in doc_sed.browsed], ["doc:lora"])
+
+    def test_extract_shell_source_matches_search_hits_count_as_browsed(self) -> None:
+        def fake_resolve(reference, **_kwargs):
+            if "raw/docs/peft/lora.md" not in reference:
+                return None
+            return SourceMatch(
+                doc_id="peft:lora",
+                title="LoRA",
+                url="https://example.com/lora",
+                source_key="peft",
+                source_label="PEFT Docs",
+                score=1.0,
+                group="docs",
+            )
+
+        with patch(
+            "app.chat_service.resolve_manifest_reference", side_effect=fake_resolve
+        ):
+            matches = extract_shell_source_matches(
+                "rg -n LoraConfig raw/docs",
+                "raw/docs/peft/lora.md:12:class LoraConfig:",
+            )
+
+        # A search hit printed the doc's own lines: the model read part of it.
+        self.assertEqual([match.doc_id for match in matches.browsed], ["peft:lora"])
+        self.assertEqual(matches.referenced, matches.browsed)
 
     def test_stream_chat_emits_time_to_first_token(self) -> None:
         agent = FakeToolThenTextAgent([])

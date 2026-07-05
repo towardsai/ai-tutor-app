@@ -234,18 +234,25 @@ def parse_markdown_citations(text: str) -> list[tuple[str, str]]:
     # examples are never harvested as citations (see _strip_code_segments).
     scannable = _strip_code_segments(text)
     citations: list[tuple[str, str]] = []
-    link_re = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+    # The destination must be whitespace-free: with [^)]+ a malformed link the
+    # model closed with "]" instead of ")" matched across newlines up to the
+    # next real citation's closing paren, swallowing that citation into one
+    # garbage reference.
+    link_re = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
     for match in link_re.finditer(scannable):
         citations.append((match.group(1).strip(), match.group(2).strip()))
 
     linked_refs = {ref for _label, ref in citations}
     # Backticks are excluded from the URL body: even past code stripping, a
     # stray unbalanced backtick must never become part of a captured URL (which
-    # is how "https://`" leaked through before).
-    bare_re = re.compile(r"(?<!\()(?P<ref>https?://[^\s<>()`]+|kb://doc/[^\s<>()`]+)")
+    # is how "https://`" leaked through before). No opening-paren guard: a URL
+    # inside a well-formed link dedupes via linked_refs, and this pass is what
+    # recovers the URL of a malformed link (trailing "]"/":" junk stripped) so
+    # the citation still resolves to a source card.
+    bare_re = re.compile(r"(?P<ref>https?://[^\s<>()`]+|kb://doc/[^\s<>()`]+)")
     for match in bare_re.finditer(scannable):
-        ref = match.group("ref").rstrip(".,;")
-        if ref not in linked_refs:
+        ref = match.group("ref").rstrip(".,;:]")
+        if ref and ref not in linked_refs:
             citations.append(("", ref))
     for path in extract_raw_paths(scannable):
         if path not in linked_refs:

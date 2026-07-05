@@ -681,26 +681,32 @@ def resolve_answer_citations(
     return resolved
 
 
-def extract_shell_source_matches(command: str, output_text: str) -> list[SourceMatch]:
-    raw_paths = extract_raw_paths(output_text)
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = []
-    if tokens:
-        executable = tokens[0]
-        if executable == "cat":
-            raw_paths.extend(tokens[1:])
-        elif executable == "sed" and len(tokens) >= 4:
-            raw_paths.append(tokens[-1])
-        elif executable == "head":
-            start = 1
-            if len(tokens) > 2 and tokens[1] == "-n":
-                start = 3
-            raw_paths.extend(tokens[start:])
+# Commands whose output is the body of the file they were pointed at. raw/
+# links printed by these are references the model *saw* in that text, not docs
+# it consulted (e.g. the source list of a cat'ed wiki topic page).
+_KB_READ_EXECUTABLES = frozenset({"cat", "sed", "head"})
+
+
+@dataclass(frozen=True, slots=True)
+class ShellSourceMatches:
+    """Corpus docs a KB command touched, split by how directly.
+
+    ``browsed`` — docs the command actually read (cat/sed/head file args) or
+    returned as search hits (raw/ paths printed by rg/grep/find/ls). Attached
+    to the tool event, so the activity feed counts only consulted docs.
+    ``referenced`` — ``browsed`` plus docs merely linked in the printed text.
+    Recorded as citation evidence so the model may still cite a doc it saw
+    referenced in a wiki page, without that mention inflating the feed.
+    """
+
+    browsed: list[SourceMatch]
+    referenced: list[SourceMatch]
+
+
+def _resolve_shell_paths(paths: list[str]) -> list[SourceMatch]:
     matches: list[SourceMatch] = []
     seen: set[str] = set()
-    for path in raw_paths:
+    for path in paths:
         match = resolve_manifest_reference(path)
         if not match:
             continue
@@ -710,6 +716,32 @@ def extract_shell_source_matches(command: str, output_text: str) -> list[SourceM
         seen.add(key)
         matches.append(match)
     return matches
+
+
+def extract_shell_source_matches(command: str, output_text: str) -> ShellSourceMatches:
+    output_paths = extract_raw_paths(output_text)
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = []
+    executable = tokens[0] if tokens else ""
+    arg_paths: list[str] = []
+    if executable == "cat":
+        arg_paths.extend(tokens[1:])
+    elif executable == "sed" and len(tokens) >= 4:
+        arg_paths.append(tokens[-1])
+    elif executable == "head":
+        start = 1
+        if len(tokens) > 2 and tokens[1] == "-n":
+            start = 3
+        arg_paths.extend(tokens[start:])
+    browsed_paths = (
+        arg_paths if executable in _KB_READ_EXECUTABLES else [*arg_paths, *output_paths]
+    )
+    return ShellSourceMatches(
+        browsed=_resolve_shell_paths(browsed_paths),
+        referenced=_resolve_shell_paths([*arg_paths, *output_paths]),
+    )
 
 
 def normalize_model_name(model_name: str) -> str:
@@ -1865,8 +1897,9 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                         command = str(
                             args.get("command") if isinstance(args, dict) else ""
                         )
-                        call_matches = extract_shell_source_matches(command, payload)
-                        _record_evidence(shell_evidence, call_matches)
+                        shell_matches = extract_shell_source_matches(command, payload)
+                        _record_evidence(shell_evidence, shell_matches.referenced)
+                        call_matches = shell_matches.browsed
                     yield ChatEvent(
                         "tool_call_completed",
                         {
