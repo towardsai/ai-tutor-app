@@ -266,6 +266,47 @@ class ParseMarkdownCitationsTestCase(unittest.TestCase):
         )
         self.assertEqual(citations, [("", "https://example.com/guide")])
 
+    # Faithful excerpt of the answer from LangSmith trace
+    # 019f29f4-4e21-7a01-86b8-053161eb08d6 ("How do I evaluate and iterate on
+    # my prompts..."): the model closed two citations with "]" instead of ")".
+    LESSON_URL = (
+        "https://academy.towardsai.net/courses/take/agent-engineering/multimedia/"
+        "71589897-lesson-29-defining-the-evaluation-processes-and-metrics-theory"
+    )
+    OPENAI_URL = (
+        "https://developers.openai.com/api/docs/guides/evaluation-best-practices"
+    )
+    MALFORMED_CLOSER_ANSWER = (
+        f"You must adopt EDD [Lesson 29: Evaluation Processes and Metrics]({LESSON_URL}).\n\n"
+        "### 1. The Optimization Flywheel Process\n"
+        "Set up a loop known as the **Optimization Flywheel** "
+        f"[Lesson 29: Evaluation Processes and Metrics]({LESSON_URL}]:\n\n"
+        "1. **Gather a Static Dataset:** Compile 20 to 100 diverse inputs "
+        f"[OpenAI Evaluation Best Practices]({OPENAI_URL}). Mine failures from "
+        f"production logs [OpenAI Evaluation Best Practices]({OPENAI_URL}).\n"
+    )
+
+    def test_malformed_link_does_not_swallow_following_citations(self) -> None:
+        # The bug: with a destination pattern of [^)]+ the "]"-closed link
+        # matched across newlines up to the next citation's closing paren,
+        # swallowing the following OpenAI citation into one garbage reference
+        # that resolved to nothing. The malformed reference itself dedupes
+        # against the well-formed Lesson 29 citation.
+        refs = [
+            ref
+            for _label, ref in parse_markdown_citations(self.MALFORMED_CLOSER_ANSWER)
+        ]
+        self.assertEqual(refs, [self.LESSON_URL, self.OPENAI_URL, self.OPENAI_URL])
+
+    def test_malformed_link_url_is_recovered(self) -> None:
+        # A citation the model closed with "]" instead of ")" still yields its
+        # URL (as a bare, label-less reference) so it can resolve to a card
+        # even when no well-formed citation of the same doc exists.
+        citations = parse_markdown_citations(
+            "See [Lesson 29](https://example.com/lesson-29]: for the flywheel."
+        )
+        self.assertEqual(citations, [("", "https://example.com/lesson-29")])
+
 
 if __name__ == "__main__":
     unittest.main()

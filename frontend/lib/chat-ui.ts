@@ -208,34 +208,54 @@ function stripCodeSegments(text: string) {
 // micromark parses balanced parens inside a link destination, so a regex that
 // stops at the first ")" truncates URLs like .../Spring_(framework). Scan the
 // destination the way the parser does: <...> form, or up to whitespace / the
-// first unbalanced closing paren.
+// first unbalanced closing paren. The destination only renders as an anchor
+// when it is followed (after optional whitespace) by the closing ")" or a
+// link title; a citation the model closed with "]" instead of ")" stays plain
+// text in the rendered markdown, so it must not consume a citation number
+// (which would leave a gap like 1, 3 in the displayed chips).
 function scanLinkDestination(text: string, start: number): string {
   let index = start;
   while (index < text.length && /\s/.test(text[index])) {
     index += 1;
   }
-  if (text[index] === "<") {
-    const end = text.indexOf(">", index + 1);
-    return end === -1 ? "" : text.slice(index + 1, end);
-  }
-  let depth = 0;
+  let url = "";
   let end = index;
-  while (end < text.length) {
-    const char = text[end];
-    if (/\s/.test(char)) {
-      break;
+  if (text[index] === "<") {
+    const close = text.indexOf(">", index + 1);
+    if (close === -1) {
+      return "";
     }
-    if (char === "(") {
-      depth += 1;
-    } else if (char === ")") {
-      if (depth === 0) {
+    url = text.slice(index + 1, close);
+    end = close + 1;
+  } else {
+    let depth = 0;
+    while (end < text.length) {
+      const char = text[end];
+      if (/\s/.test(char)) {
         break;
       }
-      depth -= 1;
+      if (char === "(") {
+        depth += 1;
+      } else if (char === ")") {
+        if (depth === 0) {
+          break;
+        }
+        depth -= 1;
+      }
+      end += 1;
     }
+    url = text.slice(index, end);
+  }
+  while (end < text.length && /\s/.test(text[end])) {
     end += 1;
   }
-  return text.slice(index, end);
+  const terminator = text[end];
+  const rendersAsLink =
+    terminator === ")" ||
+    terminator === '"' ||
+    terminator === "'" ||
+    terminator === "(";
+  return rendersAsLink ? url : "";
 }
 
 const LINK_OPENER_PATTERN = /(!?)\[[^\]]*\]\(/g;
