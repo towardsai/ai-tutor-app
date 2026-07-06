@@ -119,8 +119,12 @@ def main() -> None:
         help="Assert NO compaction anywhere (full_history baseline).",
     )
     args = parser.parse_args()
-    ok = all(check_run(Path(r), args.expect_none) for r in args.runs)
-    sys.exit(0 if ok else 1)
+    # Check every run before aggregating: all() over a bare generator would
+    # short-circuit on the first failing run and silently skip the later runs'
+    # checks and per-session diagnostics (the exit code would be right, but the
+    # output would hide where else the gate failed).
+    results = [check_run(Path(r), args.expect_none) for r in args.runs]
+    sys.exit(0 if all(results) else 1)
 
 
 if __name__ == "__main__":
