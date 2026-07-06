@@ -257,8 +257,11 @@ def parse_markdown_citations(text: str) -> list[tuple[str, str]]:
     # The destination must be whitespace-free: with [^)]+ a malformed link the
     # model closed with "]" instead of ")" matched across newlines up to the
     # next real citation's closing paren, swallowing that citation into one
-    # garbage reference.
-    link_re = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+    # garbage reference. The label allows one level of balanced brackets
+    # (CommonMark-legal, e.g. [LoRA [PEFT docs]](url)), mirroring the
+    # frontend's LINK_OPENER_PATTERN so such citations keep their label
+    # instead of falling back to the label-less bare-URL pass.
+    link_re = re.compile(r"\[((?:[^\[\]]|\[[^\]]*\])+)\]\(([^)\s]+)\)")
     for match in link_re.finditer(scannable):
         citations.append((match.group(1).strip(), match.group(2).strip()))
 

@@ -352,6 +352,15 @@ class ParseMarkdownCitationsTestCase(unittest.TestCase):
         )
         self.assertEqual(citations, [("", "https://example.com/lesson-29")])
 
+    def test_balanced_brackets_in_label_keep_label(self) -> None:
+        # CommonMark allows balanced brackets in link text; the label must
+        # survive (mirrors the frontend's LINK_OPENER_PATTERN) instead of the
+        # citation degrading to a label-less bare-URL recovery.
+        citations = parse_markdown_citations(
+            "LoRA cuts trainable params [LoRA [PEFT docs]](https://example.com/lora)."
+        )
+        self.assertEqual(citations, [("LoRA [PEFT docs]", "https://example.com/lora")])
+
 
 if __name__ == "__main__":
     unittest.main()
