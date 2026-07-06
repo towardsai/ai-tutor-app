@@ -282,9 +282,10 @@ def validate(judge_csv: Path, human_csv: Path) -> None:
 def main() -> None:
     # The judge does not import app code, so load .env ourselves for the
     # Anthropic key (app.config does the same on import for run_battery).
+    # Default precedence: shell-set vars win over .env, matching app.config.
     from dotenv import load_dotenv
 
-    load_dotenv(override=True)
+    load_dotenv()
 
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)

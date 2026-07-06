@@ -18,7 +18,7 @@ from data.scraping_scripts.source_registry import (
 
 from .agent_tracing import configure_langsmith_environment, langsmith_tracing_enabled
 
-load_dotenv(override=True)
+load_dotenv()
 configure_langsmith_environment()
 
 # Server logs go to stdout (captured by the HF Space logs); LangSmith handles agent traces.
