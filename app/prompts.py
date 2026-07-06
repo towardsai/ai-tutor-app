@@ -4,6 +4,8 @@ import logging
 import os
 from pathlib import Path
 
+from .config import KB_AGENTS_PATH
+
 logger = logging.getLogger(__name__)
 
 
@@ -11,7 +13,10 @@ BASE_PROMPT_HEADER = """You are an AI teacher for applied AI, LLM, RAG, and Pyth
 
 Your job is to answer student questions clearly and accurately."""
 
-DEFAULT_KB_AGENTS_PATH = "data/kb/AGENTS.md"
+# Follows config.KB_DIR (and thus AI_TUTOR_KB_DIR) so the prompt builder reads
+# the same AGENTS.md that ensure_kb_agents_md() writes; AI_TUTOR_KB_AGENTS_PATH
+# still overrides it per-file in kb_agents_path().
+DEFAULT_KB_AGENTS_PATH = KB_AGENTS_PATH
 
 RETRIEVAL_TOOL_LINE = (
     "- `retrieve_tutor_context` — retrieval over the course and documentation\n"

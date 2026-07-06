@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import os
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from app import config
 
@@ -41,6 +44,40 @@ def _write_bundle_files(tmp_path: Path, *, include_bm25: bool = True) -> None:
     (tmp_path / "kb" / "wiki").mkdir(parents=True, exist_ok=True)
     (tmp_path / "kb" / "wiki" / "index.md").write_text("# index", encoding="utf-8")
     (tmp_path / "template.md").write_text("# KB rules", encoding="utf-8")
+
+
+def test_kb_dir_env_var_rebinds_all_kb_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # AI_TUTOR_KB_DIR must move KB_DIR *and* every derived path together,
+    # otherwise run_kb_command (kb_shell reads the same env var) browses one
+    # tree while citation resolution and _bundle_complete() read another.
+    custom = tmp_path / "custom-kb"
+    # Trailing slash on purpose: it must be normalized away, because
+    # kb_manifest composes prefixes as f"{KB_DIR}/..." and a doubled slash
+    # would break its startswith/strip logic.
+    monkeypatch.setenv("AI_TUTOR_KB_DIR", f"{custom}/")
+    try:
+        importlib.reload(config)
+        assert config.KB_DIR == str(custom)
+        assert config.KB_MANIFEST_PATH == f"{custom}/generated/corpus_manifest.jsonl"
+        assert config.KB_INDEX_PATH == f"{custom}/wiki/index.md"
+        assert config.KB_AGENTS_PATH == f"{custom}/AGENTS.md"
+    finally:
+        # Restore the module to its normal (env-var-absent) state before any
+        # other test imports constants from it.
+        monkeypatch.delenv("AI_TUTOR_KB_DIR", raising=False)
+        importlib.reload(config)
+
+
+def test_kb_dir_defaults_without_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_TUTOR_KB_DIR", raising=False)
+    try:
+        importlib.reload(config)
+        assert config.KB_DIR == "data/kb"
+        assert config.KB_AGENTS_PATH == "data/kb/AGENTS.md"
+    finally:
+        importlib.reload(config)
 
 
 def test_missing_bm25_triggers_download(tmp_path: Path) -> None:

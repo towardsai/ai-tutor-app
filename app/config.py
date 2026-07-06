@@ -55,7 +55,15 @@ CHROMA_SQLITE_PATH = f"{VECTOR_DB_DIR}/chroma.sqlite3"
 # tree layout, so only the download source changes here.
 VECTOR_DB_REPO_ID = "towardsai-tutors/ai-tutor-vector-db"
 PUBLIC_VECTOR_DB_REPO_ID = "towardsai-tutors/ai-tutor-vector-db-public"
-KB_DIR = "data/kb"
+# KB paths honor AI_TUTOR_KB_DIR — the same env var app/kb_shell.py reads — so
+# the browsing sandbox and citation resolution (kb_manifest) always see one
+# tree. Note the cold-start HF bundle download only materializes data/kb, so a
+# custom AI_TUTOR_KB_DIR must point at an already-populated KB tree. Path()
+# round-trip keeps config's relative-string convention while normalizing
+# trailing slashes, which the f"{KB_DIR}/..." prefix logic below and in
+# kb_manifest relies on.
+_KB_DIR_ENV = os.getenv("AI_TUTOR_KB_DIR", "").strip()
+KB_DIR = str(Path(_KB_DIR_ENV)) if _KB_DIR_ENV else "data/kb"
 KB_MANIFEST_PATH = f"{KB_DIR}/generated/corpus_manifest.jsonl"
 KB_INDEX_PATH = f"{KB_DIR}/wiki/index.md"
 KB_AGENTS_PATH = f"{KB_DIR}/AGENTS.md"
@@ -234,6 +242,15 @@ def ensure_local_vector_db() -> None:
                 "Vector database missing or incomplete locally, downloading "
                 "from Hugging Face"
             )
+            if KB_DIR != "data/kb":
+                # The bundle extracts to fixed paths under data/; it cannot
+                # populate a custom KB dir, which must be pre-populated.
+                logger.warning(
+                    "AI_TUTOR_KB_DIR=%s: the Hugging Face bundle only "
+                    "materializes data/kb, so a custom KB dir must already "
+                    "contain the KB tree.",
+                    KB_DIR,
+                )
             _download_bundle()
         ensure_kb_agents_md()
         _BUNDLE_READY = _bundle_complete() and os.path.exists(KB_AGENTS_PATH)
