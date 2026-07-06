@@ -55,7 +55,7 @@ def upload_files_to_huggingface(repo_id="towardsai-tutors/ai-tutor-data"):
         print(
             f"Error: The following critical files were not found: {', '.join(critical_missing)}"
         )
-        # return False
+        return False
 
     if missing_files:
         print(
@@ -69,7 +69,9 @@ def upload_files_to_huggingface(repo_id="towardsai-tutors/ai-tutor-data"):
         # Check if repository exists, create if it doesn't
         print(f"Repository {repo_id} exists")
 
-        # Upload all existing files
+        # Upload all existing files, continuing past per-file failures so the
+        # repo gets as much fresh data as possible, but report failure overall.
+        failed_files = []
         for file_path in existing_files:
             try:
                 file_name = os.path.basename(file_path)
@@ -86,7 +88,14 @@ def upload_files_to_huggingface(repo_id="towardsai-tutors/ai-tutor-data"):
                 )
             except Exception as e:
                 print(f"Error uploading {file_path}: {e}")
-                # Continue with other files even if one fails
+                failed_files.append(file_path)
+
+        if failed_files:
+            print(
+                f"Error: failed to upload {len(failed_files)} file(s): "
+                f"{', '.join(failed_files)}"
+            )
+            return False
 
         return True
     except HuggingFaceAuthError as e:
