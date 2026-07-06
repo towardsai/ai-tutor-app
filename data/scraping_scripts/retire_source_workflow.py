@@ -219,8 +219,9 @@ def find_source_config_block(text: str, source: str) -> tuple[int, int] | None:
 
 def remove_source_from_registry_text(text: str, source: str) -> tuple[str, bool]:
     original = text
-    block = find_source_config_block(text, source)
-    if block is not None:
+    # Remove every dict-entry block for the source (SOURCE_CONFIGS and
+    # SOURCE_DISPLAY_INFO both key top-level entries as `    "<source>": {`).
+    while (block := find_source_config_block(text, source)) is not None:
         start, end = block
         text = text[:start] + text[end:]
 

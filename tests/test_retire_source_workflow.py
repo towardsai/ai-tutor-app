@@ -45,6 +45,63 @@ UI_SOURCE_KEYS = (
     ast.parse(updated)
 
 
+def test_remove_source_from_registry_text_removes_all_dict_entry_blocks():
+    """A source keyed in both SOURCE_CONFIGS and SOURCE_DISPLAY_INFO must have
+    every block removed, not just the first one found in the file."""
+    registry = """SOURCE_CONFIGS = {
+    "openai_cookbooks": {
+        "output_file": "data/openai_cookbooks_data.jsonl",
+        "nested": {"keep": "balanced"},
+    },
+    "langchain": {
+        "output_file": "data/langchain_data.jsonl",
+    },
+}
+
+SOURCE_KEY_TO_LABEL = {
+    "openai_cookbooks": "OpenAI Cookbooks",
+    "langchain": "LangChain Docs",
+}
+
+SOURCE_DISPLAY_INFO = {
+    "openai_cookbooks": {
+        "ui_label": "OpenAI Cookbooks",
+        "description": (
+            "Practical guides with braces {like this} and code examples "
+            "for the OpenAI API."
+        ),
+        "url": "https://cookbook.openai.com",
+    },
+    "langchain": {
+        "ui_label": "LangChain",
+        "description": (
+            "Framework for building LLM apps: chains, agents, tool-calling, "
+            "and production observability."
+        ),
+        "url": "https://docs.langchain.com",
+    },
+}
+
+UI_SOURCE_KEYS = (
+    "openai_cookbooks",
+    "langchain",
+)
+"""
+
+    updated, changed = remove_source_from_registry_text(
+        registry,
+        "openai_cookbooks",
+    )
+
+    assert changed is True
+    assert "openai_cookbooks" not in updated
+    assert "cookbook.openai.com" not in updated
+    # The other source's blocks survive in both dicts.
+    assert updated.count('"langchain": {') == 2
+    assert '"ui_label": "LangChain"' in updated
+    ast.parse(updated)
+
+
 def test_remove_source_from_registry_text_ignores_missing_source():
     registry = 'SOURCE_CONFIGS = {"langchain": {"output_file": "x"}}\n'
 
