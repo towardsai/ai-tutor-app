@@ -122,11 +122,18 @@ class GoogleSearchActivity:
         Activity after a completed cycle starts a fresh synthetic call (a
         later model step ran another search), so completion timing per step
         stays accurate.
+
+        Query dedupe is cycle-scoped: within an active cycle it filters the
+        repeats Gemini streams in every cumulative metadata payload, but once
+        a cycle completes any query in later metadata is new activity, even a
+        repeat of an earlier step's search. (Grounding evidence stays deduped
+        turn-wide via ``web_evidence`` so source cards are not duplicated.)
         """
+        seen_queries = [] if self._completed else self._queries
         new_queries = [
             q
             for q in extract_web_search_queries(response_metadata)
-            if q not in self._queries
+            if q not in seen_queries
         ]
         new_grounding = extract_grounding_source_matches(
             response_metadata,
