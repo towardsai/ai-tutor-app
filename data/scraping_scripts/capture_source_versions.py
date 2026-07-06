@@ -98,21 +98,6 @@ def fetch_default_branch_sha(owner: str, repo: str) -> Optional[str]:
     return sha[:7] if isinstance(sha, str) else None
 
 
-def fetch_last_modified(url: str) -> Optional[str]:
-    try:
-        response = requests.head(url, timeout=30, allow_redirects=True)
-    except requests.RequestException as exc:
-        print(f"  ! network error: {exc}", file=sys.stderr)
-        return None
-    if not response.ok:
-        print(
-            f"  ! HTTP {response.status_code} for {url}: {response.text[:160]}",
-            file=sys.stderr,
-        )
-        return None
-    return response.headers.get("Last-Modified")
-
-
 def capture_github_source(source: str) -> dict:
     owner, repo = VERSION_REPOS[source]
     print(f"- {source}: querying {owner}/{repo}")
@@ -124,11 +109,11 @@ def capture_github_source(source: str) -> dict:
 
 
 def capture_llms_txt_source(source: str) -> dict:
-    config = SOURCE_CONFIGS[source]
-    urls = [str(url) for url in config.get("llms_txt_urls", [])]
-    print(f"- {source}: querying llms.txt metadata")
+    print(f"- {source}: llms.txt source, no library version")
+    # llms.txt docs sites have no release version; freshness is conveyed by
+    # indexedAt alone (the index's Last-Modified is ~always the download date).
     return {
-        "version": fetch_last_modified(urls[0]) if urls else None,
+        "version": None,
         "sha": None,
         "indexedAt": datetime.now(timezone.utc).date().isoformat(),
     }
