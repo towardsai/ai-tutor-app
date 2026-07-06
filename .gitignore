@@ -203,6 +203,10 @@ frontend/*.tsbuildinfo
 *.pkl
 *.png
 *.mov
+# Timestamped backups written by retire_source_workflow.py (e.g.
+# data/all_sources_data.jsonl.<ts>.bak). They hold the same private corpus as
+# the ignored originals above, so the .bak copies must be ignored too.
+*.bak
 
 # Keep assets + configs needed for deployment
 !frontend/package.json
