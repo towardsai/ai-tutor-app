@@ -265,6 +265,9 @@ class ApiTestCase(unittest.TestCase):
         part_types = [part["type"] for part in parts]
         self.assertIn("error", part_types)
         self.assertIn("finish", part_types)
+        # The AI SDK client aborts stream processing at the error chunk, so
+        # the terminating parts must already be on the wire before it.
+        self.assertLess(part_types.index("finish"), part_types.index("error"))
 
     def test_chat_stream_restarts_reasoning_after_tool_activity(self) -> None:
         async def fake_stream_chat(_request):
@@ -366,6 +369,50 @@ class ApiTestCase(unittest.TestCase):
         self.assertLess(
             part_types.index("tool-output-error"), part_types.index("finish")
         )
+
+    def test_finish_error_emits_error_part_after_cleanup_parts(self) -> None:
+        """The AI SDK client's onError rethrows, aborting stream processing
+        at the error chunk and dropping everything after it. If the error
+        part came first, the cleanup parts would never apply and open tool
+        calls would render as running forever."""
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+        encoder.encode(
+            ChatEvent(
+                "tool_call_started",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_open",
+                    "tool_name": "retrieve_tutor_context",
+                    "args": {"query": "x"},
+                    "args_text": "x",
+                },
+            )
+        )
+        # Text streamed after the tool call leaves an open text block too.
+        encoder.encode(ChatEvent("text_delta", {"message_id": "m1", "text": "Par"}))
+
+        parts = encoder.finish_error("boom")
+
+        part_types = [p["type"] for p in parts]
+        self.assertEqual(part_types[-1], "error")
+        error_index = part_types.index("error")
+        for cleanup in ("text-end", "tool-output-error", "finish-step", "finish"):
+            self.assertIn(cleanup, part_types)
+            self.assertLess(part_types.index(cleanup), error_index)
+
+    def test_finish_error_after_completion_only_emits_error_part(self) -> None:
+        """A failure after message_completed (encoder already closed) must
+        not re-emit terminating parts, just the error."""
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+        encoder.encode(
+            ChatEvent("message_completed", {"message_id": "m1", "answer": "done"})
+        )
+
+        parts = encoder.finish_error("boom")
+
+        self.assertEqual(parts, [{"type": "error", "errorText": "boom"}])
 
     def test_unannounced_tool_completion_announces_before_output(self) -> None:
         """A completion for a call id the stream never announced must create

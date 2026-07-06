@@ -548,7 +548,7 @@ class UIMessageStreamEncoder:
         return parts
 
     def finish_error(self, error_text: str) -> list[dict[str, Any]]:
-        parts: list[dict[str, Any]] = [{"type": "error", "errorText": error_text}]
+        parts: list[dict[str, Any]] = []
         if not self.closed:
             parts.extend(self.close_reasoning_block())
             if self.text_block_id:
@@ -568,6 +568,11 @@ class UIMessageStreamEncoder:
                 parts.append({"type": "finish-step"})
                 parts.append({"type": "finish"})
             self.closed = True
+        # The error part must come LAST: the AI SDK client's onError rethrows,
+        # which aborts stream processing at the error chunk and drops every
+        # part after it — the cleanup parts above only take effect if they
+        # arrive first.
+        parts.append({"type": "error", "errorText": error_text})
         return parts
 
 
