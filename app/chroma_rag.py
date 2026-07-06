@@ -32,6 +32,10 @@ DEFAULT_FUSION_TOP_K = 30
 DEFAULT_RERANK_TOP_K = 5
 DEFAULT_RRF_K = 60
 DEFAULT_CONTEXT_TOKEN_BUDGET = 100_000
+# Reranked results below this relevance score are dropped before the token
+# budget is filled. Shared with the GraphRAG backend so both eval arms apply
+# the same low-relevance floor.
+RERANK_SCORE_FLOOR = 0.10
 DEFAULT_EMBED_MODEL = "embed-v4.0"
 DEFAULT_RERANK_MODEL = "rerank-v4.0-fast"
 DEFAULT_ENCODING = "cl100k_base"
@@ -1120,9 +1124,16 @@ def reciprocal_rank_fusion(
     representatives: dict[str, SearchResult] = {}
 
     for ranked_results in ranked_lists:
+        scored_keys: set[str] = set()
         for rank, result in enumerate(ranked_results, start=1):
             key = result_dedupe_key(result)
-            fused_scores[key] = fused_scores.get(key, 0.0) + 1.0 / (rrf_k + rank)
+            # Standard RRF: a key contributes once per ranked list, at its best
+            # rank. Without this, a section split into several chunks that all
+            # land in one retriever's top-k collects one contribution per chunk
+            # and masquerades as cross-retriever consensus.
+            if key not in scored_keys:
+                scored_keys.add(key)
+                fused_scores[key] = fused_scores.get(key, 0.0) + 1.0 / (rrf_k + rank)
 
             current = representatives.get(key)
             if current is None:
@@ -1199,7 +1210,19 @@ class LocalChromaRetriever:
         )
 
         client = chromadb.PersistentClient(path=db_path)
-        self._collection = client.get_or_create_collection(name=collection_name)
+        try:
+            # get_collection (not get_or_create_collection): a broken or
+            # mismatched bundle must fail loudly at startup instead of silently
+            # creating an empty collection that degrades dense search to zero
+            # hits forever.
+            self._collection = client.get_collection(name=collection_name)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Chroma collection '{collection_name}' not found in vector db "
+                f"at '{db_path}'. The bundle is likely missing, incomplete, or "
+                "mismatched: delete the directory and restart to re-download "
+                "it, or rebuild it with create_vector_stores."
+            ) from exc
         with open(document_dict_path, "rb") as handle:
             self._document_dict: dict[str, dict[str, Any]] = pickle.load(handle)
 
@@ -1377,7 +1400,7 @@ class LocalChromaRetriever:
         filtered: list[SearchResult] = []
         total_tokens = 0
         for result in results:
-            if result.score < 0.10:
+            if result.score < RERANK_SCORE_FLOOR:
                 continue
 
             # disallowed_special=() so literal "<|endoftext|>" in chunks doesn't crash.
@@ -1385,7 +1408,11 @@ class LocalChromaRetriever:
                 self._encoding.encode(result.content, disallowed_special=())
             )
             if total_tokens + result_tokens > budget:
-                break
+                # An oversized result (e.g. a retrieve_doc full document under a
+                # small per-request budget) must not cut off the whole list:
+                # skip it and keep filling the budget with lower-ranked results
+                # that fit, preserving rank order among the kept ones.
+                continue
 
             total_tokens += result_tokens
             filtered.append(result)

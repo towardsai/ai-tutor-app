@@ -7,12 +7,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import chromadb
+import tiktoken
 from data.scraping_scripts.add_context_to_nodes import process
 from data.scraping_scripts.create_vector_stores import write_retrieval_artifacts
 from llama_index.core import Document
 from app.chroma_rag import (
     BM25Index,
     ChunkRecord,
+    LocalChromaRetriever,
     build_chunk_records,
     heading_aware_markdown_chunks,
     reciprocal_rank_fusion,
@@ -253,7 +256,66 @@ After the example.
         self.assertEqual(fused[0].chunk_id, "overlap")
         self.assertEqual(fused[0].retrieval_method, "hybrid")
 
-    def _result(self, chunk_id: str, score: float, method: str) -> SearchResult:
+    def test_rrf_counts_each_key_once_per_ranked_list(self) -> None:
+        # A section split into several chunks can land at multiple ranks of ONE
+        # retriever's list (same dedupe key). Standard RRF scores a key once per
+        # list, at its best rank; per-occurrence accumulation would let one
+        # retriever's duplicates masquerade as cross-retriever consensus.
+        dup_top = self._result("dup:0", 0.9, "dense", doc_id="dup-doc")
+        dup_mid = self._result("dup:1", 0.8, "dense", doc_id="dup-doc")
+        dup_low = self._result("dup:2", 0.7, "dense", doc_id="dup-doc")
+        consensus_dense = self._result("uni:0", 0.6, "dense", doc_id="consensus-doc")
+        consensus_bm25 = self._result("uni:0", 5.0, "bm25", doc_id="consensus-doc")
+
+        fused = reciprocal_rank_fusion(
+            [[dup_top, dup_mid, dup_low, consensus_dense], [consensus_bm25]],
+            top_k=5,
+        )
+
+        by_doc = {result.doc_id: result for result in fused}
+        # One contribution at the best rank (1), nothing from ranks 2-3.
+        self.assertAlmostEqual(by_doc["dup-doc"].score, 1.0 / 61)
+        # Rank 4 in dense + rank 1 in bm25.
+        self.assertAlmostEqual(by_doc["consensus-doc"].score, 1.0 / 64 + 1.0 / 61)
+        # Genuine cross-retriever consensus outranks single-list duplication.
+        self.assertEqual(fused[0].doc_id, "consensus-doc")
+        # Representative selection still works: best-scoring dense duplicate.
+        self.assertEqual(by_doc["dup-doc"].chunk_id, "dup:0")
+
+    def _result(
+        self,
+        chunk_id: str,
+        score: float,
+        method: str,
+        *,
+        doc_id: str | None = None,
+        content: str | None = None,
+        retrieve_doc: bool = False,
+    ) -> SearchResult:
+        return SearchResult(
+            chunk_id=chunk_id,
+            doc_id=doc_id if doc_id is not None else chunk_id,
+            title=chunk_id,
+            url="",
+            source="test",
+            retrieve_doc=retrieve_doc,
+            tokens=10,
+            score=score,
+            content=content if content is not None else chunk_id,
+            chunk_content=content if content is not None else chunk_id,
+            heading_path="section",
+            retrieval_method=method,
+        )
+
+
+class TokenBudgetTestCase(unittest.TestCase):
+    def _retriever(self) -> LocalChromaRetriever:
+        retriever = LocalChromaRetriever.__new__(LocalChromaRetriever)
+        retriever._encoding = tiktoken.get_encoding("cl100k_base")
+        retriever._token_budget = 100_000
+        return retriever
+
+    def _result(self, chunk_id: str, score: float, content: str) -> SearchResult:
         return SearchResult(
             chunk_id=chunk_id,
             doc_id=chunk_id,
@@ -263,11 +325,74 @@ After the example.
             retrieve_doc=False,
             tokens=10,
             score=score,
-            content=chunk_id,
-            chunk_content=chunk_id,
+            content=content,
+            chunk_content=content,
             heading_path="section",
-            retrieval_method=method,
+            retrieval_method="dense",
         )
+
+    def test_budget_skips_oversized_result_and_fills_with_smaller(self) -> None:
+        # A rank-1 retrieve_doc result whose full document exceeds a small
+        # per-request budget must not empty the whole result list: it is
+        # skipped and the budget is filled with lower-ranked results that fit,
+        # in rank order.
+        retriever = self._retriever()
+        oversized = self._result("big", 0.9, "word " * 500)
+        small_one = self._result("small-1", 0.8, "word " * 15)
+        small_two = self._result("small-2", 0.7, "word " * 15)
+
+        kept = retriever._apply_token_budget(
+            [oversized, small_one, small_two], token_budget=50
+        )
+        self.assertEqual([result.chunk_id for result in kept], ["small-1", "small-2"])
+
+        # With the default (large) budget everything still fits.
+        kept_all = retriever._apply_token_budget([oversized, small_one, small_two])
+        self.assertEqual(len(kept_all), 3)
+
+
+class CollectionOpenTestCase(unittest.TestCase):
+    def _write_document_dict(self, directory: str) -> str:
+        path = Path(directory) / "document_dict_test.pkl"
+        with open(path, "wb") as handle:
+            pickle.dump({}, handle)
+        return str(path)
+
+    def test_init_fails_loudly_when_collection_missing(self) -> None:
+        # A broken/mismatched bundle must raise at startup instead of silently
+        # creating an empty collection that returns zero dense hits forever.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            document_dict_path = self._write_document_dict(temp_dir)
+
+            with self.assertRaises(RuntimeError) as ctx:
+                LocalChromaRetriever(
+                    db_path=temp_dir,
+                    collection_name="missing-collection",
+                    document_dict_path=document_dict_path,
+                    cohere_api_key="fake",
+                )
+
+            message = str(ctx.exception)
+            self.assertIn("missing-collection", message)
+            self.assertIn(temp_dir, message)
+
+    def test_init_opens_collection_created_beforehand(self) -> None:
+        # Mirrors production: create_vector_stores creates the collection; the
+        # retriever only opens it.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            chromadb.PersistentClient(path=temp_dir).create_collection(
+                name="test-collection"
+            )
+            document_dict_path = self._write_document_dict(temp_dir)
+
+            retriever = LocalChromaRetriever(
+                db_path=temp_dir,
+                collection_name="test-collection",
+                document_dict_path=document_dict_path,
+                cohere_api_key="fake",
+            )
+
+            self.assertEqual(retriever._collection.name, "test-collection")
 
 
 if __name__ == "__main__":
