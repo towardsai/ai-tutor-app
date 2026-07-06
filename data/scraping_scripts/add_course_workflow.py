@@ -37,7 +37,7 @@ import os
 import pickle
 import subprocess
 import sys
-from typing import Dict, List, Set
+from typing import Dict, List
 
 from dotenv import load_dotenv
 from huggingface_hub import hf_hub_download
@@ -52,7 +52,7 @@ from data.scraping_scripts.source_registry import (
     required_data_files,
     source_output_files,
 )
-from app.chroma_rag import get_chunk_record_doc_id
+from data.scraping_scripts.update_docs_workflow import add_context_to_nodes
 
 # Load environment variables from .env file
 load_dotenv()
@@ -142,14 +142,6 @@ def load_jsonl(file_path: str) -> List[Dict]:
         for line in f:
             data.append(json.loads(line))
     return data
-
-
-def save_jsonl(data: List[Dict], file_path: str) -> None:
-    """Save data to a JSONL file."""
-    with open(file_path, "w", encoding="utf-8") as f:
-        for item in data:
-            json.dump(item, f, ensure_ascii=False)
-            f.write("\n")
 
 
 def process_markdown_files(course_name: str) -> str:
@@ -255,118 +247,9 @@ def purge_sources_from_pkl(sources_to_purge: List[str]) -> None:
     )
 
 
-def get_processed_doc_ids() -> Set[str]:
-    """Get set of doc_ids that have already been processed with context."""
-    if not os.path.exists("data/all_sources_contextual_nodes.pkl"):
-        return set()
-
-    try:
-        with open("data/all_sources_contextual_nodes.pkl", "rb") as f:
-            nodes = pickle.load(f)
-            return {get_chunk_record_doc_id(node) for node in nodes}
-    except Exception as e:
-        logger.error(f"Error loading processed doc_ids: {e}")
-        return set()
-
-
-def add_context_to_nodes(new_only: bool = False) -> None:
-    """Add context to document nodes, optionally processing only new content."""
-    logger.info("Adding context to document nodes")
-
-    if new_only:
-        # Load all documents
-        all_docs = load_jsonl("data/all_sources_data.jsonl")
-        processed_ids = get_processed_doc_ids()
-
-        # Filter for unprocessed documents
-        new_docs = [doc for doc in all_docs if doc["doc_id"] not in processed_ids]
-
-        if not new_docs:
-            logger.info("No new documents to process")
-            return
-
-        # Save temporary JSONL with only new documents
-        temp_file = "data/new_docs_temp.jsonl"
-        save_jsonl(new_docs, temp_file)
-
-        # Temporarily modify the add_context_to_nodes.py script to use the temp file
-        cmd = [
-            sys.executable,
-            "-c",
-            f"""
-import asyncio
-import os
-import pickle
-import json
-from data.scraping_scripts.add_context_to_nodes import create_docs, process
-from app.chroma_rag import get_chunk_record_source
-
-async def main():
-    # First, get the list of sources being updated from the temp file
-    updated_sources = set()
-    with open("{temp_file}", "r") as f:
-        for line in f:
-            data = json.loads(line)
-            updated_sources.add(data["source"])
-    
-    print(f"Updating nodes for sources: {{updated_sources}}")
-    
-    # Process new documents
-    documents = create_docs("{temp_file}")
-    enhanced_nodes = await process(documents)
-    print(f"Generated context for {{len(enhanced_nodes)}} new nodes")
-    
-    # Load existing nodes if they exist
-    existing_nodes = []
-    if os.path.exists("data/all_sources_contextual_nodes.pkl"):
-        with open("data/all_sources_contextual_nodes.pkl", "rb") as f:
-            existing_nodes = pickle.load(f)
-        
-        # Filter out existing nodes for sources we're updating
-        filtered_nodes = []
-        removed_count = 0
-        
-        for node in existing_nodes:
-            try:
-                source = get_chunk_record_source(node)
-                if source not in updated_sources:
-                    filtered_nodes.append(node)
-                else:
-                    removed_count += 1
-            except Exception:
-                # Keep nodes where we can't determine the source
-                filtered_nodes.append(node)
-        
-        print(f"Removed {{removed_count}} existing nodes for updated sources")
-        existing_nodes = filtered_nodes
-    
-    # Combine filtered existing nodes with new nodes
-    all_nodes = existing_nodes + enhanced_nodes
-    
-    # Save all nodes
-    with open("data/all_sources_contextual_nodes.pkl", "wb") as f:
-        pickle.dump(all_nodes, f)
-    
-    print(f"Total nodes in updated file: {{len(all_nodes)}}")
-
-asyncio.run(main())
-            """,
-        ]
-    else:
-        # Process all documents
-        cmd = [sys.executable, "-m", "data.scraping_scripts.add_context_to_nodes"]
-
-    result = subprocess.run(cmd)
-
-    if result.returncode != 0:
-        logger.error("Error adding context to nodes - check output above")
-        sys.exit(1)
-
-    logger.info("Successfully added context to nodes")
-
-    # Clean up temp file if it exists
-    if new_only and os.path.exists("data/new_docs_temp.jsonl"):
-        os.remove("data/new_docs_temp.jsonl")
+# The context-addition step (incl. the incremental merge that preserves
+# existing contextual nodes) is shared with the docs workflow:
+# data.scraping_scripts.update_docs_workflow.add_context_to_nodes.
 
 
 def create_vector_stores() -> None:

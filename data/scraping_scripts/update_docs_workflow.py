@@ -18,7 +18,7 @@ Usage:
     Additional flags to run specific steps (if you want to restart from a specific point):
     --skip-download         Skip the GitHub download step
     --skip-process          Skip the markdown processing step
-    --new-context-only      Only process new content when adding context
+    --process-all-context   Regenerate context for every doc (default: only new or changed content)
     --skip-context          Skip the context addition step entirely
     --skip-vectors          Skip vector store creation
     --skip-upload           Skip uploading to HuggingFace
@@ -47,7 +47,7 @@ from data.scraping_scripts.source_registry import (
     required_data_files,
     source_output_files,
 )
-from app.chroma_rag import get_chunk_record_doc_id
+from app.chroma_rag import get_chunk_record_doc_id, get_chunk_record_metadata
 
 # Load environment variables from .env file
 load_dotenv()
@@ -134,6 +134,14 @@ def ensure_required_files_exist(sources_to_regenerate: List[str] | None = None):
 DOC_SOURCES = list(DOC_SOURCE_KEYS)
 GITHUB_SOURCES = list(GITHUB_SOURCE_KEYS)
 LLMS_TXT_SOURCES = list(LLMS_TXT_SOURCE_KEYS)
+
+# Node-metadata key stamped by add_context_to_nodes.process_chunk with the
+# source document's JSONL ``content_hash``. Deliberately duplicated here (not
+# imported) so this module keeps its light import footprint —
+# add_context_to_nodes pulls in Gemini/tiktoken/llama_index, which this
+# module's importers and tests should not need.
+# tests/test_incremental_context.py asserts the two constants stay in sync.
+DOC_CONTENT_HASH_METADATA_KEY = "doc_content_hash"
 
 
 def load_jsonl(file_path: str) -> List[Dict]:
@@ -247,119 +255,231 @@ def process_markdown_files(sources: List[str]) -> None:
     logger.info("Successfully processed markdown files")
 
 
-def get_processed_doc_ids() -> Set[str]:
-    """Get set of doc_ids that have already been processed with context."""
+def build_doc_hash_map(nodes: List) -> Dict[str, str | None]:
+    """Map doc_id -> stored ``doc_content_hash`` for a list of contextual nodes.
+
+    Membership means the doc already has contextual nodes; the value is the
+    document-level content hash stamped at context-generation time, or ``None``
+    for legacy nodes written before hashes existed. If a doc has a mix of
+    hashed and unhashed nodes (shouldn't happen, but resolve it sanely), any
+    stored hash for the doc counts. Nodes whose doc_id can't be determined are
+    skipped.
+    """
+    doc_hashes: Dict[str, str | None] = {}
+    for node in nodes:
+        try:
+            doc_id = get_chunk_record_doc_id(node)
+        except Exception:
+            continue
+        try:
+            metadata = get_chunk_record_metadata(node)
+        except Exception:
+            metadata = {}
+        stored_hash = metadata.get(DOC_CONTENT_HASH_METADATA_KEY)
+        if doc_id not in doc_hashes:
+            doc_hashes[doc_id] = stored_hash
+        elif doc_hashes[doc_id] is None and stored_hash is not None:
+            doc_hashes[doc_id] = stored_hash
+    return doc_hashes
+
+
+def get_processed_doc_hashes() -> Dict[str, str | None]:
+    """Get doc_id -> stored content hash for docs already processed with context.
+
+    Key membership carries the old ``get_processed_doc_ids`` contract (the doc
+    has contextual nodes in the PKL); the value adds the stored
+    ``doc_content_hash`` (``None`` for legacy nodes), enabling changed-content
+    detection. See ``build_doc_hash_map`` for resolution rules.
+    """
     if not os.path.exists("data/all_sources_contextual_nodes.pkl"):
-        return set()
+        return {}
 
     try:
         with open("data/all_sources_contextual_nodes.pkl", "rb") as f:
             nodes = pickle.load(f)
-            return {get_chunk_record_doc_id(node) for node in nodes}
     except Exception as e:
-        logger.error(f"Error loading processed doc_ids: {e}")
-        return set()
+        logger.error(f"Error loading processed doc hashes: {e}")
+        return {}
+
+    return build_doc_hash_map(nodes)
+
+
+def select_docs_to_process(
+    all_docs: List[Dict],
+    stored_hashes: Dict[str, str | None],
+) -> tuple[List[Dict], Dict[str, int]]:
+    """Pick the docs needing (re)contextualization, with selection stats.
+
+    A doc is selected when:
+
+    - its doc_id has no contextual nodes yet (**new**), or
+    - its stored ``doc_content_hash`` differs from the JSONL row's current
+      ``content_hash`` (**changed** in place; doc_ids are path-based and stable
+      across content edits, so id membership alone can never catch this).
+
+    Docs whose pkl nodes lack the hash field (**legacy**, written before this
+    fix) are treated as UNCHANGED so shipping hash-forward detection does not
+    trigger a surprise full-corpus Gemini reprocess; a one-time
+    ``--process-all-context`` run baselines hashes for the whole corpus, after
+    which in-place edits are picked up automatically. Rows without a
+    ``content_hash`` (older JSONLs) are likewise treated as unchanged.
+
+    Returns ``(docs_to_process, stats)`` with stats keys ``new``, ``changed``,
+    and ``legacy_unhashed``.
+    """
+    docs_to_process: List[Dict] = []
+    stats = {"new": 0, "changed": 0, "legacy_unhashed": 0}
+
+    for doc in all_docs:
+        doc_id = doc["doc_id"]
+        if doc_id not in stored_hashes:
+            stats["new"] += 1
+            docs_to_process.append(doc)
+            continue
+
+        stored_hash = stored_hashes[doc_id]
+        if stored_hash is None:
+            stats["legacy_unhashed"] += 1
+            continue
+
+        row_hash = doc.get("content_hash")
+        if row_hash is not None and row_hash != stored_hash:
+            stats["changed"] += 1
+            docs_to_process.append(doc)
+
+    return docs_to_process, stats
+
+
+def merge_contextual_nodes(
+    existing_nodes: List,
+    new_nodes: List,
+    reprocessed_doc_ids: Set[str],
+) -> List:
+    """Merge freshly contextualized nodes into an existing contextual-node list.
+
+    Every existing node is preserved except those whose doc_id is in
+    ``reprocessed_doc_ids`` (the docs being (re)processed in this run); their
+    old nodes are superseded by ``new_nodes``, which are appended. Nodes whose
+    doc_id cannot be determined are kept. Nodes are never removed by source:
+    an incremental run that adds one new page to a source must keep every
+    other already-indexed page of that source intact.
+    """
+    merged: List = []
+    replaced_count = 0
+    unknown_count = 0
+
+    for node in existing_nodes:
+        try:
+            doc_id = get_chunk_record_doc_id(node)
+        except Exception:
+            # Keep nodes whose doc_id can't be determined
+            merged.append(node)
+            unknown_count += 1
+            continue
+
+        if doc_id in reprocessed_doc_ids:
+            replaced_count += 1
+        else:
+            merged.append(node)
+
+    logger.info(
+        "Merging contextual nodes: kept %s existing nodes "
+        "(%s with undetermined doc_id), replaced %s nodes for reprocessed "
+        "doc_ids, appended %s new nodes",
+        len(merged),
+        unknown_count,
+        replaced_count,
+        len(new_nodes),
+    )
+    return merged + list(new_nodes)
+
+
+def _add_context_for_new_docs(temp_file: str, reprocessed_doc_ids: Set[str]) -> None:
+    """Generate context for the docs in ``temp_file`` and merge into the PKL."""
+    # Imported lazily: pulls in Gemini/tiktoken/llama_index, which the rest of
+    # this module (and its importers/tests) should not need.
+    import asyncio
+
+    from data.scraping_scripts.add_context_to_nodes import create_docs, process
+
+    documents = create_docs(temp_file)
+    enhanced_nodes = asyncio.run(process(documents))
+    logger.info("Generated context for %s new nodes", len(enhanced_nodes))
+
+    pkl_path = "data/all_sources_contextual_nodes.pkl"
+    existing_nodes: List = []
+    if os.path.exists(pkl_path):
+        with open(pkl_path, "rb") as f:
+            existing_nodes = pickle.load(f)
+
+    all_nodes = merge_contextual_nodes(
+        existing_nodes, enhanced_nodes, reprocessed_doc_ids
+    )
+
+    with open(pkl_path, "wb") as f:
+        pickle.dump(all_nodes, f)
+
+    logger.info("Total nodes in updated file: %s", len(all_nodes))
 
 
 def add_context_to_nodes(new_only: bool = False) -> None:
-    """Add context to document nodes, optionally processing only new content."""
+    """Add context to document nodes, optionally only new/changed content."""
     logger.info("Adding context to document nodes")
 
     if new_only:
         # Load all documents
         all_docs = load_jsonl("data/all_sources_data.jsonl")
-        processed_ids = get_processed_doc_ids()
+        stored_hashes = get_processed_doc_hashes()
 
-        # Filter for unprocessed documents
-        new_docs = [doc for doc in all_docs if doc["doc_id"] not in processed_ids]
+        # Select docs with no contextual nodes yet (new) plus docs whose
+        # content hash differs from the one stamped in the pkl (changed).
+        docs_to_process, stats = select_docs_to_process(all_docs, stored_hashes)
+        logger.info(
+            "Context selection: %s new docs, %s changed docs, %s legacy docs "
+            "without a stored content hash (treated as unchanged; a one-time "
+            "--process-all-context run baselines hashes for the whole corpus)",
+            stats["new"],
+            stats["changed"],
+            stats["legacy_unhashed"],
+        )
 
-        if not new_docs:
-            logger.info("No new documents to process")
+        if not docs_to_process:
+            logger.info("No new or changed documents to process")
             return
 
-        # Save temporary JSONL with only new documents
+        # Save temporary JSONL with only the documents to (re)process
         temp_file = "data/new_docs_temp.jsonl"
-        save_jsonl(new_docs, temp_file)
+        save_jsonl(docs_to_process, temp_file)
 
-        # Temporarily modify the add_context_to_nodes.py script to use the temp file
-        cmd = [
-            sys.executable,
-            "-c",
-            f"""
-import asyncio
-import os
-import pickle
-import json
-from data.scraping_scripts.add_context_to_nodes import create_docs, process
-from app.chroma_rag import get_chunk_record_source
+        try:
+            # merge_contextual_nodes replaces every existing node whose doc_id
+            # is in this set, so a changed doc's old nodes are dropped in
+            # favor of the freshly contextualized ones.
+            _add_context_for_new_docs(
+                temp_file, {doc["doc_id"] for doc in docs_to_process}
+            )
+        except Exception:
+            logger.exception("Error adding context to nodes")
+            sys.exit(1)
 
-async def main():
-    # First, get the list of sources being updated from the temp file
-    updated_sources = set()
-    with open("{temp_file}", "r") as f:
-        for line in f:
-            data = json.loads(line)
-            updated_sources.add(data["source"])
-    
-    print(f"Updating nodes for sources: {{updated_sources}}")
-    
-    # Process new documents
-    documents = create_docs("{temp_file}")
-    enhanced_nodes = await process(documents)
-    print(f"Generated context for {{len(enhanced_nodes)}} new nodes")
-    
-    # Load existing nodes if they exist
-    existing_nodes = []
-    if os.path.exists("data/all_sources_contextual_nodes.pkl"):
-        with open("data/all_sources_contextual_nodes.pkl", "rb") as f:
-            existing_nodes = pickle.load(f)
-        
-        # Filter out existing nodes for sources we're updating
-        filtered_nodes = []
-        removed_count = 0
-        
-        for node in existing_nodes:
-            try:
-                source = get_chunk_record_source(node)
-                if source not in updated_sources:
-                    filtered_nodes.append(node)
-                else:
-                    removed_count += 1
-            except Exception:
-                # Keep nodes where we can't determine the source
-                filtered_nodes.append(node)
-        
-        print(f"Removed {{removed_count}} existing nodes for updated sources")
-        existing_nodes = filtered_nodes
-    
-    # Combine filtered existing nodes with new nodes
-    all_nodes = existing_nodes + enhanced_nodes
-    
-    # Save all nodes
-    with open("data/all_sources_contextual_nodes.pkl", "wb") as f:
-        pickle.dump(all_nodes, f)
-    
-    print(f"Total nodes in updated file: {{len(all_nodes)}}")
+        logger.info("Successfully added context to nodes")
 
-asyncio.run(main())
-            """,
-        ]
-    else:
-        # Process all documents
-        logger.info("Adding context to all nodes")
-        cmd = [sys.executable, "-m", "data.scraping_scripts.add_context_to_nodes"]
+        # Clean up temp file (kept on failure to help debugging)
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+        return
 
-    result = subprocess.run(cmd)
+    # Process all documents
+    logger.info("Adding context to all nodes")
+    result = subprocess.run(
+        [sys.executable, "-m", "data.scraping_scripts.add_context_to_nodes"]
+    )
 
     if result.returncode != 0:
         logger.error("Error adding context to nodes - check output above")
         sys.exit(1)
 
     logger.info("Successfully added context to nodes")
-
-    # Clean up temp file if it exists
-    if new_only and os.path.exists("data/new_docs_temp.jsonl"):
-        os.remove("data/new_docs_temp.jsonl")
 
 
 def create_vector_stores() -> None:
@@ -443,7 +563,11 @@ def main():
     parser.add_argument(
         "--process-all-context",
         action="store_true",
-        help="Process all content when adding context (default: only process new content)",
+        help=(
+            "Process all content when adding context (default: only process "
+            "new or changed content; also baselines doc content hashes for "
+            "legacy nodes written before hashes were stamped)"
+        ),
     )
     parser.add_argument(
         "--skip-context",
