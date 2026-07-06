@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.6
 
 # Stage 1: build the Next.js frontend as a static export
-FROM node:20-alpine AS frontend
+FROM node:22-alpine AS frontend
 WORKDIR /frontend
 
 COPY frontend/package.json frontend/package-lock.json ./
