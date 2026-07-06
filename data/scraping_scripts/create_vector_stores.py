@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import logging
 import os
 import pickle
 import shutil
+from collections import Counter
 from typing import Any, Sequence
 
 import chromadb
@@ -84,11 +86,21 @@ def load_or_create_chunk_records(source: str) -> list[Any]:
             records = pickle.load(handle)
         active_records = []
         skipped_count = 0
+        unparseable_types: Counter[str] = Counter()
         for record in records:
             try:
                 record_source = get_chunk_record_source(record)
             except Exception:
+                # Fail open: keep records whose source cannot be determined.
+                # This mirrors merge_contextual_nodes / prune_contextual_nodes_
+                # to_active_sources — dropping on a parse failure could destroy
+                # valid data if a future record shape stores metadata
+                # differently. The cost is that a retired source's unparseable
+                # chunks could survive retirement, so make it loud: a nonzero
+                # count below deserves inspection (and `--force-rebuild` after
+                # fixing the pickle if any of them belong to a retired source).
                 active_records.append(record)
+                unparseable_types[type(record).__name__] += 1
                 continue
             if record_source in ACTIVE_SOURCE_KEYS:
                 active_records.append(record)
@@ -99,8 +111,23 @@ def load_or_create_chunk_records(source: str) -> list[Any]:
                 "Skipped %s inactive contextual chunks while building all_sources",
                 skipped_count,
             )
+        if unparseable_types:
+            logger.warning(
+                "Kept %s contextual chunks whose source could not be determined "
+                "(fail-open; by record type: %s). Inspect "
+                "data/all_sources_contextual_nodes.pkl — retired-source chunks "
+                "could be hiding among them.",
+                sum(unparseable_types.values()),
+                dict(unparseable_types),
+            )
         return active_records
 
+    # Non-pickle path (per-source runs, or all_sources without the pickle):
+    # regenerates Gemini context for every chunk. The generated context is not
+    # deterministic, so content-aware reuse in process_source will re-embed
+    # everything on this path — correct (the text to embed really did change)
+    # but Cohere-costly. The workflows always run "all_sources" with the
+    # pickle present, where unchanged records are byte-stable and reused.
     documents = create_docs(config["input_file"])
     return asyncio.run(process(documents))
 
@@ -110,20 +137,41 @@ def iter_batches(items: Sequence[Any], batch_size: int):
         yield items[start : start + batch_size]
 
 
-def get_collection_ids(collection, batch_size: int = 5000) -> set[str]:
-    ids: set[str] = set()
+def hash_chunk_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def get_collection_text_digests(
+    collection, batch_size: int = 5000
+) -> dict[str, str | None]:
+    """Return chunk_id -> sha256 digest of the chunk's stored document text.
+
+    Chroma already stores the exact embedded text of every chunk this script
+    has ever upserted (``documents=`` below), so comparing stored text against
+    the incoming record text detects in-place content changes for all chunks,
+    including ones written before content-aware reuse existed — no metadata
+    schema change or one-time full re-embed required. Only digests are kept
+    while paging, so memory stays bounded by ~64 bytes per chunk instead of
+    the full corpus text. A ``None`` digest marks a chunk whose stored
+    document is missing; callers must treat it as changed (re-embed).
+    """
+    digests: dict[str, str | None] = {}
     offset = 0
 
     while True:
-        result = collection.get(limit=batch_size, offset=offset, include=[])
+        result = collection.get(limit=batch_size, offset=offset, include=["documents"])
         batch_ids = result.get("ids", [])
         if not batch_ids:
             break
 
-        ids.update(str(chunk_id) for chunk_id in batch_ids)
+        batch_documents = result.get("documents") or [None] * len(batch_ids)
+        for chunk_id, document in zip(batch_ids, batch_documents):
+            digests[str(chunk_id)] = (
+                hash_chunk_text(document) if isinstance(document, str) else None
+            )
         offset += len(batch_ids)
 
-    return ids
+    return digests
 
 
 def write_retrieval_artifacts(
@@ -199,7 +247,8 @@ def process_source(
     chroma_client = chromadb.PersistentClient(path=db_path)
     collection = chroma_client.get_or_create_collection(name=db_name)
     max_batch_size = chroma_client.get_max_batch_size()
-    existing_ids = set() if force_rebuild else get_collection_ids(collection)
+    existing_digests = {} if force_rebuild else get_collection_text_digests(collection)
+    existing_ids = set(existing_digests)
     desired_ids = set(chunk_ids)
 
     stale_ids = sorted(existing_ids - desired_ids)
@@ -208,15 +257,34 @@ def process_source(
         for batch_ids in iter_batches(stale_ids, max_batch_size):
             collection.delete(ids=batch_ids)
 
-    reusable_ids = existing_ids & desired_ids
-    records_to_embed = [
-        record for record in chunk_records if record.chunk_id not in reusable_ids
-    ]
+    # Reuse an existing embedding only when the stored document text is
+    # identical to the text we would embed now. chunk_id alone
+    # (f"{doc_id}:{index}", stable across content edits) is not enough: with
+    # id-only reuse, an upstream document changed in place kept its old
+    # embedding AND its old stored text forever. Re-embedded chunks go through
+    # upsert below, which also refreshes their stored document and metadata.
+    # Note: metadata-only drift on unchanged text (e.g. a source_version bump)
+    # is intentionally not refreshed here — treating it as a change would
+    # re-embed whole sources whose text is identical.
+    _missing = object()
+    changed_count = 0
+    records_to_embed: list[Any] = []
+    for record in chunk_records:
+        digest = existing_digests.get(record.chunk_id, _missing)
+        if digest is _missing:
+            records_to_embed.append(record)
+        elif digest != hash_chunk_text(record.text):
+            # Covers both differing text and a missing stored document
+            # (digest None): re-embed and rewrite the stored text.
+            changed_count += 1
+            records_to_embed.append(record)
 
     logger.info(
-        "Reusing %s existing embeddings and generating %s embeddings for %s",
-        len(reusable_ids),
+        "Reusing %s existing embeddings and generating %s embeddings "
+        "(%s changed in place) for %s",
+        len(chunk_records) - len(records_to_embed),
         len(records_to_embed),
+        changed_count,
         source,
     )
 
