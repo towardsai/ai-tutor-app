@@ -10,11 +10,12 @@ from typing import Any, AsyncIterator
 from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .chat_service import (
     is_anthropic_model,
@@ -130,21 +131,60 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="AI Tutor API", lifespan=lifespan)
 
 
-@app.middleware("http")
-async def reject_oversized_bodies(request: Request, call_next):
+class BodySizeLimitMiddleware:
     """Refuse multi-megabyte bodies before parsing them. Pydantic caps bound
-    the fields, but only after the whole body is read and JSON-decoded."""
-    content_length = request.headers.get("content-length")
-    try:
-        too_large = content_length is not None and int(content_length) > MAX_BODY_BYTES
-    except ValueError:
-        too_large = False
-    if too_large:
-        return JSONResponse(
-            {"detail": "Request body too large"},
-            status_code=413,
-        )
-    return await call_next(request)
+    the fields, but only after the whole body is read and JSON-decoded.
+
+    The Content-Length check rejects honest oversized requests before any
+    body byte is read; the receive wrapper counts the bytes actually
+    delivered, so a chunked request (no Content-Length) can't bypass the cap.
+    The mid-body HTTPException surfaces inside FastAPI's body read, which
+    re-raises middleware HTTPExceptions unchanged, so the client still gets
+    a clean 413 instead of a generic parse error.
+    """
+
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        for name, value in scope.get("headers") or ():
+            if name != b"content-length":
+                continue
+            try:
+                declared = int(value)
+            except ValueError:
+                break
+            if declared > self.max_bytes:
+                response = JSONResponse(
+                    {"detail": "Request body too large"},
+                    status_code=413,
+                )
+                await response(scope, receive, send)
+                return
+            break
+
+        received = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body") or b"")
+                if received > self.max_bytes:
+                    raise HTTPException(
+                        status_code=413, detail="Request body too large"
+                    )
+            return message
+
+        await self.app(scope, limited_receive, send)
+
+
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_BODY_BYTES)
 
 
 app.add_middleware(
@@ -205,6 +245,19 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
             # the turn in history would make the model see it twice.
             if history[-1].role == "user" and history[-1].content.strip() == query:
                 history = history[:-1]
+        # The ApiChatTurn Field cap only bounds payload.history; turns
+        # extracted from the AI-SDK messages list must obey the same per-turn
+        # bound (MAX_MESSAGE_JSON_CHARS is far larger because a message can
+        # carry several tool outputs). Truncate rather than 422: only the
+        # rendered text is capped (tool outputs don't survive extraction),
+        # and the oversized text already sits in the client's transcript, so
+        # rejecting it would wedge the whole conversation.
+        history = tuple(
+            turn
+            if len(turn.content) <= MAX_TURN_CHARS
+            else ChatTurn(role=turn.role, content=turn.content[:MAX_TURN_CHARS])
+            for turn in history
+        )
 
     if not query:
         raise HTTPException(status_code=422, detail="query is required")

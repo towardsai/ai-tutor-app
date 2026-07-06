@@ -631,6 +631,69 @@ class ApiTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 413)
 
+    def test_chat_rejects_oversized_chunked_body(self) -> None:
+        """A chunked request carries no Content-Length, so the header check
+        alone would admit an arbitrarily large body; the byte counter on the
+        receive channel must still refuse it."""
+        from app.api import MAX_BODY_BYTES
+
+        body = json.dumps({"query": "x" * (MAX_BODY_BYTES + 1)}).encode()
+
+        def chunks() -> Iterator[bytes]:
+            for start in range(0, len(body), 64 * 1024):
+                yield body[start : start + 64 * 1024]
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/chat",
+                content=chunks(),
+                headers={"content-type": "application/json"},
+            )
+
+        self.assertEqual(response.status_code, 413)
+
+    def test_history_turns_from_messages_are_capped(self) -> None:
+        """payload.history is Field-capped at MAX_TURN_CHARS, but turns
+        extracted from the AI-SDK messages list weren't: a message under
+        MAX_MESSAGE_JSON_CHARS could smuggle a ~190k-char history turn.
+        Extracted turn text is truncated (not 422d: the text already sits in
+        the client transcript, and tool outputs don't survive extraction)."""
+        from app.api import MAX_TURN_CHARS, ApiChatRequest, build_chat_request
+
+        oversized = "y" * (MAX_TURN_CHARS + 1000)
+        request = build_chat_request(
+            ApiChatRequest(
+                query="What is RAG?",
+                messages=[
+                    {"role": "assistant", "content": oversized},
+                    {
+                        "role": "user",
+                        "parts": [{"type": "text", "text": "What is RAG?"}],
+                    },
+                ],
+            )
+        )
+
+        self.assertEqual(len(request.history), 1)
+        self.assertEqual(request.history[0].role, "assistant")
+        self.assertEqual(len(request.history[0].content), MAX_TURN_CHARS)
+
+        # The same cap holds when the query is extracted from the trailing
+        # message instead of being passed explicitly.
+        no_query = build_chat_request(
+            ApiChatRequest(
+                messages=[
+                    {"role": "assistant", "content": oversized},
+                    {
+                        "role": "user",
+                        "parts": [{"type": "text", "text": "What is RAG?"}],
+                    },
+                ]
+            )
+        )
+        self.assertEqual(no_query.query, "What is RAG?")
+        self.assertEqual(len(no_query.history[0].content), MAX_TURN_CHARS)
+
     def test_chat_stream_emits_heartbeat_during_quiet_gap(self) -> None:
         """A silent stretch between events must put SSE comment frames on the
         wire so reverse proxies don't idle the connection out."""
