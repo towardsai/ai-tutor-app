@@ -50,10 +50,16 @@ RETRIEVAL_TOOLS = {"retrieve_tutor_context", "run_kb_command"}
 # in the command or its output reveal which corpus source the agent touched.
 KB_RAW_SOURCE_RE = re.compile(r"raw/(?:docs|courses)/([A-Za-z0-9_.\-]+)/")
 
-# Per-bundle evidence cap for faithfulness rows. Tool outputs in a bundle are each
-# capped at ~6000 chars; a few calls per turn, so ~12k keeps the gist of every
-# call without bloating the grading prompt.
-FAITHFULNESS_EVIDENCE_MAX = 12_000
+# Judge-prompt budget for a faithfulness row's evidence. Bundles capture each
+# tool output at run_battery.TOOL_OUTPUT_MAX_CHARS = 40_000 chars (the KB
+# shell's own per-call output cap), so one turn's complete evidence can span
+# several 40k outputs; 200k covers ~5 max-size calls. This is a GATE, not a
+# slice: quality_sheet_rows emits a faithfulness row only when the FULL
+# assembled evidence fits (see evidence_fits), so the judge never grades
+# silently truncated grounding (the evals.md F23/F24 blind-signal class).
+# Worst case per row is ~200k chars (~50k tokens) of judge prompt; typical
+# turns are far smaller, and anything larger is excluded, not sliced.
+FAITHFULNESS_EVIDENCE_MAX = 200_000
 
 # Holistic = the "would staff approve sending this?" gate (evals/background.md
 # Layer 4). Emitted for every single-turn answer; the full rubric lives in
@@ -74,16 +80,17 @@ FAITHFULNESS_CRITERION = (
 )
 
 
-def faithfulness_evidence(
-    bundle: dict[str, Any], max_chars: int = FAITHFULNESS_EVIDENCE_MAX
-) -> str:
+def faithfulness_evidence(bundle: dict[str, Any]) -> str:
     """Concatenate the retrieval/KB evidence the tutor saw, for grounding grades.
 
     Joins each retrieval/KB tool call's command + output (and, for
     `retrieve_tutor_context`, the ranked source titles/URLs) so the judge can
-    check the answer's claims against exactly what the tools returned. Empty when
-    the turn used no retrieval/KB tool (e.g. answer_general), which is the signal
-    to skip the faithfulness row for that case.
+    check the answer's claims against exactly what the tools returned. Returns
+    the evidence UNTRUNCATED: whether it fits the judge prompt is a separate
+    gate (evidence_fits), so an oversized turn is excluded from faithfulness
+    grading rather than judged against a silent slice. Empty when the turn used
+    no retrieval/KB tool (e.g. answer_general), which is the signal to skip the
+    faithfulness row for that case.
     """
     parts: list[str] = []
     for call in bundle.get("tool_calls") or []:
@@ -100,7 +107,7 @@ def faithfulness_evidence(
             body = f"{body}\nSOURCES: {cites}".strip()
         if header or body:
             parts.append(f"{header}\n{body}".strip())
-    return "\n\n".join(parts)[:max_chars]
+    return "\n\n".join(parts)
 
 
 def evidence_is_complete(bundle: dict[str, Any]) -> bool:
@@ -125,6 +132,17 @@ def evidence_is_complete(bundle: dict[str, Any]) -> bool:
     return True
 
 
+def evidence_fits(evidence: str, max_chars: int = FAITHFULNESS_EVIDENCE_MAX) -> bool:
+    """True if the assembled evidence fits the faithfulness judge-prompt budget.
+
+    Companion gate to ``evidence_is_complete``: that one guarantees nothing was
+    lost at CAPTURE time, this one guarantees nothing would be lost at JUDGE
+    time. A turn whose complete evidence still exceeds the cap is excluded from
+    faithfulness grading instead of being judged on truncated grounding.
+    """
+    return len(evidence) <= max_chars
+
+
 def index_battery(battery: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     index: dict[str, dict[str, Any]] = {}
     for record in battery:
@@ -143,8 +161,9 @@ def kb_browsed_sources(bundle: dict[str, Any]) -> set[str]:
 
     Lets recall credit KB grounding, which recall@shown cannot see (KB output is
     raw text, not structured matches). Caveats: bundle output is capped at
-    6000 chars, so a path past the cap is missed; a broad ``rg`` can surface many
-    sources at once (an over-count toward "shown", not "used").
+    ``run_battery.TOOL_OUTPUT_MAX_CHARS`` (40k) per call, so a path past the cap
+    is missed; a broad ``rg`` can surface many sources at once (an over-count
+    toward "shown", not "used").
     """
     seen: set[str] = set()
     for call in bundle.get("tool_calls") or []:
@@ -321,12 +340,15 @@ def quality_sheet_rows(
             reference=reference,
         )
     ]
-    # Faithfulness only when the agent's grounding was captured in full -- on
-    # bundles recorded under the old 6k tool-output cap, KB-browse evidence is
-    # truncated, so a faithfulness grade would score capture-completeness, not
-    # grounding (evals.md F23/F24 class). Re-record with the raised cap to enable.
+    # Faithfulness only when the judge can see 100% of what the agent grounded
+    # on: (1) every retrieval/KB output was captured in full at record time
+    # (bundles recorded under the old 6k tool-output cap fail this; re-record
+    # at the 40k cap to re-enable), and (2) the full assembled evidence fits
+    # the judge-prompt budget. A turn failing either is excluded rather than
+    # judged on silently truncated evidence, which would score
+    # capture-completeness, not grounding (evals.md F23/F24 class).
     evidence = faithfulness_evidence(bundle)
-    if evidence and evidence_is_complete(bundle):
+    if evidence and evidence_is_complete(bundle) and evidence_fits(evidence):
         rows.append(
             sheet_row(
                 bundle=bundle,
