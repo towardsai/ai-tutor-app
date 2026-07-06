@@ -28,8 +28,11 @@ same way prod does, minus the non-doc rows:
 * **BM25 + document dict** - rebuilt from a docs-only view of
   ``all_sources_data.jsonl`` with the same helpers prod uses
   (``build_document_dict`` / ``BM25Index.build``). Pure, no network.
-* **KB** - copy ``data/kb``, drop ``raw/courses`` and ``wiki/courses``, and
-  filter the generated indexes down to doc rows. Then the wiki is
+* **KB** - copy ``data/kb``, drop ``raw/courses`` and ``wiki/courses``, prune
+  every remaining ``raw/`` source directory and ``wiki/frameworks/`` page
+  whose key is not allowlisted (rows with missing/unknown ``source`` and
+  retired courses are normalized into the docs group upstream, so they land
+  there), and filter the generated indexes down to doc rows. Then the wiki is
   **publicized**: the scaffolder (``update_kb_wiki``) regenerates every
   AUTO-GENERATED marker block from the filtered manifest (so scaffolded link
   lists lose their course entries the same way they gained them), and course
@@ -38,7 +41,8 @@ same way prod does, minus the non-doc rows:
   ``wiki/log.md`` per ``data/kb/MAINTAINER.md``.
 
 Every build ends with a **leak audit** that fails the build if any course
-path, course source key, or non-allowlisted row survives in the staged KB.
+path, course source key, non-allowlisted row, non-allowlisted ``raw/`` file,
+or non-allowlisted source-keyed wiki page survives in the staged KB.
 
 After the audit, the staged ``kb/`` tree is packed into a single
 ``kb.tar.gz`` and the tree is removed from staging. The public repo ships the
@@ -339,8 +343,26 @@ def _filter_tsv(path: Path) -> int:
     return len(kept)
 
 
+def _remove_tree_or_file(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
 def stage_kb(source_dir: Path, stage_dir: Path) -> dict:
-    """Copy data/kb and prune course content (raw, wiki, generated indexes)."""
+    """Copy data/kb and prune non-public content (raw, wiki, generated indexes).
+
+    Beyond dropping the course trees wholesale, the raw/ mirrors and the
+    source-keyed wiki pages are filtered by the same allowlist as everything
+    else: ``build_kb_artifacts.normalize_record`` maps a row with a
+    missing/unknown ``source`` — or a retired course whose rows linger in
+    ``all_sources_data.jsonl`` after its key left the registry — to
+    ``source_group="docs"``, so its markdown lands under ``raw/docs/<key>/``
+    and its wiki page under ``wiki/frameworks/<key>.md``, outside the
+    ``courses/`` prunes. Anything whose key is not in the allowlist is
+    removed, not published (fail closed).
+    """
     src = source_dir / KB_DIR_NAME
     dst = stage_dir / KB_DIR_NAME
     if not src.is_dir():
@@ -354,6 +376,39 @@ def stage_kb(source_dir: Path, stage_dir: Path) -> dict:
         if target.exists():
             shutil.rmtree(target)
             logger.info("Removed %s", target)
+
+    # Allowlist the raw tree: keep only raw/docs/<key>/ for public keys.
+    # Every other raw/ entry — an unknown/typo'd source dir, a retired
+    # course's dir, an unexpected group dir, a stray file — is removed.
+    raw_root = dst / "raw"
+    if raw_root.is_dir():
+        for group_dir in sorted(raw_root.iterdir()):
+            if not group_dir.is_dir() or group_dir.name != "docs":
+                _remove_tree_or_file(group_dir)
+                logger.info("Removed unexpected raw entry %s (fail closed)", group_dir)
+                continue
+            for source_entry in sorted(group_dir.iterdir()):
+                if source_entry.is_dir() and source_entry.name in _PUBLIC_KEYS:
+                    continue
+                _remove_tree_or_file(source_entry)
+                logger.info(
+                    "Removed non-allowlisted raw source %s (fail closed)",
+                    source_entry,
+                )
+
+    # wiki/frameworks/ pages are source-keyed the same way; a retired course's
+    # page lands here (its key is not in COURSE_SOURCE_KEYS anymore) and its
+    # name is unknown to the prose pruner (which derives from ACTIVE keys),
+    # so filter structurally: keep only <key>.md pages for allowlisted keys.
+    frameworks_dir = dst / "wiki" / "frameworks"
+    if frameworks_dir.is_dir():
+        for page in sorted(frameworks_dir.iterdir()):
+            if page.is_file() and page.suffix == ".md" and page.stem in _PUBLIC_KEYS:
+                continue
+            _remove_tree_or_file(page)
+            logger.info(
+                "Removed non-allowlisted wiki framework page %s (fail closed)", page
+            )
 
     # MAINTAINER.md is the maintainer-agent manual: not needed at runtime, not
     # in git, ships only in the private bundle — and its worked examples quote
@@ -493,8 +548,9 @@ def audit_staged_kb(stage_dir: Path) -> None:
     """Fail the build if anything non-public survives in the staged KB.
 
     Last line of defense before publishing: checks course directories are
-    gone, generated indexes contain only allowlisted rows, and no wiki page
-    mentions a course path or a non-public source name.
+    gone, every raw/ file and source-keyed wiki page sits under an
+    allowlisted source key, generated indexes contain only allowlisted rows,
+    and no wiki page mentions a course path or a non-public source name.
     """
     kb_dir = stage_dir / KB_DIR_NAME
     problems: list[str] = []
@@ -502,6 +558,38 @@ def audit_staged_kb(stage_dir: Path) -> None:
     for relative in ("raw/courses", "wiki/courses"):
         if (kb_dir / relative).exists():
             problems.append(f"{relative}/ still exists")
+
+    # Structural allowlist over raw/: every file must live at
+    # raw/docs/<key>/... with an allowlisted key. raw/ is exempt from the
+    # prose-token scan below (upstream doc mirrors may quote anything), so
+    # without this check a non-allowlisted source directory — unknown/typo'd
+    # source metadata, or a retired course's leftover rows, both of which
+    # build_kb_artifacts files under raw/docs/ — would ship silently.
+    raw_root = kb_dir / "raw"
+    if raw_root.exists():
+        for path in sorted(p for p in raw_root.rglob("*") if p.is_file()):
+            parts = path.relative_to(kb_dir).parts
+            if len(parts) < 4 or parts[1] != "docs" or parts[2] not in _PUBLIC_KEYS:
+                problems.append(
+                    f"{path.relative_to(kb_dir)}: raw file outside an "
+                    "allowlisted raw/docs/<source>/ directory"
+                )
+
+    # wiki/frameworks/ pages are keyed by source; a retired course's page
+    # lands here and its name is not a prose token (tokens derive from
+    # ACTIVE keys), so require every page to belong to an allowlisted key.
+    frameworks_dir = kb_dir / "wiki" / "frameworks"
+    if frameworks_dir.exists():
+        for path in sorted(p for p in frameworks_dir.rglob("*") if p.is_file()):
+            if (
+                path.parent != frameworks_dir
+                or path.suffix != ".md"
+                or path.stem not in _PUBLIC_KEYS
+            ):
+                problems.append(
+                    f"{path.relative_to(kb_dir)}: wiki page for a "
+                    "non-allowlisted source key"
+                )
 
     generated = kb_dir / "generated"
     for name in ("corpus_manifest.jsonl", "headings.jsonl"):

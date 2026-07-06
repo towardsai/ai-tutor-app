@@ -17,6 +17,12 @@ from data.scraping_scripts.source_registry import (
 # Use real registry keys so the COURSE/_DOC split matches production.
 COURSE_KEY = "master_ai_for_work"
 DOC_KEY = "transformers"
+# Simulates a retired course: its key is gone from the registry, but rows may
+# linger in all_sources_data.jsonl. build_kb_artifacts.normalize_record maps
+# any source not in COURSE_SOURCE_KEYS to source_group="docs", so a retired
+# course's raw markdown lands under raw/docs/<key>/ and its wiki page under
+# wiki/frameworks/<key>.md — outside the courses/ prunes.
+RETIRED_KEY = "retired_legacy_course"
 
 
 def test_registry_classifies_every_source() -> None:
@@ -149,6 +155,76 @@ def test_stage_kb_prunes_course_content(tmp_path: Path) -> None:
     assert {row["source"] for row in manifest} == {DOC_KEY}
     assert summary["manifest_rows"] == 1
     assert COURSE_KEY not in (staged_kb / "generated" / "symbols.tsv").read_text()
+
+
+def test_stage_kb_prunes_non_allowlisted_raw_source_dirs(tmp_path: Path) -> None:
+    """Repro for the raw/docs leak.
+
+    A row with a missing/unknown source, or a retired course whose rows
+    linger in the aggregate JSONL, is normalized to source_group="docs" by
+    build_kb_artifacts, so its raw markdown mirrors land under
+    raw/docs/<key>/ — which the raw/courses prune never touched. stage_kb
+    must keep only allowlisted source directories under raw/ (fail closed).
+    """
+    assert RETIRED_KEY not in SOURCE_CONFIGS
+    source_dir = tmp_path / "data"
+    kb = source_dir / "kb"
+    (kb / "raw" / "docs" / DOC_KEY).mkdir(parents=True)
+    (kb / "raw" / "docs" / DOC_KEY / "a.md").write_text("# A", encoding="utf-8")
+    (kb / "raw" / "docs" / "unknown").mkdir(parents=True)
+    (kb / "raw" / "docs" / "unknown" / "leaky.md").write_text(
+        "# Lesson 3: private walkthrough\n\nStudent-facing material whose row "
+        "lost its source key.\n",
+        encoding="utf-8",
+    )
+    (kb / "raw" / "docs" / RETIRED_KEY).mkdir(parents=True)
+    (kb / "raw" / "docs" / RETIRED_KEY / "lesson-1.md").write_text(
+        "# Lesson 1\n\nMaterial from a retired course.\n", encoding="utf-8"
+    )
+    generated = kb / "generated"
+    generated.mkdir(parents=True)
+    _write_jsonl(generated / "corpus_manifest.jsonl", [{"source": DOC_KEY}])
+
+    stage_dir = tmp_path / "stage"
+    stage_dir.mkdir()
+    builder.stage_kb(source_dir, stage_dir)
+
+    staged_kb = stage_dir / "kb"
+    assert not (staged_kb / "raw" / "docs" / "unknown").exists()
+    assert not (staged_kb / "raw" / "docs" / RETIRED_KEY).exists()
+    # Legit allowlisted content is untouched.
+    assert (staged_kb / "raw" / "docs" / DOC_KEY / "a.md").exists()
+    builder.audit_staged_kb(stage_dir)  # staged tree is clean after pruning
+
+
+def test_stage_kb_prunes_non_allowlisted_wiki_framework_pages(tmp_path: Path) -> None:
+    """A retired course's wiki page lands in wiki/frameworks/ (docs group).
+
+    Its key is no longer in ACTIVE_SOURCE_KEYS, so the prose-token pruner
+    does not know its name; stage_kb must drop the page structurally.
+    """
+    assert RETIRED_KEY not in SOURCE_CONFIGS
+    source_dir = tmp_path / "data"
+    kb = source_dir / "kb"
+    (kb / "wiki" / "frameworks").mkdir(parents=True)
+    (kb / "wiki" / "frameworks" / f"{DOC_KEY}.md").write_text(
+        "# Transformers\n", encoding="utf-8"
+    )
+    (kb / "wiki" / "frameworks" / f"{RETIRED_KEY}.md").write_text(
+        "# Retired course synthesis\n\nLesson notes.\n", encoding="utf-8"
+    )
+    generated = kb / "generated"
+    generated.mkdir(parents=True)
+    _write_jsonl(generated / "corpus_manifest.jsonl", [{"source": DOC_KEY}])
+
+    stage_dir = tmp_path / "stage"
+    stage_dir.mkdir()
+    builder.stage_kb(source_dir, stage_dir)
+
+    staged_kb = stage_dir / "kb"
+    assert not (staged_kb / "wiki" / "frameworks" / f"{RETIRED_KEY}.md").exists()
+    assert (staged_kb / "wiki" / "frameworks" / f"{DOC_KEY}.md").exists()
+    builder.audit_staged_kb(stage_dir)
 
 
 def test_rebuild_retrieval_pkls_drops_course_documents(tmp_path: Path) -> None:
@@ -336,6 +412,66 @@ def test_audit_staged_kb_fails_on_course_mentions_in_wiki(tmp_path: Path) -> Non
 def test_audit_staged_kb_fails_on_surviving_course_dirs(tmp_path: Path) -> None:
     kb = _minimal_public_kb(tmp_path)
     (kb / "raw" / "courses").mkdir(parents=True)
+    with pytest.raises(SystemExit):
+        builder.audit_staged_kb(tmp_path)
+
+
+def test_audit_staged_kb_fails_on_non_allowlisted_raw_dirs(tmp_path: Path) -> None:
+    """Repro for the audit half of the raw/docs leak.
+
+    raw/ is exempt from the prose-token scan (upstream doc mirrors quote
+    anything), so the audit needs a structural allowlist: every raw/ file
+    must live at raw/docs/<key>/... with an allowlisted key. Without it, a
+    raw/docs/unknown/ dir that slips past staging ships world-readable while
+    the audit prints "passed".
+    """
+    kb = _minimal_public_kb(tmp_path)
+    (kb / "raw" / "docs" / DOC_KEY).mkdir(parents=True)
+    (kb / "raw" / "docs" / DOC_KEY / "a.md").write_text("# A", encoding="utf-8")
+    builder.audit_staged_kb(tmp_path)  # allowlisted raw content passes
+    (kb / "raw" / "docs" / "unknown").mkdir(parents=True)
+    (kb / "raw" / "docs" / "unknown" / "leaky.md").write_text(
+        "# Lesson 3\n\nPrivate course material.\n", encoding="utf-8"
+    )
+    with pytest.raises(SystemExit):
+        builder.audit_staged_kb(tmp_path)
+
+
+def test_audit_staged_kb_fails_on_retired_course_raw_dir(tmp_path: Path) -> None:
+    assert RETIRED_KEY not in SOURCE_CONFIGS
+    kb = _minimal_public_kb(tmp_path)
+    (kb / "raw" / "docs" / RETIRED_KEY).mkdir(parents=True)
+    (kb / "raw" / "docs" / RETIRED_KEY / "lesson-1.md").write_text(
+        "# Lesson 1\n", encoding="utf-8"
+    )
+    with pytest.raises(SystemExit):
+        builder.audit_staged_kb(tmp_path)
+
+
+def test_audit_staged_kb_fails_on_files_outside_raw_source_dirs(
+    tmp_path: Path,
+) -> None:
+    """Files directly under raw/ or raw/docs/ have no source key at all."""
+    kb = _minimal_public_kb(tmp_path)
+    (kb / "raw" / "docs").mkdir(parents=True)
+    (kb / "raw" / "docs" / "stray.md").write_text("no source dir", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        builder.audit_staged_kb(tmp_path)
+
+
+def test_audit_staged_kb_fails_on_non_allowlisted_wiki_framework_pages(
+    tmp_path: Path,
+) -> None:
+    assert RETIRED_KEY not in SOURCE_CONFIGS
+    kb = _minimal_public_kb(tmp_path)
+    (kb / "wiki" / "frameworks").mkdir()
+    (kb / "wiki" / "frameworks" / f"{DOC_KEY}.md").write_text(
+        "# Transformers\n", encoding="utf-8"
+    )
+    builder.audit_staged_kb(tmp_path)  # allowlisted framework page passes
+    (kb / "wiki" / "frameworks" / f"{RETIRED_KEY}.md").write_text(
+        "# Retired course synthesis\n", encoding="utf-8"
+    )
     with pytest.raises(SystemExit):
         builder.audit_staged_kb(tmp_path)
 
