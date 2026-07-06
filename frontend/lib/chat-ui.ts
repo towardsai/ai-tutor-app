@@ -258,7 +258,11 @@ function scanLinkDestination(text: string, start: number): string {
   return rendersAsLink ? url : "";
 }
 
-const LINK_OPENER_PATTERN = /(!?)\[[^\]]*\]\(/g;
+// Link text may contain one level of balanced brackets (CommonMark-legal,
+// e.g. [LoRA [PEFT docs]](url)); micromark renders such links as anchors, so
+// the scanner must find them too or their citations never get a number. The
+// alternatives are disjoint on the first character, so matching stays linear.
+const LINK_OPENER_PATTERN = /(!?)\[(?:[^\[\]]|\[[^\]]*\])*\]\(/g;
 
 function extractMarkdownLinkUrls(text: string): string[] {
   const urls: string[] = [];
