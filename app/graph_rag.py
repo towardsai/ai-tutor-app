@@ -40,6 +40,7 @@ from typing import Any
 from .chroma_rag import (
     DEFAULT_CONTEXT_TOKEN_BUDGET,
     DEFAULT_RERANK_MODEL,
+    RERANK_SCORE_FLOOR,
     SearchResult,
     get_token_encoding,
     rerank_results,
@@ -63,6 +64,10 @@ GRAPHRAG_COMMUNITY_SOURCE = "graphrag_community"
 DEFAULT_ENTITY_TOP_K = 20
 DEFAULT_COMMUNITY_TOP_K = 3
 DEFAULT_RERANK_TOP_K = 5
+# Candidate pool for query-relevant community-report selection: only the top
+# reports by the index's static rank are reranked against the query, so the
+# per-query cost stays bounded (one rerank call over at most this many docs).
+COMMUNITY_RERANK_CANDIDATES = 30
 
 
 class GraphRAGIndexNotBuilt(RuntimeError):
@@ -211,8 +216,8 @@ class GraphRAGRetriever:
         """Assemble GraphRAG context as reranked SearchResult chunks.
 
         Steps: embed query -> nearest entities (LanceDB) -> their text units
-        (mapped to real source/url via document_id) + top community reports ->
-        Cohere rerank -> token budget. Returns [] on any failure so the agent
+        (mapped to real source/url via document_id) + query-relevant community
+        reports -> Cohere rerank -> token budget. Returns [] on any failure so the agent
         degrades to KB browsing, matching the classical backend's contract.
         """
         try:
@@ -287,19 +292,27 @@ class GraphRAGRetriever:
         )
 
     def _community_context(self, query: str) -> list[SearchResult]:
-        """Top community reports as context-only chunks (no source -> no recall
-        credit, by design)."""
+        """Query-relevant community reports as context-only chunks (synthetic
+        source, no url -> no recall/citation credit, by design).
+
+        Candidates are the ``COMMUNITY_RERANK_CANDIDATES`` highest-ranked
+        reports (the index's static rank); the ``community_top_k`` most relevant
+        to the query are selected with the same Cohere rerank used for text
+        units. Scores are pinned back to 0.0 so the reports stay context-only
+        chunks (and stay exempt from the rerank-score floor in
+        ``_apply_token_budget``).
+        """
         if self._reports is None or self._community_top_k <= 0:
             return []
         reports = self._reports
         if "rank" in reports.columns:
             reports = reports.sort_values("rank", ascending=False)
-        results: list[SearchResult] = []
-        for _, row in reports.head(self._community_top_k).iterrows():
+        candidates: list[SearchResult] = []
+        for _, row in reports.head(COMMUNITY_RERANK_CANDIDATES).iterrows():
             content = str(row.get("full_content") or row.get("summary") or "")
             if not content:
                 continue
-            results.append(
+            candidates.append(
                 SearchResult(
                     chunk_id=f"community:{row.get('community', '')}",
                     doc_id="",
@@ -315,7 +328,18 @@ class GraphRAGRetriever:
                     retrieval_method="graphrag_community",
                 )
             )
-        return results
+        if len(candidates) <= self._community_top_k:
+            return candidates
+        selected = rerank_results(
+            self._cohere,
+            query,
+            candidates,
+            model=self._rerank_model,
+            top_n=self._community_top_k,
+        )
+        for result in selected:
+            result.score = 0.0
+        return selected
 
     def _apply_token_budget(
         self, results: list[SearchResult], token_budget: int | None
@@ -324,11 +348,22 @@ class GraphRAGRetriever:
         filtered: list[SearchResult] = []
         total = 0
         for result in results:
+            # Same low-relevance floor as the classical retriever, so both eval
+            # arms drop weak reranked hits (the module's fairness contract).
+            # Community reports are context-only chunks pinned at score 0.0 and
+            # are exempt, or the floor would drop them all.
+            if (
+                result.source != GRAPHRAG_COMMUNITY_SOURCE
+                and result.score < RERANK_SCORE_FLOOR
+            ):
+                continue
             result_tokens = len(
                 self._encoding.encode(result.content, disallowed_special=())
             )
             if total + result_tokens > budget:
-                break
+                # Skip an oversized result instead of cutting off the whole
+                # list; keep filling the budget with later results that fit.
+                continue
             total += result_tokens
             filtered.append(result)
         return filtered
