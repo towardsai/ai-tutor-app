@@ -26,6 +26,11 @@ The script processes all Markdown files in the specified input directories (and 
 applies the configured filters, and saves the results in JSONL files. Each line in the output
 files represents a single document with metadata and content.
 
+After the per-source JSONL files are written, the aggregate data/all_sources_data.jsonl is
+rebuilt (even for a single-source run), merging the fresh data with the existing data of
+every other active source so downstream steps (context, KB, vector stores) never read
+stale aggregate data.
+
 To add, modify, or retire sources, update data/scraping_scripts/source_registry.py.
 """
 
@@ -355,6 +360,14 @@ def save_jsonl(data: List[Dict], output_file: str) -> None:
             f.write("\n")
 
 
+def load_jsonl(input_file: str) -> List[Dict]:
+    data = []
+    with open(input_file, "r", encoding="utf-8") as f:
+        for line in f:
+            data.append(json.loads(line))
+    return data
+
+
 def combine_all_sources(sources: List[str]) -> None:
     """
     Combine JSONL files from multiple sources, preserving existing sources not being processed.
@@ -363,12 +376,19 @@ def combine_all_sources(sources: List[str]) -> None:
     1. Load data from transformers_data.jsonl
     2. Load data from all other source JSONL files that exist (course files, etc.)
     3. Combine them all into all_sources_data.jsonl
+
+    Safety net: an active source whose per-source JSONL is missing or unreadable
+    keeps its existing rows from all_sources_data.jsonl instead of being silently
+    dropped from the aggregate. Sources no longer present in SOURCE_CONFIGS
+    (retired) are dropped.
     """
     all_data = []
     output_file = "data/all_sources_data.jsonl"
 
     # Track which sources we're processing
     processed_sources = set()
+    # Track active sources whose per-source JSONL was successfully loaded
+    loaded_sources = set()
 
     # First, add data from sources we're explicitly processing
     for source in sources:
@@ -381,15 +401,14 @@ def combine_all_sources(sources: List[str]) -> None:
         logger.info(f"Processing updated source: {source} from {input_file}")
 
         try:
-            source_data = []
-            with open(input_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    source_data.append(json.loads(line))
-
-            logger.info(f"Added {len(source_data)} documents from {source}")
-            all_data.extend(source_data)
+            source_data = load_jsonl(input_file)
         except Exception as e:
             logger.error(f"Error loading {input_file}: {e}")
+            continue
+
+        logger.info(f"Added {len(source_data)} documents from {source}")
+        all_data.extend(source_data)
+        loaded_sources.add(source)
 
     # Now add data from all other sources not being processed
     for source_name, config in SOURCE_CONFIGS.items():
@@ -399,20 +418,42 @@ def combine_all_sources(sources: List[str]) -> None:
 
         # Try to load the individual source file
         source_file = config["output_file"]
-        if os.path.exists(source_file):
-            logger.info(f"Preserving existing source: {source_name} from {source_file}")
-            try:
-                source_data = []
-                with open(source_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        source_data.append(json.loads(line))
+        if not os.path.exists(source_file):
+            continue
 
-                logger.info(
-                    f"Preserved {len(source_data)} documents from {source_name}"
-                )
-                all_data.extend(source_data)
-            except Exception as e:
-                logger.error(f"Error loading {source_file}: {e}")
+        logger.info(f"Preserving existing source: {source_name} from {source_file}")
+        try:
+            source_data = load_jsonl(source_file)
+        except Exception as e:
+            logger.error(f"Error loading {source_file}: {e}")
+            continue
+
+        logger.info(f"Preserved {len(source_data)} documents from {source_name}")
+        all_data.extend(source_data)
+        loaded_sources.add(source_name)
+
+    # Safety net: active sources with no readable per-source JSONL keep their
+    # rows from the existing aggregate instead of being silently dropped.
+    missing_sources = set(SOURCE_CONFIGS) - loaded_sources
+    if missing_sources and os.path.exists(output_file):
+        try:
+            existing_rows = load_jsonl(output_file)
+        except Exception as e:
+            logger.error(f"Error loading existing {output_file}: {e}")
+            existing_rows = []
+
+        fallback_counts: Dict[str, int] = {}
+        for row in existing_rows:
+            row_source = row.get("source")
+            if row_source in missing_sources:
+                all_data.append(row)
+                fallback_counts[row_source] = fallback_counts.get(row_source, 0) + 1
+
+        for source_name in sorted(fallback_counts):
+            logger.warning(
+                f"No per-source JSONL for '{source_name}'; preserved "
+                f"{fallback_counts[source_name]} existing documents from {output_file}"
+            )
 
     logger.info(f"Total documents combined: {len(all_data)}")
     save_jsonl(all_data, output_file)
@@ -437,8 +478,12 @@ def main(sources: List[str]) -> None:
     for source in sources:
         process_source(source)
 
-    if len(sources) > 1:
-        combine_all_sources(sources)
+    # Always rebuild the aggregate, even for a single-source run: every
+    # downstream consumer (context step, KB build, vector stores) reads
+    # all_sources_data.jsonl, so skipping this would leave the run without
+    # effect on the pipeline. combine_all_sources merges the fresh per-source
+    # data with the existing data of all other active sources.
+    combine_all_sources(sources)
 
 
 if __name__ == "__main__":
