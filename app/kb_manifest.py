@@ -132,14 +132,31 @@ def available_source_keys(kb_dir: str = KB_DIR) -> frozenset[str] | None:
     return frozenset(entry.source for entry in entries if entry.source)
 
 
-def manifest_indexes(
-    kb_dir: str = KB_DIR,
-) -> tuple[
+_ManifestIndexes = tuple[
     dict[str, KbManifestEntry],
     dict[str, KbManifestEntry],
     dict[str, KbManifestEntry],
     dict[str, KbManifestEntry],
-]:
+]
+
+# Cache built indexes per kb_dir, next to the entries tuple they were derived
+# from. Like _MANIFEST_CACHE, nothing is cached while the manifest file is
+# absent (load_manifest_entries returned an uncached empty tuple), so a lookup
+# during the first-start download window does not pin empty indexes. The
+# identity check against the cached entries keeps the indexes valid for the
+# process lifetime and rebuilds them whenever _MANIFEST_CACHE is repopulated
+# (e.g. popped in tests). resolve_manifest_reference runs once per citation or
+# shell-printed path on the event loop, so repeated calls must be O(1) instead
+# of re-scanning all manifest entries.
+_INDEX_CACHE: dict[str, tuple[tuple[KbManifestEntry, ...], _ManifestIndexes]] = {}
+
+
+def manifest_indexes(kb_dir: str = KB_DIR) -> _ManifestIndexes:
+    entries = load_manifest_entries(kb_dir)
+    cached = _INDEX_CACHE.get(kb_dir)
+    if cached is not None and cached[0] is entries:
+        return cached[1]
+
     by_doc_id: dict[str, KbManifestEntry] = {}
     by_url: dict[str, KbManifestEntry] = {}
     by_path: dict[str, KbManifestEntry] = {}
@@ -149,7 +166,7 @@ def manifest_indexes(
     # surface a misleading source card. Track collisions and refuse to resolve
     # an ambiguous title to any single doc.
     ambiguous_titles: set[str] = set()
-    for entry in load_manifest_entries(kb_dir):
+    for entry in entries:
         if entry.doc_id:
             by_doc_id[entry.doc_id] = entry
         if entry.url:
@@ -168,7 +185,10 @@ def manifest_indexes(
                 del by_title[title_key]
             else:
                 by_title[title_key] = entry
-    return by_doc_id, by_url, by_path, by_title
+    indexes = (by_doc_id, by_url, by_path, by_title)
+    if entries:
+        _INDEX_CACHE[kb_dir] = (entries, indexes)
+    return indexes
 
 
 def source_match_from_manifest(

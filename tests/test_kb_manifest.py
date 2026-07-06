@@ -7,6 +7,7 @@ from app.chat_types import SourceMatch
 from app.kb_manifest import (
     kb_root_path,
     load_manifest_entries,
+    manifest_indexes,
     parse_markdown_citations,
     resolve_manifest_reference,
     source_match_payload,
@@ -193,6 +194,50 @@ class ManifestLoaderTestCase(unittest.TestCase):
             self.assertEqual(
                 [entry.doc_id for entry in entries], ["peft:lora", "trl:intro"]
             )
+
+
+class ManifestIndexCacheTestCase(unittest.TestCase):
+    LORA_ROW = {
+        "doc_id": "peft:lora",
+        "title": "LoRA",
+        "url": "https://example.com/lora",
+        "source": "peft",
+        "source_group": "docs",
+        "path": "data/kb/raw/docs/peft/lora.md",
+    }
+
+    def test_indexes_are_cached_once_manifest_exists(self) -> None:
+        # resolve_manifest_reference runs once per citation/shell path, so the
+        # indexes must not be rebuilt over all entries on every call.
+        with TemporaryDirectory() as tmp:
+            kb_dir = Path(tmp)
+            _write_manifest(kb_dir, [self.LORA_ROW])
+
+            first = manifest_indexes(str(kb_dir))
+            second = manifest_indexes(str(kb_dir))
+
+            self.assertIs(first, second)
+
+    def test_absent_manifest_does_not_pin_empty_indexes(self) -> None:
+        # Mirrors load_manifest_entries: an index lookup before the first-start
+        # bundle download must not cache empty indexes for the process
+        # lifetime; once the file appears the indexes pick it up.
+        with TemporaryDirectory() as tmp:
+            kb_dir = Path(tmp)
+            by_doc_id, _by_url, _by_path, _by_title = manifest_indexes(str(kb_dir))
+            self.assertEqual(by_doc_id, {})
+            self.assertIsNone(
+                resolve_manifest_reference("kb://doc/peft:lora", kb_dir=str(kb_dir))
+            )
+
+            _write_manifest(kb_dir, [self.LORA_ROW])
+
+            by_doc_id, _by_url, _by_path, _by_title = manifest_indexes(str(kb_dir))
+            self.assertIn("peft:lora", by_doc_id)
+            match = resolve_manifest_reference("kb://doc/peft:lora", kb_dir=str(kb_dir))
+            self.assertIsNotNone(match)
+            assert match is not None
+            self.assertEqual(match.url, "https://example.com/lora")
 
 
 class SourceMatchPayloadTestCase(unittest.TestCase):
