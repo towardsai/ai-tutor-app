@@ -544,7 +544,11 @@ function SourceRow({
     }
     recompute();
     window.addEventListener("resize", recompute);
-    return () => window.removeEventListener("resize", recompute);
+    window.addEventListener("scroll", recompute, true);
+    return () => {
+      window.removeEventListener("resize", recompute);
+      window.removeEventListener("scroll", recompute, true);
+    };
   }, [popoverOpen]);
 
   return (
