@@ -80,11 +80,6 @@ SOURCE_CONFIGS = {
             },
         ],
     },
-    "openai_cookbooks": {
-        "owner": "openai",
-        "repo": "openai-cookbook",
-        "path": "examples",
-    },
     "langchain": {
         "owner": "langchain-ai",
         "repo": "docs",

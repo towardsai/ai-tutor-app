@@ -50,7 +50,6 @@ VERSION_REPOS: dict[str, tuple[str, str]] = {
     "langchain": ("langchain-ai", "langchain"),
     "langgraph": ("langchain-ai", "langgraph"),
     "deep_agents": ("langchain-ai", "deepagents"),
-    "openai_cookbooks": ("openai", "openai-cookbook"),
 }
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
