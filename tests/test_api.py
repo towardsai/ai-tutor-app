@@ -98,7 +98,7 @@ class ApiTestCase(unittest.TestCase):
     def test_list_tools_for_anthropic_model(self) -> None:
         with TestClient(app) as client:
             response = client.get(
-                "/api/tools", params={"model": "anthropic:claude-sonnet-4-6"}
+                "/api/tools", params={"model": "anthropic:claude-haiku-4-5"}
             )
 
         self.assertEqual(response.status_code, 200)
@@ -1027,7 +1027,10 @@ def live_tool_names(parts: list[dict]) -> set[str]:
 
 
 def live_answer_text(parts: list[dict]) -> str:
-    return "\n".join(
+    # The AI SDK appends deltas directly to each text block. Inserting a
+    # separator here corrupts providers such as DeepSeek that stream very
+    # fine-grained chunks (for example, "Lo" + "RA").
+    return "".join(
         part.get("delta", "") for part in parts if part["type"] == "text-delta"
     )
 
