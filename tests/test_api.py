@@ -957,9 +957,7 @@ def live_chat_payload(
         "messages": messages,
         "sourceKeys": ["peft", "transformers"],
         "enabledTools": enabled_tools or [],
-        "model": os.getenv(
-            "LIVE_API_E2E_MODEL", "deepseek:deepseek-v4-flash"
-        ),
+        "model": os.getenv("LIVE_API_E2E_MODEL", "deepseek:deepseek-v4-flash"),
         "includeReasoning": False,
         "threadId": thread_id,
     }

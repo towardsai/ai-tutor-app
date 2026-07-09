@@ -331,7 +331,9 @@ class ChatServiceTestCase(unittest.TestCase):
 
         self.assertIsInstance(model, RunnableWithFallbacks)
         self.assertEqual(model.runnable.model_name, "deepseek-v4-flash")
-        self.assertEqual(str(model.runnable.openai_api_base), "https://api.deepseek.com")
+        self.assertEqual(
+            str(model.runnable.openai_api_base), "https://api.deepseek.com"
+        )
         self.assertEqual(len(model.fallbacks), 1)
         self.assertEqual(
             model.fallbacks[0].model,
