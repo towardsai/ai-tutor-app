@@ -75,8 +75,8 @@ class ApiTestCase(unittest.TestCase):
         )
         self.assertEqual(transformers["label"], "Transformers Docs")
         self.assertEqual(transformers["shortLabel"], "Transformers")
-        self.assertEqual(body["model"], "openrouter:deepseek/deepseek-v4-flash")
-        # DeepSeek via OpenRouter is the default model, so only local KB tools
+        self.assertEqual(body["model"], "deepseek:deepseek-v4-flash")
+        # DeepSeek direct is the default model, so only local KB tools
         # are exposed until a provider with built-in web tools is selected.
         tool_keys = {tool["key"] for tool in tools}
         self.assertNotIn("web_search", tool_keys)
@@ -958,7 +958,7 @@ def live_chat_payload(
         "sourceKeys": ["peft", "transformers"],
         "enabledTools": enabled_tools or [],
         "model": os.getenv(
-            "LIVE_API_E2E_MODEL", "openrouter:deepseek/deepseek-v4-flash"
+            "LIVE_API_E2E_MODEL", "deepseek:deepseek-v4-flash"
         ),
         "includeReasoning": False,
         "threadId": thread_id,

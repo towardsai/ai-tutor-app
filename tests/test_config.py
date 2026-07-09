@@ -11,9 +11,9 @@ import pytest
 from app import config
 
 
-def test_default_chat_model_prefers_deepseek_openrouter_with_gemini_fallback() -> None:
-    assert config.DEFAULT_MODEL_NAME == config.DEEPSEEK_OPENROUTER_MODEL_NAME
-    assert config.DEFAULT_MODEL_NAME == "openrouter:deepseek/deepseek-v4-flash"
+def test_default_chat_model_prefers_deepseek_direct_with_gemini_fallback() -> None:
+    assert config.DEFAULT_MODEL_NAME == config.DEEPSEEK_DIRECT_MODEL_NAME
+    assert config.DEFAULT_MODEL_NAME == "deepseek:deepseek-v4-flash"
     assert config.GEMINI_FALLBACK_MODEL_NAME == "google-genai:gemini-2.5-flash"
     assert config.AVAILABLE_MODELS[0]["id"] == config.DEFAULT_MODEL_NAME
     assert any(

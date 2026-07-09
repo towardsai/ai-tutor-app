@@ -48,7 +48,7 @@ Want to build this AI tutor yourself, end to end? Our [**Full Stack AI Engineer 
    cp .env.example .env  # then edit values
    ```
 
-   The chat model is provider-agnostic, configured in `provider:model` format. The default is `openrouter:deepseek/deepseek-v4-flash`, which uses OpenRouter first and falls back in-app to `google-genai:gemini-2.5-flash` when a Gemini key is configured. Set `OPENROUTER_API_KEY` plus `GEMINI_API_KEY` or `GOOGLE_API_KEY` for the default path. Optional provider keys include `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `DEEPSEEK_API_KEY` for non-default provider paths.
+   The chat model is provider-agnostic, configured in `provider:model` format. The default is `deepseek:deepseek-v4-flash`, which uses DeepSeek's first-party API and falls back in-app to `google-genai:gemini-2.5-flash` when a Gemini key is configured. Set `DEEPSEEK_API_KEY` plus `GEMINI_API_KEY` or `GOOGLE_API_KEY` for the default path. Optional provider keys include `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `OPENROUTER_API_KEY` for non-default provider paths.
    To trace requests in LangSmith, set `LANGSMITH_API_KEY`. The app enables tracing automatically when that key is present unless `LANGSMITH_TRACING=false` is set.
 
 ### LangSmith Agent Tracing

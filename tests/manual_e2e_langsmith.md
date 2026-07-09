@@ -13,7 +13,7 @@ Run commands from the repository root.
 Required local artifacts and environment:
 
 - `.env` contains `COHERE_API_KEY`
-- `.env` contains `OPENROUTER_API_KEY`
+- `.env` contains `DEEPSEEK_API_KEY`
 - `.env` contains `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - `.env` contains `LANGSMITH_API_KEY`
 - `.env` has `LANGSMITH_TRACING=true`
@@ -29,7 +29,7 @@ uv run dotenv -f .env run -- python - <<'PY'
 import os
 for key in [
     "COHERE_API_KEY",
-    "OPENROUTER_API_KEY",
+    "DEEPSEEK_API_KEY",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
     "LANGSMITH_API_KEY",
@@ -95,7 +95,7 @@ cat >/tmp/ai_tutor_e2e_payload.json <<'JSON'
     "transformers"
   ],
   "enabledTools": [],
-  "model": "openrouter:deepseek/deepseek-v4-flash",
+  "model": "deepseek:deepseek-v4-flash",
   "includeReasoning": true,
   "threadId": ""
 }

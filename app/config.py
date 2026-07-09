@@ -69,14 +69,14 @@ KB_INDEX_PATH = f"{KB_DIR}/wiki/index.md"
 KB_AGENTS_PATH = f"{KB_DIR}/AGENTS.md"
 # In-git template, copied into data/kb/AGENTS.md by ensure_kb_agents_md().
 KB_AGENTS_TEMPLATE_PATH = "data/scraping_scripts/kb_agents_template.md"
-DEEPSEEK_OPENROUTER_MODEL_NAME = "openrouter:deepseek/deepseek-v4-flash"
+DEEPSEEK_DIRECT_MODEL_NAME = "deepseek:deepseek-v4-flash"
 GEMINI_FALLBACK_MODEL_NAME = "google-genai:gemini-2.5-flash"
-DEFAULT_MODEL_NAME = DEEPSEEK_OPENROUTER_MODEL_NAME
+DEFAULT_MODEL_NAME = DEEPSEEK_DIRECT_MODEL_NAME
 
 AVAILABLE_MODELS: tuple[dict[str, str], ...] = (
     {
-        "id": DEEPSEEK_OPENROUTER_MODEL_NAME,
-        "label": "DeepSeek V4 Flash (OpenRouter)",
+        "id": DEEPSEEK_DIRECT_MODEL_NAME,
+        "label": "DeepSeek V4 Flash",
     },
     {"id": GEMINI_FALLBACK_MODEL_NAME, "label": "Gemini 2.5 Flash"},
     {"id": "anthropic:claude-haiku-4-5", "label": "Claude Haiku 4.5"},
@@ -270,7 +270,7 @@ __all__ = [
     "DEFAULT_SELECTED_SOURCE_KEYS",
     "DEFAULT_SELECTED_SOURCES_UI",
     "DEFAULT_MODEL_NAME",
-    "DEEPSEEK_OPENROUTER_MODEL_NAME",
+    "DEEPSEEK_DIRECT_MODEL_NAME",
     "GEMINI_FALLBACK_MODEL_NAME",
     "BM25_INDEX_PATH",
     "DOCUMENT_DICT_PATH",

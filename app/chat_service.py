@@ -72,7 +72,7 @@ from .provider_events import (
 from .config import (
     BM25_INDEX_PATH,
     COURSE_SOURCE_KEYS,
-    DEEPSEEK_OPENROUTER_MODEL_NAME,
+    DEEPSEEK_DIRECT_MODEL_NAME,
     DEFAULT_SELECTED_SOURCE_KEYS,
     DOCUMENT_DICT_PATH,
     GEMINI_FALLBACK_MODEL_NAME,
@@ -793,8 +793,8 @@ def _has_google_genai_key() -> bool:
     return bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
 
 
-def _has_openrouter_key() -> bool:
-    return bool(os.environ.get("OPENROUTER_API_KEY"))
+def _has_deepseek_key() -> bool:
+    return bool(os.environ.get("DEEPSEEK_API_KEY"))
 
 
 def _build_chat_model_client(provider_model: str, include_thoughts: bool = False):
@@ -898,15 +898,15 @@ def _build_chat_model_client(provider_model: str, include_thoughts: bool = False
 
 def build_chat_model(model_name: str, include_thoughts: bool = False):
     provider_model = normalize_model_name(model_name)
-    if provider_model != DEEPSEEK_OPENROUTER_MODEL_NAME:
+    if provider_model != DEEPSEEK_DIRECT_MODEL_NAME:
         return _build_chat_model_client(
             provider_model,
             include_thoughts=include_thoughts,
         )
-    if not _has_openrouter_key() and _has_google_genai_key():
+    if not _has_deepseek_key() and _has_google_genai_key():
         logger.warning(
-            "No OPENROUTER_API_KEY is set for %s; using Gemini fallback %s.",
-            DEEPSEEK_OPENROUTER_MODEL_NAME,
+            "No DEEPSEEK_API_KEY is set for %s; using Gemini fallback %s.",
+            DEEPSEEK_DIRECT_MODEL_NAME,
             GEMINI_FALLBACK_MODEL_NAME,
         )
         return _build_chat_model_client(
@@ -917,9 +917,9 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
     if not _has_google_genai_key():
         logger.warning(
             "Gemini fallback %s is configured for %s, but no GOOGLE_API_KEY or "
-            "GEMINI_API_KEY is set; using OpenRouter only.",
+            "GEMINI_API_KEY is set; using DeepSeek only.",
             GEMINI_FALLBACK_MODEL_NAME,
-            DEEPSEEK_OPENROUTER_MODEL_NAME,
+            DEEPSEEK_DIRECT_MODEL_NAME,
         )
         return model
     fallback = _build_chat_model_client(

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.runnables.fallbacks import RunnableWithFallbacks
 
-from app.config import DEEPSEEK_OPENROUTER_MODEL_NAME, GEMINI_FALLBACK_MODEL_NAME
+from app.config import DEEPSEEK_DIRECT_MODEL_NAME, GEMINI_FALLBACK_MODEL_NAME
 from app.chat_service import (
     THREAD_IDLE_TTL_SECONDS,
     _claim_kb_command_budget,
@@ -318,39 +318,40 @@ class ChatServiceTestCase(unittest.TestCase):
         self.assertGreater(reasoning.max_tokens, 8192)
         self.assertEqual(reasoning.thinking, {"type": "enabled", "budget_tokens": 2048})
 
-    def test_deepseek_openrouter_default_has_gemini_fallback(self) -> None:
+    def test_deepseek_direct_default_has_gemini_fallback(self) -> None:
         with patch.dict(
             os.environ,
             {
-                "OPENROUTER_API_KEY": "openrouter-test-key",
+                "DEEPSEEK_API_KEY": "deepseek-test-key",
                 "GEMINI_API_KEY": "gemini-test-key",
             },
             clear=True,
         ):
-            model = build_chat_model(DEEPSEEK_OPENROUTER_MODEL_NAME)
+            model = build_chat_model(DEEPSEEK_DIRECT_MODEL_NAME)
 
         self.assertIsInstance(model, RunnableWithFallbacks)
-        self.assertEqual(model.runnable.model_name, "deepseek/deepseek-v4-flash")
+        self.assertEqual(model.runnable.model_name, "deepseek-v4-flash")
+        self.assertEqual(str(model.runnable.openai_api_base), "https://api.deepseek.com")
         self.assertEqual(len(model.fallbacks), 1)
         self.assertEqual(
             model.fallbacks[0].model,
             GEMINI_FALLBACK_MODEL_NAME.partition(":")[2],
         )
 
-    def test_deepseek_openrouter_default_skips_fallback_without_gemini_key(
+    def test_deepseek_direct_default_skips_fallback_without_gemini_key(
         self,
     ) -> None:
         with patch.dict(
             os.environ,
-            {"OPENROUTER_API_KEY": "openrouter-test-key"},
+            {"DEEPSEEK_API_KEY": "deepseek-test-key"},
             clear=True,
         ):
-            model = build_chat_model(DEEPSEEK_OPENROUTER_MODEL_NAME)
+            model = build_chat_model(DEEPSEEK_DIRECT_MODEL_NAME)
 
         self.assertNotIsInstance(model, RunnableWithFallbacks)
-        self.assertEqual(model.model_name, "deepseek/deepseek-v4-flash")
+        self.assertEqual(model.model_name, "deepseek-v4-flash")
 
-    def test_deepseek_openrouter_default_uses_gemini_when_openrouter_key_missing(
+    def test_deepseek_direct_default_uses_gemini_when_deepseek_key_missing(
         self,
     ) -> None:
         with patch.dict(
@@ -358,7 +359,7 @@ class ChatServiceTestCase(unittest.TestCase):
             {"GEMINI_API_KEY": "gemini-test-key"},
             clear=True,
         ):
-            model = build_chat_model(DEEPSEEK_OPENROUTER_MODEL_NAME)
+            model = build_chat_model(DEEPSEEK_DIRECT_MODEL_NAME)
 
         self.assertNotIsInstance(model, RunnableWithFallbacks)
         self.assertEqual(model.model, GEMINI_FALLBACK_MODEL_NAME.partition(":")[2])
