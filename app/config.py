@@ -45,7 +45,7 @@ if langsmith_tracing_enabled():
 VECTOR_DB_DIR = "data/chroma-db-all_sources"
 VECTOR_COLLECTION_NAME = "chroma-db-all_sources"
 DOCUMENT_DICT_PATH = f"{VECTOR_DB_DIR}/document_dict_all_sources.pkl"
-BM25_INDEX_PATH = f"{VECTOR_DB_DIR}/bm25_index_all_sources.pkl"
+BM25_INDEX_PATH = f"{VECTOR_DB_DIR}/bm25_index_all_sources.json.gz"
 CHROMA_SQLITE_PATH = f"{VECTOR_DB_DIR}/chroma.sqlite3"
 # The full bundle (all sources, incl. gated course content) lives in the
 # private repo; cold-starting from it needs an HF_TOKEN with read access. When

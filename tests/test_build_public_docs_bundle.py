@@ -227,7 +227,7 @@ def test_stage_kb_prunes_non_allowlisted_wiki_framework_pages(tmp_path: Path) ->
     builder.audit_staged_kb(stage_dir)
 
 
-def test_rebuild_retrieval_pkls_drops_course_documents(tmp_path: Path) -> None:
+def test_rebuild_retrieval_artifacts_drops_course_documents(tmp_path: Path) -> None:
     source_dir = tmp_path / "data"
     rows = [
         {
@@ -252,7 +252,7 @@ def test_rebuild_retrieval_pkls_drops_course_documents(tmp_path: Path) -> None:
     _write_jsonl(source_dir / "all_sources_data.jsonl", rows)
     (tmp_path / "stage" / builder.VECTOR_DB_DIR).mkdir(parents=True)
 
-    summary = builder.rebuild_retrieval_pkls(source_dir, tmp_path / "stage")
+    summary = builder.rebuild_retrieval_artifacts(source_dir, tmp_path / "stage")
     assert summary["documents"] == 1
 
     dict_path = tmp_path / "stage" / builder.VECTOR_DB_DIR / builder.DOCUMENT_DICT_FILE

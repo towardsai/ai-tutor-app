@@ -115,14 +115,14 @@ After the example.
             count = write_retrieval_artifacts(
                 config={
                     "document_dict_file": "document_dict_test.pkl",
-                    "bm25_index_file": "bm25_index_test.pkl",
+                    "bm25_index_file": "bm25_index_test.json.gz",
                 },
                 document_rows=document_rows,
                 db_path=str(db_path),
             )
 
             document_dict_path = db_path / "document_dict_test.pkl"
-            bm25_path = db_path / "bm25_index_test.pkl"
+            bm25_path = db_path / "bm25_index_test.json.gz"
 
             self.assertGreaterEqual(count, 1)
             self.assertTrue(document_dict_path.exists())

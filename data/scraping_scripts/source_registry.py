@@ -485,7 +485,7 @@ def vector_store_source_configs() -> dict[str, dict[str, str]]:
             "input_file": str(config["output_file"]),
             "db_name": f"chroma-db-{source}",
             "document_dict_file": f"document_dict_{source}.pkl",
-            "bm25_index_file": f"bm25_index_{source}.pkl",
+            "bm25_index_file": f"bm25_index_{source}.json.gz",
         }
         for source, config in SOURCE_CONFIGS.items()
     }
@@ -493,6 +493,6 @@ def vector_store_source_configs() -> dict[str, dict[str, str]]:
         "input_file": ALL_SOURCES_JSONL,
         "db_name": "chroma-db-all_sources",
         "document_dict_file": "document_dict_all_sources.pkl",
-        "bm25_index_file": "bm25_index_all_sources.pkl",
+        "bm25_index_file": "bm25_index_all_sources.json.gz",
     }
     return configs
