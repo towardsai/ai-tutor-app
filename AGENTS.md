@@ -6,7 +6,7 @@ This is the **canonical, tool-agnostic** instruction file for the repo. `CLAUDE.
 
 AI tutor for applied AI, LLMs, RAG, and Python. **Agentic RAG**: a LangChain/LangGraph agent grounds answers in a curated corpus of course + library docs, can browse a local file-based knowledge base, and (optionally) search the live web. One frontend: a **Next.js** UI (`frontend/`), served by a **FastAPI** backend (`app/api.py`) that streams in the Vercel AI SDK UI-message protocol. (A Gradio UI existed historically; it was removed to keep one rendering path.)
 
-ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-configurable (Gemini default, Anthropic, OpenAI; plus open models like DeepSeek via OpenRouter or the DeepSeek first-party API, used for cheap eval runs). Python ≥3.13, managed with `uv`.
+ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-configurable (DeepSeek V4 Flash through the first-party API by default, with an in-app fallback to Gemini 2.5 Flash when a Gemini key is set; Gemini 2.5 Flash and Claude Haiku 4.5 are also selectable; OpenAI and OpenRouter-compatible models are supported in code). Python ≥3.13, managed with `uv`.
 
 ## Key URLs
 
@@ -62,7 +62,7 @@ Runtime guidance the agent follows is in `data/kb/AGENTS.md` (injected into the 
 
 ## Sources & config
 
-`data/scraping_scripts/source_registry.py` is the **single source of truth** for sources (`SOURCE_CONFIGS`, key groupings, UI labels, defaults); `app/config.py` re-exports them and the frontend derives the picker from it (via `/api/tools`). Docs sources ingest via the GitHub API or `llms.txt`; course sources are Notion exports. To add a source: add it to the registry (+ the relevant grouping tuples), then run the matching workflow — no separate UI edit needed. Models live in `config.AVAILABLE_MODELS` (default `google-genai:gemini-3.5-flash`; also Claude Haiku 4.5; OpenAI supported in code). `app/chat_service.build_chat_model` also accepts `openrouter:` and `deepseek:` (first-party) provider prefixes for open-model eval runs (e.g. `--model deepseek:deepseek-v4-flash`), with pricing in `app/telemetry.MODEL_PRICING`.
+`data/scraping_scripts/source_registry.py` is the **single source of truth** for sources (`SOURCE_CONFIGS`, key groupings, UI labels, defaults); `app/config.py` re-exports them and the frontend derives the picker from it (via `/api/tools`). Docs sources ingest via the GitHub API or `llms.txt`; course sources are Notion exports. To add a source: add it to the registry (+ the relevant grouping tuples), then run the matching workflow — no separate UI edit needed. Models live in `config.AVAILABLE_MODELS` (default `deepseek:deepseek-v4-flash`; Gemini 2.5 Flash and Claude Haiku 4.5 are also selectable; OpenAI is supported in code). `build_chat_model` in `app/chat_service.py` accepts `deepseek:` for the first-party API and `openrouter:` for compatible experiment models, with pricing in `app/telemetry.MODEL_PRICING`; for the default DeepSeek model it also wires an in-app fallback to `google-genai:gemini-2.5-flash` whenever a Gemini key is configured (and substitutes it outright if `DEEPSEEK_API_KEY` is missing).
 
 ## Running locally
 
@@ -95,7 +95,7 @@ uv run -m data.scraping_scripts.retire_source_workflow --sources KEY [--dry-run 
 
 ## Environment variables
 
-Chat runtime: `COHERE_API_KEY` (retrieval), one chat-model provider key (`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or — for open-model eval runs — `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY`), `HF_TOKEN` (first-start download of the full private bundle; without it, cold start falls back to the public docs-only bundle — documentation sources only, course content hidden). Optional: `LANGSMITH_*` (tracing), `AI_TUTOR_API_PORT`/`HOST`/`CORS_ALLOW_ORIGINS`, `AI_TUTOR_KB_DIR`, `AI_TUTOR_MEMORY_PRESET` (default memory preset; see `app/memory_presets.py`), `NEXT_PUBLIC_AI_TUTOR_API_BASE_URL`. Data workflows also need `GITHUB_TOKEN` and `GEMINI_API_KEY`/`GOOGLE_API_KEY` (context generation). See `.env.example`.
+Chat runtime: `COHERE_API_KEY` (retrieval; always required), `DEEPSEEK_API_KEY` for the default model plus `GEMINI_API_KEY`/`GOOGLE_API_KEY` to enable its in-app Gemini 2.5 Flash fallback, and the corresponding provider key when selecting another model (`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`; `OPENROUTER_API_KEY` is used by OpenRouter experiment models), plus `HF_TOKEN` for first-start download of the full private bundle. Without `HF_TOKEN`, cold start falls back to the public docs-only bundle (documentation sources only, course content hidden). Optional: `LANGSMITH_*` (tracing), `AI_TUTOR_API_PORT`/`HOST`/`CORS_ALLOW_ORIGINS`, `AI_TUTOR_KB_DIR`, `AI_TUTOR_MEMORY_PRESET` (default memory preset; see `app/memory_presets.py`), `NEXT_PUBLIC_AI_TUTOR_API_BASE_URL`. Data workflows also need `GITHUB_TOKEN` and `GEMINI_API_KEY`/`GOOGLE_API_KEY` (context generation). See `.env.example`.
 
 ## Deployment
 
