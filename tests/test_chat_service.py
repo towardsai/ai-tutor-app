@@ -177,6 +177,18 @@ class FakeToolThenTextAgent(FakeAgent):
 
 class ChatServiceTestCase(unittest.TestCase):
     def test_effective_tool_names_follow_provider(self) -> None:
+        # DeepSeek (the default model) has no provider-native web tools, so
+        # enabling them must leave only the two custom tools.
+        self.assertEqual(
+            effective_tool_names(
+                "deepseek:deepseek-v4-flash",
+                ("web_search", "url_context", "web_fetch"),
+            ),
+            (
+                "retrieve_tutor_context",
+                "run_kb_command",
+            ),
+        )
         self.assertEqual(
             effective_tool_names(
                 "google-genai:gemini-3.5-flash",
