@@ -72,8 +72,10 @@ from .provider_events import (
 from .config import (
     BM25_INDEX_PATH,
     COURSE_SOURCE_KEYS,
+    DEEPSEEK_OPENROUTER_MODEL_NAME,
     DEFAULT_SELECTED_SOURCE_KEYS,
     DOCUMENT_DICT_PATH,
+    GEMINI_FALLBACK_MODEL_NAME,
     SOURCE_KEY_TO_LABEL,
     VECTOR_COLLECTION_NAME,
     VECTOR_DB_DIR,
@@ -787,8 +789,15 @@ def format_tool_args(args: Any) -> str:
     return str(args).strip()
 
 
-def build_chat_model(model_name: str, include_thoughts: bool = False):
-    provider_model = normalize_model_name(model_name)
+def _has_google_genai_key() -> bool:
+    return bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
+
+
+def _has_openrouter_key() -> bool:
+    return bool(os.environ.get("OPENROUTER_API_KEY"))
+
+
+def _build_chat_model_client(provider_model: str, include_thoughts: bool = False):
     provider, _, actual_model = provider_model.partition(":")
 
     if provider == "openai":
@@ -798,10 +807,9 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
         # stream_usage=True makes the streamed response carry token usage, so
         # context_stats / cost telemetry populates (some OpenAI-compatible
         # endpoints, e.g. Ollama, omit usage and leave token counts at 0).
-        # Routing is left to OpenRouter with fallbacks enabled: pinning a single
-        # provider with allow_fallbacks=False made batches die on a backend's
-        # transient 429 instead of routing around it. Fallback across providers
-        # is what keeps a long eval run reliable.
+        # Routing inside OpenRouter is left with its own fallbacks enabled:
+        # pinning a single provider with allow_fallbacks=False made batches die
+        # on a backend's transient 429 instead of routing around it.
         return ChatOpenAI(
             model=actual_model,
             temperature=1,
@@ -886,6 +894,39 @@ def build_chat_model(model_name: str, include_thoughts: bool = False):
     raise ValueError(
         "Unsupported model provider. Use openai, openrouter, deepseek, anthropic, google-genai, or ollama."
     )
+
+
+def build_chat_model(model_name: str, include_thoughts: bool = False):
+    provider_model = normalize_model_name(model_name)
+    if provider_model != DEEPSEEK_OPENROUTER_MODEL_NAME:
+        return _build_chat_model_client(
+            provider_model,
+            include_thoughts=include_thoughts,
+        )
+    if not _has_openrouter_key() and _has_google_genai_key():
+        logger.warning(
+            "No OPENROUTER_API_KEY is set for %s; using Gemini fallback %s.",
+            DEEPSEEK_OPENROUTER_MODEL_NAME,
+            GEMINI_FALLBACK_MODEL_NAME,
+        )
+        return _build_chat_model_client(
+            GEMINI_FALLBACK_MODEL_NAME,
+            include_thoughts=include_thoughts,
+        )
+    model = _build_chat_model_client(provider_model, include_thoughts=include_thoughts)
+    if not _has_google_genai_key():
+        logger.warning(
+            "Gemini fallback %s is configured for %s, but no GOOGLE_API_KEY or "
+            "GEMINI_API_KEY is set; using OpenRouter only.",
+            GEMINI_FALLBACK_MODEL_NAME,
+            DEEPSEEK_OPENROUTER_MODEL_NAME,
+        )
+        return model
+    fallback = _build_chat_model_client(
+        GEMINI_FALLBACK_MODEL_NAME,
+        include_thoughts=include_thoughts,
+    )
+    return model.with_fallbacks([fallback])
 
 
 class GeminiServerSideToolsMiddleware(AgentMiddleware):

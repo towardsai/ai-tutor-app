@@ -75,10 +75,25 @@ class ApiTestCase(unittest.TestCase):
         )
         self.assertEqual(transformers["label"], "Transformers Docs")
         self.assertEqual(transformers["shortLabel"], "Transformers")
-        # Gemini is the default model, so web search + url reading are present.
+        self.assertEqual(body["model"], "openrouter:deepseek/deepseek-v4-flash")
+        # DeepSeek via OpenRouter is the default model, so only local KB tools
+        # are exposed until a provider with built-in web tools is selected.
         tool_keys = {tool["key"] for tool in tools}
+        self.assertNotIn("web_search", tool_keys)
+        self.assertNotIn("url_context", tool_keys)
+
+    def test_list_tools_for_gemini_model(self) -> None:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/tools", params={"model": "google-genai:gemini-2.5-flash"}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        tool_keys = {tool["key"] for tool in response.json()["tools"]}
+        self.assertIn("retrieval", tool_keys)
         self.assertIn("web_search", tool_keys)
         self.assertIn("url_context", tool_keys)
+        self.assertNotIn("web_fetch", tool_keys)
 
     def test_list_tools_for_anthropic_model(self) -> None:
         with TestClient(app) as client:
@@ -175,6 +190,7 @@ class ApiTestCase(unittest.TestCase):
             ],
             "sourceKeys": ["langchain", "transformers"],
             "enabledTools": ["web_search", "not_a_real_tool"],
+            "model": "google-genai:gemini-2.5-flash",
             "threadId": "thread_0",
         }
 
@@ -941,7 +957,9 @@ def live_chat_payload(
         "messages": messages,
         "sourceKeys": ["peft", "transformers"],
         "enabledTools": enabled_tools or [],
-        "model": os.getenv("LIVE_API_E2E_MODEL", "google-genai:gemini-3.5-flash"),
+        "model": os.getenv(
+            "LIVE_API_E2E_MODEL", "openrouter:deepseek/deepseek-v4-flash"
+        ),
         "includeReasoning": False,
         "threadId": thread_id,
     }
