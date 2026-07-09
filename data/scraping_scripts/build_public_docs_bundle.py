@@ -140,7 +140,7 @@ logger = logging.getLogger(__name__)
 VECTOR_DB_DIR = "chroma-db-all_sources"
 VECTOR_COLLECTION_NAME = "chroma-db-all_sources"
 DOCUMENT_DICT_FILE = "document_dict_all_sources.pkl"
-BM25_INDEX_FILE = "bm25_index_all_sources.pkl"
+BM25_INDEX_FILE = "bm25_index_all_sources.json.gz"
 KB_DIR_NAME = "kb"
 KB_ARCHIVE_NAME = "kb.tar.gz"
 
@@ -244,11 +244,11 @@ def stage_chroma(source_dir: Path, stage_dir: Path, *, vacuum: bool = True) -> d
     }
 
 
-def rebuild_retrieval_pkls(source_dir: Path, stage_dir: Path) -> dict:
+def rebuild_retrieval_artifacts(source_dir: Path, stage_dir: Path) -> dict:
     """Rebuild the BM25 index and document dict from a docs-only JSONL.
 
     Mirrors ``create_vector_stores.write_retrieval_artifacts`` so the public
-    pkls are byte-for-byte what prod would write without the course rows.
+    artifacts are byte-for-byte what prod would write without the course rows.
     """
     jsonl_path = source_dir / Path(ALL_SOURCES_JSONL).name
     if not jsonl_path.exists():
@@ -707,7 +707,7 @@ def build_bundle(
 
     summary: dict = {"sources": sorted(DOC_SOURCE_KEYS)}
     summary.update(stage_chroma(source_dir, stage_dir, vacuum=vacuum))
-    summary.update(rebuild_retrieval_pkls(source_dir, stage_dir))
+    summary.update(rebuild_retrieval_artifacts(source_dir, stage_dir))
     summary.update(stage_kb(source_dir, stage_dir))
     summary.update(publicize_wiki(stage_dir))
     write_dataset_card(stage_dir)

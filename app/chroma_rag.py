@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import math
@@ -1068,18 +1069,50 @@ def tokenize_for_bm25(text: str) -> list[str]:
     return tokens
 
 
+# Gzipped JSON, not pickle: the index ships in public HF bundles, and a pickle
+# full of Python-doc vocabulary tokens ("subprocess", "urllib.request", ...)
+# both trips Hub malware scanners and asks downloaders to trust arbitrary code
+# execution on load. Bump the version on any incompatible payload change.
+BM25_INDEX_FORMAT_VERSION = 1
+
+
 def save_bm25_index(index: BM25Index, output_file: str) -> None:
     ensure_parent_dir(output_file)
-    with open(output_file, "wb") as handle:
-        pickle.dump(index, handle)
+    payload = {
+        "format_version": BM25_INDEX_FORMAT_VERSION,
+        "k1": index.k1,
+        "b": index.b,
+        "average_document_length": index.average_document_length,
+        "document_lengths": index.document_lengths,
+        "document_frequencies": index.document_frequencies,
+        "postings": index.postings,
+        "records": [asdict(record) for record in index.records],
+    }
+    with gzip.open(output_file, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
 
 
 def load_bm25_index(path: str) -> BM25Index | None:
     if not os.path.exists(path):
         return None
     try:
-        with open(path, "rb") as handle:
-            index = pickle.load(handle)
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        version = payload.get("format_version")
+        if version != BM25_INDEX_FORMAT_VERSION:
+            raise ValueError(f"unsupported format_version={version!r}")
+        index = BM25Index(
+            records=[ChunkRecord(**record) for record in payload["records"]],
+            postings={
+                term: [(entry[0], entry[1]) for entry in entries]
+                for term, entries in payload["postings"].items()
+            },
+            document_frequencies=payload["document_frequencies"],
+            document_lengths=payload["document_lengths"],
+            average_document_length=payload["average_document_length"],
+            k1=payload["k1"],
+            b=payload["b"],
+        )
     except Exception as exc:
         logger.warning(
             "Failed to load BM25 index; falling back to dense-only retrieval. "
@@ -1089,14 +1122,7 @@ def load_bm25_index(path: str) -> BM25Index | None:
             exc,
         )
         return None
-    if isinstance(index, BM25Index):
-        return index
-    logger.warning(
-        "BM25 index has unexpected type %s; falling back to dense-only retrieval. path=%s",
-        type(index).__name__,
-        path,
-    )
-    return None
+    return index
 
 
 def default_bm25_index_path(document_dict_path: str) -> str:
@@ -1104,8 +1130,8 @@ def default_bm25_index_path(document_dict_path: str) -> str:
     name = path.name
     if name.startswith("document_dict_") and name.endswith(".pkl"):
         source = name.removeprefix("document_dict_").removesuffix(".pkl")
-        return str(path.with_name(f"bm25_index_{source}.pkl"))
-    return str(path.with_name("bm25_index.pkl"))
+        return str(path.with_name(f"bm25_index_{source}.json.gz"))
+    return str(path.with_name("bm25_index.json.gz"))
 
 
 def result_dedupe_key(result: SearchResult) -> str:

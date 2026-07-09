@@ -72,7 +72,7 @@ class ProcessSourceContentAwareReuseTestCase(unittest.TestCase):
             "input_file": f"data/{self.source}_data.jsonl",
             "db_name": self.db_name,
             "document_dict_file": f"document_dict_{self.source}.pkl",
-            "bm25_index_file": f"bm25_index_{self.source}.pkl",
+            "bm25_index_file": f"bm25_index_{self.source}.json.gz",
         }
         with open(config["input_file"], "w", encoding="utf-8") as handle:
             handle.write(

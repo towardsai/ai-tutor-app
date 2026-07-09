@@ -30,7 +30,7 @@ def _patched_bundle(tmp_path: Path) -> ExitStack:
         ("VECTOR_DB_DIR", db_dir),
         ("CHROMA_SQLITE_PATH", db_dir / "chroma.sqlite3"),
         ("DOCUMENT_DICT_PATH", db_dir / "document_dict.pkl"),
-        ("BM25_INDEX_PATH", db_dir / "bm25.pkl"),
+        ("BM25_INDEX_PATH", db_dir / "bm25.json.gz"),
         ("KB_MANIFEST_PATH", kb_dir / "generated" / "corpus_manifest.jsonl"),
         ("KB_INDEX_PATH", kb_dir / "wiki" / "index.md"),
         ("KB_AGENTS_PATH", kb_dir / "AGENTS.md"),
@@ -47,7 +47,7 @@ def _write_bundle_files(tmp_path: Path, *, include_bm25: bool = True) -> None:
     (db_dir / "chroma.sqlite3").write_bytes(b"")
     (db_dir / "document_dict.pkl").write_bytes(b"")
     if include_bm25:
-        (db_dir / "bm25.pkl").write_bytes(b"")
+        (db_dir / "bm25.json.gz").write_bytes(b"")
     (tmp_path / "kb" / "generated").mkdir(parents=True, exist_ok=True)
     (tmp_path / "kb" / "generated" / "corpus_manifest.jsonl").write_text(
         "", encoding="utf-8"
@@ -120,7 +120,7 @@ def test_complete_bundle_skips_download_and_caches_readiness(tmp_path: Path) -> 
 
             # Once verified, later calls are flag-checks: no re-stat, no
             # download attempt even if files vanish mid-process.
-            (tmp_path / "chroma" / "bm25.pkl").unlink()
+            (tmp_path / "chroma" / "bm25.json.gz").unlink()
             config.ensure_local_vector_db()
             assert snapshot_download.call_count == 0
 
