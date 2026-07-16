@@ -6,7 +6,7 @@ get a defensible answer to "does GraphRAG beat our classical RAG for the tutor?"
 
 GraphRAG was previously **dropped** from the Part C plan ("low information given
 the findings", `evals.md`). This revisits it deliberately, with a fair head-to-head
-rather than on faith. It lives entirely on branch `experiment/graphrag-vs-rag`
+rather than on faith. It was developed on branch `experiment/graphrag-vs-rag` (since merged — the retriever, `graphrag` extra, and runner flags are on `main`)
 and is fully opt-in: the default retriever and all production behavior are
 unchanged.
 
@@ -116,14 +116,18 @@ changing the baseline). Both arms, same 41 cases, Gemini 3.5 Flash, scoped to
 the source:
 
 ```bash
+# fullstack_case_ids.txt is a gitignored local artifact: it is the 41 case_ids from
+# battery_singleturn_v1.jsonl whose source_key == full_stack_ai_engineering.
 IDS=$(cat data/graphrag/fullstack_case_ids.txt)
 # classical RAG arm
 uv run -m evals.run_battery --battery data/eval/battery_singleturn_v1.jsonl \
-    --preset prod --retriever classical --ids $IDS --scope-sources \
+    --preset prod --retriever classical --ids $IDS --scope-sources --disable-kb \
+    --model google-genai:gemini-3.5-flash \
     --out runs/grag_classical
 # GraphRAG arm
 uv run -m evals.run_battery --battery data/eval/battery_singleturn_v1.jsonl \
-    --preset prod --retriever graphrag --ids $IDS --scope-sources \
+    --preset prod --retriever graphrag --ids $IDS --scope-sources --disable-kb \
+    --model google-genai:gemini-3.5-flash \
     --out runs/grag_graphrag
 # grade (auto retrieval/citation metrics, no judge needed) + report side by side
 uv run -m evals.grade --run runs/grag_classical

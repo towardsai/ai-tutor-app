@@ -18,10 +18,69 @@ New probe types need a frozen battery file `data/eval/<battery>.jsonl` — **nev
 ```bash
 uv run --env-file .env -m evals.run_battery --battery <file> --preset <arm> --out runs/<exp>_<arm>
 uv run -m evals.grade  --run  runs/<exp>_<arm>
-uv run -m evals.report --runs 'runs/<exp>_*' --out runs/<exp>_report
+uv run -m evals.report --runs runs/<exp>_*   --out runs/<exp>_report   # unquoted: report.py takes literal paths, the shell expands the glob
 ```
 
 Keep the **model and regime explicit** (which model is *under test*, context-window size, tools on/off). Runs cost real API money; every turn saves a JSON bundle, so grading/reporting re-run offline for free.
+
+For the DeepSeek long-context compaction study, use the paired runner rather
+than launching each preset sequentially. It advances all arms in turn-level
+lockstep, randomizes their within-turn order, and assigns a distinct DeepSeek
+`user_id` to every arm/session/trial so one arm cannot warm another's KV cache.
+The staging controls (`--first-pair-id`, `--max-pairs-this-invocation`) are
+operational and excluded from the immutable fingerprint. To gate the final run
+on one representative completed pair, first run the final configuration with:
+
+```bash
+uv run --env-file .env -m evals.run_compaction_experiment \
+  --battery data/eval/battery_sessions_v2_1.jsonl \
+  --tags tier1_contradiction tier2_longhorizon --trials 3 \
+  --arm-concurrency 4 --pair-concurrency 2 \
+  --first-pair-id v2_t1_python_colab_to_local_22t \
+  --max-pairs-this-invocation 1 \
+  --out runs/deepseek_compaction_stage1
+```
+
+After inspecting that pair, repeat without `--first-pair-id` and
+`--max-pairs-this-invocation`; the same manifest resumes the remaining pairs.
+
+```bash
+uv run --env-file .env -m evals.run_compaction_experiment \
+  --battery data/eval/battery_sessions_v2_1.jsonl \
+  --tags tier1_contradiction tier2_longhorizon \
+  --trials 3 --arm-concurrency 4 --pair-concurrency 2 \
+  --out runs/deepseek_compaction_stage1
+
+for arm in exp_fh_raw exp_fh_cap10k exp_c200_raw exp_c200_cap10k; do
+  uv run -m evals.grade --run "runs/deepseek_compaction_stage1/$arm"
+done
+
+uv run -m evals.check_triggers \
+  --runs runs/deepseek_compaction_stage1/exp_c200_raw \
+         runs/deepseek_compaction_stage1/exp_c200_cap10k \
+  --min-compactions 1 --min-summary-input 4001 \
+  --expected-trigger-tokens 200000 --first-pre-tokens-min 200000
+
+uv run -m evals.report \
+  --runs runs/deepseek_compaction_stage1/exp_fh_raw \
+         runs/deepseek_compaction_stage1/exp_fh_cap10k \
+         runs/deepseek_compaction_stage1/exp_c200_raw \
+         runs/deepseek_compaction_stage1/exp_c200_cap10k \
+  --out runs/deepseek_compaction_stage1/report
+```
+
+The paired runner retries a transient aborted turn at most twice after the
+initial attempt. The summarizer independently retries transient failures or an
+empty response at most twice. Failed stream attempts are recorded in each
+bundle with `failed_attempt_usage_unavailable=true`, because a dropped stream
+does not deliver DeepSeek's terminal usage chunk. Use pair concurrency 2 for
+the full run: all four arms remain concurrent within a turn, while peak arm
+pressure falls from 12 to 8 compared with pair concurrency 3.
+
+Every run directory now contains an immutable manifest/fingerprint. A resume
+fails if the battery, resolved preset, source tree, dependency lock, pricing
+snapshot, model, or runner arguments changed; use a new output directory rather
+than mixing stale and current bundles.
 
 ## 3. Upload the data to HF — the step that's easy to forget
 
@@ -40,7 +99,7 @@ api.upload_folder(folder_path="runs", path_in_repo="eval_runs/<experiment>",
 PY
 ```
 
-Then **update the collaborator download snippet in `evals.md`** so a fresh clone restores your runs too — it currently restores `eval_runs/part_*/*`; add a line for your `eval_runs/<experiment>/`. (Existing examples on HF: `eval_runs/graphrag/`, `eval_runs/slm_compaction/`, `eval_runs/part_*`.)
+Then **update the collaborator download snippet in `evals.md`** so a fresh clone restores your runs too — it currently restores `eval_runs/part_*/*`, `eval_runs/slm_compaction/axis_a/*`, and `eval_runs/deepseek_compaction_stage1/*`; add a line for your `eval_runs/<experiment>/`. (Existing examples on HF: `eval_runs/graphrag/`, `eval_runs/slm_compaction/`, `eval_runs/part_*`, `eval_runs/part_f_deepseek_v2/`, `eval_runs/deepseek_compaction_stage1/`.)
 
 ## 4. Write the experiment writeup
 

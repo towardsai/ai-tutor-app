@@ -16,10 +16,24 @@ def test_default_chat_model_prefers_deepseek_direct_with_gemini_fallback() -> No
     assert config.DEFAULT_MODEL_NAME == "deepseek:deepseek-v4-flash"
     assert config.GEMINI_FALLBACK_MODEL_NAME == "google-genai:gemini-2.5-flash"
     assert config.AVAILABLE_MODELS[0]["id"] == config.DEFAULT_MODEL_NAME
-    assert any(
-        model["id"] == config.GEMINI_FALLBACK_MODEL_NAME
-        for model in config.AVAILABLE_MODELS
-    )
+
+
+def test_gemini_fallback_model_is_deliberately_not_selectable() -> None:
+    """The rescue model must never reach the picker.
+
+    gemini-2.5-flash cannot combine Gemini's built-in web tools with our custom
+    function tools (that needs Gemini 3+ tool context circulation), and the
+    agent always binds retrieve_tutor_context + run_kb_command. Selecting it
+    would therefore be one web-search toggle away from a 400. It is safe as a
+    fallback only because the fallback is never handed web tools.
+    """
+    selectable = [model["id"] for model in config.AVAILABLE_MODELS]
+
+    assert config.GEMINI_FALLBACK_MODEL_NAME not in selectable
+    assert selectable == [
+        "deepseek:deepseek-v4-flash",
+        "anthropic:claude-haiku-4-5",
+    ]
 
 
 def _patched_bundle(tmp_path: Path) -> ExitStack:

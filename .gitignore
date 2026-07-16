@@ -248,3 +248,6 @@ deepseek_eval_results.md
 # Never meant for the public repo; keep them from an accidental `git add -A`.
 code_review/
 workshop_AIE/
+
+# Local course-content working data (private Thinkific curriculum mapping + markdown) — never commit
+/full_stack_course/

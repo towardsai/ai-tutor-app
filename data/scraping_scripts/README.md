@@ -93,10 +93,11 @@ This script will guide you through the complete process, it will:
    2. Download the JSONL files from the other courses
    3. Prompt you to manually add URLs to the course content, inside the newly created JSONL file (more details in step 3 below)
    4. Merge the course data into the main dataset
-   5. Add contextual information to document chunks before embedding
-   6. Create vector stores
-   7. Upload databases to HuggingFace
-   8. Confirm the course is configured in the central source registry
+   5. Rebuild the KB artifacts (raw/generated/wiki; skip with `--skip-kb`)
+   6. Add contextual information to document chunks before embedding (then prune contextual nodes to active sources)
+   7. Create vector stores
+   8. Upload databases to HuggingFace
+   9. Confirm the course is configured in the central source registry
 
 ## 3. Add URLs to the course content + Manual Dataset Cleaning (Most important step)
 
@@ -130,9 +131,9 @@ uv run -m app.api
 
 ----
 
-## Second workflow: Updating Documentation via GitHub API
+## Second workflow: Updating Documentation (GitHub API / llms.txt)
 
-To update library documentation from GitHub repositories:
+To update library documentation from GitHub repositories or llms.txt indexes:
 
 ```bash
 uv run -m data.scraping_scripts.update_docs_workflow
@@ -221,11 +222,13 @@ uv run -m data.scraping_scripts.update_docs_workflow --sources transformers peft
 
 The workflow includes:
 
-1. Downloading documentation from GitHub using the API
-2. Processing markdown files to create JSONL data
-3. Adding contextual information to document chunks
-4. Creating vector stores
-5. Uploading vector db and new JSONL files to HuggingFace
+1. Downloading documentation from GitHub (API) or llms.txt indexes
+2. Capturing per-source library versions (`capture_source_versions.py`)
+3. Processing markdown files to create JSONL data
+4. Rebuilding the KB artifacts (raw/generated/wiki; skip with `--skip-kb`)
+5. Adding contextual information to document chunks (then pruning contextual nodes to active sources)
+6. Creating vector stores
+7. Uploading vector db and new JSONL files to HuggingFace
 
 Both workflows validate Hugging Face access up front, and the docs workflow now stops immediately on GitHub auth/API failures so it does not overwrite source JSONL files with incomplete data.
 
@@ -234,7 +237,11 @@ Both workflows validate Hugging Face access up front, and the docs workflow now 
 If you need to run specific steps individually:
 
 - **GitHub to Markdown**: `github_to_markdown_ai_docs.py`
+- **llms.txt to Markdown**: `llms_txt_to_markdown_docs.py`
+- **Capture library versions**: `capture_source_versions.py`
 - **Process Markdown**: `process_md_files.py`
+- **Build KB artifacts**: `build_kb_artifacts.py` / **Update KB wiki**: `update_kb_wiki.py`
+- **Build public docs-only bundle**: `build_public_docs_bundle.py`
 - **Add Context**: `add_context_to_nodes.py`
 - **Create Vector Stores**: `create_vector_stores.py`
 - **Upload to Chroma Vector Store to HuggingFace**: `upload_dbs_to_hf.py`
@@ -297,7 +304,7 @@ re-embedding, $0 Cohere). Filtering is an **allowlist**: only sources in
 published), and a registry invariant test keeps the doc/course split total. The
 script copies the Chroma collection and keeps only allowlisted chunks (scanning
 metadata, so chunks with missing/unknown `source` are dropped too), rebuilds
-the BM25 / document-dict pkls from a docs-only view of
+the document-dict pkl and the BM25 index (gzipped JSON) from a docs-only view of
 `all_sources_data.jsonl`, and copies `data/kb` while pruning `raw/courses`,
 `wiki/courses`, and the non-doc rows from the generated indexes. The staged
 wiki is then **publicized**: the scaffolder regenerates AUTO-GENERATED blocks
@@ -334,7 +341,7 @@ download small).
 3. By default, only new content will have context added to save time and resources. Use `--process-all-context` only if you need to regenerate context for all documents. Use `--skip-data-upload` if you don't want to upload data files to the private HuggingFace repo (they're uploaded by default).
 
 4. When adding a new course, verify that it appears in the UI:
-   - Add the source label and default-selection metadata in `source_registry.py`
+   - Add the source to all four registry structures in `source_registry.py`: `SOURCE_KEY_TO_LABEL`, `SOURCE_DISPLAY_INFO` (what `/api/tools` renders), `UI_SOURCE_KEYS` (a source absent here never appears in the picker), and optionally `DEFAULT_SELECTED_SOURCE_KEYS`
    - Check that the new source appears in the source picker in the UI
    - Make sure it's properly included in the default selected sources if desired
    - Restart the API server to see the changes

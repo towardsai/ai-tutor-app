@@ -17,8 +17,10 @@ from app.chat_service import (
     _drop_thread_record,
     _evict_idle_threads,
     _get_fork_point,
+    _get_thread_provider,
     _get_thread_transcript,
     _record_fork_point,
+    _record_thread_provider,
     _record_thread_transcript,
     _touch_thread,
     agent_run_config,
@@ -30,6 +32,8 @@ from app.chat_service import (
     extract_shell_source_matches,
     resolve_answer_citations,
     retrieve_tutor_context,
+    run_kb_command,
+    supports_gemini_tool_combination,
     sync_thread_with_history,
     stream_chat,
 )
@@ -177,6 +181,18 @@ class FakeToolThenTextAgent(FakeAgent):
 
 class ChatServiceTestCase(unittest.TestCase):
     def test_effective_tool_names_follow_provider(self) -> None:
+        # DeepSeek (the default model) has no provider-native web tools, so
+        # enabling them must leave only the two custom tools.
+        self.assertEqual(
+            effective_tool_names(
+                "deepseek:deepseek-v4-flash",
+                ("web_search", "url_context", "web_fetch"),
+            ),
+            (
+                "retrieve_tutor_context",
+                "run_kb_command",
+            ),
+        )
         self.assertEqual(
             effective_tool_names(
                 "google-genai:gemini-3.5-flash",
@@ -201,6 +217,81 @@ class ChatServiceTestCase(unittest.TestCase):
                 "web_fetch",
             ),
         )
+
+    def test_effective_tool_names_drop_web_tools_for_pre_gemini_3(self) -> None:
+        """gemini-2.5 cannot mix built-in tools with our function tools.
+
+        Tool context circulation is Gemini 3+, so binding google_search next to
+        retrieve_tutor_context/run_kb_command on 2.5 is a 400 either way (with
+        the flag: "Tool call context circulation is not enabled"; without it:
+        the tool mix is rejected). The web toggles must be dropped, not bound.
+        """
+        self.assertEqual(
+            effective_tool_names(
+                "google-genai:gemini-2.5-flash",
+                ("web_search", "url_context", "web_fetch"),
+            ),
+            (
+                "retrieve_tutor_context",
+                "run_kb_command",
+            ),
+        )
+
+    def test_supports_gemini_tool_combination_by_generation(self) -> None:
+        self.assertTrue(
+            supports_gemini_tool_combination("google-genai:gemini-3.5-flash")
+        )
+        self.assertTrue(supports_gemini_tool_combination("google-genai:gemini-3-pro"))
+        self.assertFalse(
+            supports_gemini_tool_combination("google-genai:gemini-2.5-flash")
+        )
+        self.assertFalse(
+            supports_gemini_tool_combination("google-genai:gemini-1.5-pro")
+        )
+        # Non-Gemini providers never take the Gemini built-in-tool path.
+        self.assertFalse(supports_gemini_tool_combination("anthropic:claude-haiku-4-5"))
+        self.assertFalse(supports_gemini_tool_combination("deepseek:deepseek-v4-flash"))
+
+    def test_anthropic_web_tools_opt_out_of_programmatic_calling(self) -> None:
+        """allowed_callers=["direct"] is required, not decorative.
+
+        The _20260209 web tools default to permitting the code-execution
+        caller, i.e. programmatic tool calling, which Haiku 4.5 does not
+        support: dropping the field 400s with "'claude-haiku-4-5-20251001'
+        does not support programmatic tool calling". Verified live against
+        both web_fetch variants, so this guards a real regression.
+        """
+        build_agent.cache_clear()
+        created_agents = []
+
+        def fake_create_agent(**kwargs):
+            agent = types.SimpleNamespace(kwargs=kwargs)
+            created_agents.append(agent)
+            return agent
+
+        try:
+            with (
+                patch(
+                    "app.chat_service.build_chat_model",
+                    return_value=types.SimpleNamespace(_llm_type="fake-chat-model"),
+                ),
+                patch("app.chat_service.build_system_prompt", return_value="prompt"),
+                patch("app.chat_service.create_agent", side_effect=fake_create_agent),
+            ):
+                build_agent(
+                    "anthropic:claude-haiku-4-5",
+                    enabled_tools=("web_search", "web_fetch"),
+                )
+        finally:
+            build_agent.cache_clear()
+
+        bound = {
+            tool["name"]: tool
+            for tool in created_agents[0].kwargs["tools"]
+            if isinstance(tool, dict) and "type" in tool
+        }
+        self.assertEqual(bound["web_search"]["allowed_callers"], ["direct"])
+        self.assertEqual(bound["web_fetch"]["allowed_callers"], ["direct"])
 
     def test_agent_run_config_adds_langsmith_metadata(self) -> None:
         request = ChatRequest(
@@ -376,6 +467,59 @@ class ChatServiceTestCase(unittest.TestCase):
         finally:
             _clear_kb_command_budget(session_id)
 
+    def test_kb_command_accepts_timeout_alias_with_runtime_cap(self) -> None:
+        session_id = "test_timeout_alias"
+        _clear_kb_command_budget(session_id)
+        runtime = types.SimpleNamespace(
+            context=types.SimpleNamespace(
+                kb_session_id=session_id,
+                kb_command_limit=3,
+            )
+        )
+        try:
+            with (
+                patch("app.chat_service.ensure_local_vector_db"),
+                patch("app.chat_service.execute_kb_command") as execute,
+                patch("app.chat_service.format_command_payload", return_value="$ ls"),
+            ):
+                result = run_kb_command.func(
+                    command="ls",
+                    runtime=runtime,
+                    timeout=5,
+                )
+        finally:
+            _clear_kb_command_budget(session_id)
+        self.assertEqual(result, "$ ls")
+        execute.assert_called_once_with(
+            "ls",
+            timeout_seconds=5,
+            max_output_chars=40000,
+        )
+
+    def test_kb_command_unknown_arguments_return_soft_tool_error(self) -> None:
+        runtime = types.SimpleNamespace(
+            context=types.SimpleNamespace(
+                kb_session_id="test_unknown_tool_arg",
+                kb_command_limit=3,
+            )
+        )
+        with patch("app.chat_service.execute_kb_command") as execute:
+            result = run_kb_command.func(
+                command="ls",
+                runtime=runtime,
+                working_directory="raw",
+            )
+        self.assertIn("unsupported run_kb_command argument", result)
+        self.assertIn("working_directory", result)
+        execute.assert_not_called()
+
+    def test_kb_command_schema_disallows_unpublished_arguments(self) -> None:
+        schema = run_kb_command.args_schema
+        self.assertIsInstance(schema, dict)
+        self.assertFalse(schema["additionalProperties"])
+        self.assertIn("timeout", schema["properties"])
+        self.assertEqual(schema["properties"]["timeout"]["maximum"], 30)
+
     def test_retrieve_tutor_context_degrades_on_retriever_failure(self) -> None:
         runtime = types.SimpleNamespace(
             context=types.SimpleNamespace(allowed_sources=("transformers",))
@@ -389,6 +533,21 @@ class ChatServiceTestCase(unittest.TestCase):
         self.assertIn("run_kb_command", result)
         # ...and the raw provider error is not exposed in the tool output.
         self.assertNotIn("cohere 500 boom", result)
+
+    def test_retrieve_tutor_context_unknown_arguments_return_soft_error(self) -> None:
+        runtime = types.SimpleNamespace(
+            context=types.SimpleNamespace(allowed_sources=("transformers",))
+        )
+        with patch("app.chat_service.select_retriever") as select:
+            result = retrieve_tutor_context.func(
+                query="What is RAG?",
+                runtime=runtime,
+                top_k=20,
+            )
+        self.assertIn("unsupported argument", result)
+        self.assertIn("top_k", result)
+        select.assert_not_called()
+        self.assertFalse(retrieve_tutor_context.args_schema["additionalProperties"])
 
     def test_resolve_answer_citations_uses_current_turn_evidence(self) -> None:
         retrieval = SourceMatch(
@@ -884,6 +1043,87 @@ class ChatServiceTestCase(unittest.TestCase):
         self.assertEqual(agent.updated_states, [])
         self.assertEqual(_get_fork_point("thread_tt", 2), "ckpt_turn_1")
         self.assertEqual(_get_fork_point("thread_tt", 4), "")
+
+    def test_provider_mismatch_branches_to_fresh_plain_text_thread(self) -> None:
+        """A thread written by one provider must not be continued by another.
+
+        This is the fallback-contamination cure: a rescued DeepSeek turn
+        checkpoints Gemini-native messages, so the next DeepSeek turn would
+        replay blocks DeepSeek cannot parse (verified live: a healthy DeepSeek
+        key still 400s, and the turn silently re-falls-back to Gemini at ~10x
+        the price). Branching reseeds portable plain text instead.
+        """
+        agent = FakeAgent([])
+        tracked = (
+            ChatTurn(role="user", content="q1"),
+            ChatTurn(role="assistant", content="a1"),
+        )
+        self.addCleanup(_drop_thread_record, "thread_owned")
+        _record_thread_transcript("thread_owned", tracked)
+        _record_fork_point("thread_owned", 2, "ckpt_turn_1")
+        # Gemini served the last turn (the fallback fired), so its blocks are
+        # what sit in the checkpoint.
+        _record_thread_provider("thread_owned", "google-genai")
+
+        active_thread_id, fork_checkpoint_id = sync_thread_with_history(
+            agent,
+            "thread_owned",
+            tracked,
+            "deepseek",
+        )
+
+        # Fresh thread, and NOT the exact-transcript-match continuation that an
+        # identical same-provider request would have taken.
+        self.assertNotEqual(active_thread_id, "thread_owned")
+        self.assertEqual(fork_checkpoint_id, "")
+        # Reseeded from the visible transcript as plain text.
+        self.assertEqual(len(agent.updated_states), 1)
+        seeded = agent.updated_states[0][1]["messages"]
+        self.assertEqual([m.content for m in seeded], ["q1", "a1"])
+        # The superseded thread is unreachable, so its records are gone.
+        self.assertIsNone(_get_thread_transcript("thread_owned"))
+        self.assertEqual(_get_thread_provider("thread_owned"), "")
+
+    def test_same_provider_continues_thread(self) -> None:
+        """Ownership must only branch on a real mismatch, not on every turn."""
+        agent = FakeAgent([])
+        tracked = (
+            ChatTurn(role="user", content="q1"),
+            ChatTurn(role="assistant", content="a1"),
+        )
+        self.addCleanup(_drop_thread_record, "thread_same")
+        _record_thread_transcript("thread_same", tracked)
+        _record_thread_provider("thread_same", "deepseek")
+
+        active_thread_id, fork_checkpoint_id = sync_thread_with_history(
+            agent,
+            "thread_same",
+            tracked,
+            "deepseek",
+        )
+
+        self.assertEqual(active_thread_id, "thread_same")
+        self.assertEqual(fork_checkpoint_id, "")
+        self.assertEqual(agent.updated_states, [])
+
+    def test_untracked_provider_does_not_branch(self) -> None:
+        """Threads predating ownership tracking keep their old behavior."""
+        agent = FakeAgent([])
+        tracked = (
+            ChatTurn(role="user", content="q1"),
+            ChatTurn(role="assistant", content="a1"),
+        )
+        self.addCleanup(_drop_thread_record, "thread_untracked")
+        _record_thread_transcript("thread_untracked", tracked)
+
+        active_thread_id, _fork = sync_thread_with_history(
+            agent,
+            "thread_untracked",
+            tracked,
+            "deepseek",
+        )
+
+        self.assertEqual(active_thread_id, "thread_untracked")
 
     def test_edit_without_fork_point_falls_back_to_branch(self) -> None:
         agent = FakeAgent([])

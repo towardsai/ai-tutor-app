@@ -26,15 +26,24 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime
+import hashlib
 import json
 import logging
 import os
+import subprocess
 import time
 from collections import defaultdict
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .common import append_jsonl, detect_battery_type, load_jsonl, write_jsonl
+from .common import (
+    append_jsonl,
+    detect_battery_type,
+    ensure_battery_not_deprecated,
+    load_jsonl,
+    write_jsonl,
+)
 
 logger = logging.getLogger("evals.run_battery")
 
@@ -54,11 +63,17 @@ TOOL_OUTPUT_MAX_CHARS = 40_000
 # hierarchical summarization's map-reduce, ~30 sequential calls) legitimately
 # need longer than the cloud default.
 TURN_TIMEOUT_SECONDS = int(os.environ.get("AI_TUTOR_EVAL_TURN_TIMEOUT", "600"))
+EXPERIMENT_SCHEMA_VERSION = 2
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--battery", required=True, help="Path to a battery JSONL.")
+    parser.add_argument(
+        "--allow-deprecated-battery",
+        action="store_true",
+        help="Run a battery deprecated after a validity audit (reproduction only).",
+    )
     parser.add_argument("--preset", default="prod", help="Memory preset name.")
     parser.add_argument("--model", default="", help="Model id (default: app default).")
     parser.add_argument("--trials", type=int, default=1)
@@ -130,6 +145,117 @@ def record_tags(record: dict[str, Any]) -> set[str]:
     return tags
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _source_tree_sha256(repo_root: Path) -> str:
+    """Hash executable harness/app sources, including untracked Python files."""
+    digest = hashlib.sha256()
+    paths = [
+        path
+        for folder in (repo_root / "app", repo_root / "evals")
+        for path in folder.rglob("*.py")
+    ]
+    for path in sorted(paths):
+        digest.update(str(path.relative_to(repo_root)).encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _git_value(repo_root: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip() if completed.returncode == 0 else "unavailable"
+
+
+def build_run_manifest(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
+    """Build the immutable scientific configuration for one battery run."""
+    from app.config import DEFAULT_MODEL_NAME
+    from app.memory_presets import resolve_memory_preset
+    from app.telemetry import MODEL_PRICING
+
+    repo_root = Path(__file__).resolve().parents[1]
+    battery_path = Path(args.battery).resolve()
+    lock_path = repo_root / "uv.lock"
+    semantic_args = {
+        key: value
+        for key, value in vars(args).items()
+        if key
+        not in {
+            "out",
+            "run_fingerprint",
+            # Staging controls affect only how much work one paired-runner
+            # process performs, not the scientific configuration or rows.
+            "max_pairs_this_invocation",
+            "first_pair_id",
+            "import_completed_from",
+            # Operational escape hatch, not scientific configuration.
+            "allow_deprecated_battery",
+        }
+    }
+    manifest = {
+        "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
+        "git_sha": _git_value(repo_root, "rev-parse", "HEAD"),
+        "git_status": _git_value(repo_root, "status", "--short"),
+        "source_tree_sha256": _source_tree_sha256(repo_root),
+        "uv_lock_sha256": _sha256_file(lock_path),
+        "battery_path": str(battery_path),
+        "battery_sha256": _sha256_file(battery_path),
+        "memory_config": asdict(resolve_memory_preset(args.preset)),
+        "requested_model": args.model or DEFAULT_MODEL_NAME,
+        "provider_credentials_present": {
+            "deepseek": bool(os.environ.get("DEEPSEEK_API_KEY")),
+            "google": bool(
+                os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+            ),
+            "openrouter": bool(os.environ.get("OPENROUTER_API_KEY")),
+        },
+        "pricing_snapshot_usd_per_million": {
+            key: asdict(value) for key, value in sorted(MODEL_PRICING.items())
+        },
+        "runner_args": semantic_args,
+    }
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    return manifest, hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def write_or_validate_run_config(out_dir: Path, args: argparse.Namespace) -> str:
+    """Write a manifest once; refuse to mix stale bundles on resume."""
+    manifest, fingerprint = build_run_manifest(args)
+    config_path = out_dir / "run_config.json"
+    bundles_path = out_dir / "bundles.jsonl"
+    if config_path.exists() and bundles_path.exists() and bundles_path.stat().st_size:
+        existing = json.loads(config_path.read_text())
+        existing_fingerprint = existing.get("_fingerprint")
+        if existing_fingerprint != fingerprint:
+            raise SystemExit(
+                "Refusing to resume with configuration drift: "
+                f"stored fingerprint={existing_fingerprint!r}, "
+                f"current={fingerprint!r}. Use a new --out directory."
+            )
+        return fingerprint
+
+    payload = {
+        **vars(args),
+        "_fingerprint": fingerprint,
+        "_manifest": manifest,
+    }
+    config_path.write_text(json.dumps(payload, indent=2, default=str) + "\n")
+    return fingerprint
+
+
 class BundleSink:
     """Append-only bundle store with resume bookkeeping."""
 
@@ -186,6 +312,7 @@ def make_bundle(
     return {
         "run_id": f"{unit_id}|turn{turn_index if turn_index is not None else 0}"
         f"|t{trial}",
+        "run_fingerprint": getattr(args, "run_fingerprint", ""),
         "unit_id": unit_id,
         "battery_path": args.battery,
         "battery_type": battery_type,
@@ -201,8 +328,86 @@ def make_bundle(
         "tool_calls": result["tool_calls"],
         "resolved_sources": result["resolved_sources"],
         "context_stats": result["context_stats"],
+        "turn_retry_attempts": int(result.get("turn_retry_attempts") or 0),
+        "turn_attempt_failures": list(result.get("turn_attempt_failures") or []),
+        "failed_attempt_usage_unavailable": bool(
+            result.get("failed_attempt_usage_unavailable")
+        ),
         "error": result["error"],
     }
+
+
+def validate_experiment_result(
+    args: argparse.Namespace, result: dict[str, Any]
+) -> None:
+    """Turn silent instrumentation/provider drift into a recorded run error."""
+    from app.config import DEFAULT_MODEL_NAME
+    from app.chat_service import model_provider_and_name
+    from app.memory_presets import resolve_memory_preset
+
+    config = resolve_memory_preset(args.preset)
+    if not config.experiment_mode or result.get("error"):
+        return
+    stats = result.get("context_stats") or {}
+    calls = stats.get("model_calls") or []
+    problems: list[str] = []
+    if not stats:
+        problems.append("missing context_stats")
+    if not calls:
+        problems.append("missing per-call model telemetry")
+    if len(calls) != int(stats.get("llm_calls") or 0):
+        problems.append("per-call telemetry count does not match llm_calls")
+
+    provider, expected_model = model_provider_and_name(args.model or DEFAULT_MODEL_NAME)
+    actual_models = {str(call.get("model") or "") for call in calls}
+    if actual_models and actual_models != {expected_model}:
+        problems.append(
+            f"expected only {expected_model}, observed {sorted(actual_models)}"
+        )
+    for call in calls:
+        if not call.get("usage_reported"):
+            problems.append(f"call {call.get('sequence')} missing token usage")
+        if provider == "deepseek" and not call.get("cache_details_reported"):
+            problems.append(
+                f"call {call.get('sequence')} missing DeepSeek cache telemetry"
+            )
+    if stats.get("cost_breakdown") is None:
+        problems.append("missing cost breakdown")
+    for event in stats.get("compaction_events") or []:
+        configured_trigger = int(event.get("configured_trigger_tokens") or 0)
+        if configured_trigger != config.summarization_trigger_tokens:
+            problems.append(
+                "compaction event trigger does not match resolved preset "
+                f"({configured_trigger} != {config.summarization_trigger_tokens})"
+            )
+        approximate_tokens = int(event.get("pre_compaction_tokens_approx") or 0)
+        reported_tokens = int(event.get("trigger_reported_tokens") or 0)
+        if max(approximate_tokens, reported_tokens) < configured_trigger:
+            problems.append(
+                "neither approximate nor provider-reported tokens reached the "
+                "configured compaction trigger"
+            )
+        if not event.get("summary_input_untrimmed"):
+            problems.append("summarizer input was trimmed")
+        if int(event.get("summary_input_tokens_approx") or 0) <= 4_000:
+            problems.append("summarizer input did not exceed the historical 4k cap")
+        if config.summarization_strategy == "structured_prefix":
+            if event.get("summary_strategy") != "structured_prefix":
+                problems.append("structured-prefix compaction strategy not recorded")
+            if not event.get("summary_system_message_present"):
+                problems.append("structured-prefix summary omitted the system message")
+            if not event.get("summary_cache_user_id_preserved"):
+                problems.append("structured-prefix summary omitted the cache user_id")
+            if not event.get("summary_provider_usage_reported"):
+                problems.append("structured-prefix summary missing provider usage")
+            if provider == "deepseek" and not event.get(
+                "summary_provider_cache_details_reported"
+            ):
+                problems.append(
+                    "structured-prefix summary missing DeepSeek cache telemetry"
+                )
+    if problems:
+        result["error"] = "HarnessValidationError: " + "; ".join(problems)
 
 
 async def run_turn(request: Any) -> dict[str, Any]:
@@ -224,12 +429,26 @@ async def run_turn(request: Any) -> dict[str, Any]:
                 elif event.type == "tool_call_completed":
                     data = event.data
                     output_text = str(data.get("output_text") or "")
+                    original_chars = data.get("output_original_chars")
                     tool_calls.append(
                         {
                             "tool_name": data.get("tool_name"),
                             "args_text": data.get("args_text", ""),
                             "output_text": output_text[:TOOL_OUTPUT_MAX_CHARS],
+                            # Completeness is relative to what the model saw.
+                            # The stable cap is part of the treatment, not a
+                            # bundle-capture failure; retain pre-cap size below
+                            # as separate diagnostic metadata.
                             "output_chars": len(output_text),
+                            "output_original_chars": (
+                                int(original_chars)
+                                if isinstance(original_chars, int)
+                                else len(output_text)
+                            ),
+                            "output_was_capped": bool(data.get("output_was_capped")),
+                            "output_original_bytes": data.get("output_original_bytes"),
+                            "output_retained_bytes": data.get("output_retained_bytes"),
+                            "output_sha256": data.get("output_sha256"),
                             "matches": [
                                 {
                                     key: match.get(key)
@@ -274,6 +493,7 @@ def build_request(
     history: tuple[Any, ...] = (),
     thread_id: str = "",
     student_id: str = "",
+    cache_user_id: str = "",
 ) -> Any:
     from app.chat_types import ChatRequest
     from app.config import DEFAULT_MODEL_NAME, DEFAULT_SELECTED_SOURCE_KEYS
@@ -296,10 +516,21 @@ def build_request(
         enabled_tools=tuple(args.enable_tools),
         memory_preset=args.preset,
         student_id=student_id,
+        cache_user_id=cache_user_id,
         disable_kb=args.disable_kb,
         retrieval_budget=args.retrieval_budget or None,
         retriever=args.retriever,
     )
+
+
+def experiment_cache_user_id(
+    preset: str, unit_id: str, trial: int, *, namespace: str = ""
+) -> str:
+    """Opaque stable DeepSeek KV-cache namespace for one trajectory."""
+    digest = hashlib.sha256(
+        f"{namespace}|{preset}|{unit_id}|{trial}".encode()
+    ).hexdigest()[:24]
+    return f"eval_{digest}"
 
 
 async def run_single_case(
@@ -333,8 +564,15 @@ async def run_single_case(
         source_key=record.get("source_key"),
         history=history,
         student_id=record.get("_student_id", ""),
+        cache_user_id=experiment_cache_user_id(
+            args.preset,
+            unit_id,
+            trial,
+            namespace=getattr(args, "run_fingerprint", ""),
+        ),
     )
     result = await run_turn(request)
+    validate_experiment_result(args, result)
     await sink.write(
         [
             make_bundle(
@@ -380,8 +618,15 @@ async def run_session(
             history=tuple(history),
             thread_id=thread_id,
             student_id=student_id,
+            cache_user_id=experiment_cache_user_id(
+                args.preset,
+                session["session_id"],
+                trial,
+                namespace=getattr(args, "run_fingerprint", ""),
+            ),
         )
         result = await run_turn(request)
+        validate_experiment_result(args, result)
         thread_id = result["thread_id"] or thread_id
         rows.append(
             make_bundle(
@@ -440,6 +685,7 @@ def prepare_units(
 
 
 async def run_all(args: argparse.Namespace) -> Path:
+    ensure_battery_not_deprecated(args.battery, override=args.allow_deprecated_battery)
     records = load_jsonl(args.battery)
     battery_type = detect_battery_type(records)
     if args.ids:
@@ -463,9 +709,7 @@ async def run_all(args: argparse.Namespace) -> Path:
         args.out or f"runs/{datetime.date.today():%Y%m%d}_{battery_type}_{args.preset}"
     )
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "run_config.json").write_text(
-        json.dumps(vars(args), indent=1, default=str)
-    )
+    args.run_fingerprint = write_or_validate_run_config(out_dir, args)
     sink = BundleSink(out_dir / "bundles.jsonl")
 
     expected_turns = {

@@ -1,6 +1,6 @@
 # Compaction study: compaction methods vs keeping everything in context
 
-A **standalone** experiment (branch `experiment/context-compaction`) answering the
+A **standalone** experiment (developed on branch `experiment/context-compaction`, since merged) answering the
 workshop's core question: when a long context is established and then queried,
 should you **keep it all** (and lean on caching), **compact it** (summarize /
 trim / sliding window / selective / delta / hierarchical), or **not keep it and
@@ -119,13 +119,14 @@ per-turn summarization calls.
 context window, where the 37.5k-token lesson does not fit and "shove it all"
 becomes physically impossible — so compaction stops being optional. That arm is
 a **separate experiment** (different model; its own fleet, never compared to the
-Gemini numbers above) and is developed in the SLM PR, not here.
+Gemini numbers above); it lives in `evals/slm_compaction.md` (since merged).
 
 ## Run it
 
 ```bash
 uv run --env-file .env -m evals.compaction_study build --questions 15
-bash evals/run_compaction_study.sh        # Family A presets, 2.5 Flash, no tools
+PRESETS="full_history prod aggressive sliding_window prompt_compression selective_retention context_reset incontext_history_retrieval delta_summarization hierarchical_summarization" \
+  bash evals/run_compaction_study.sh      # the script's default PRESETS omits the last two
 uv run --env-file .env -m evals.knowledge_compaction --questions 15 \
     --strategies rag graphrag --out data/compaction      # Family B
 uv run --env-file .env -m evals.compaction_study report --runs 'runs/compaction_*'

@@ -176,6 +176,8 @@ When a variant regresses, don't stop at the number: diff the failure taxonomies 
 
 ## 8. Implementation notes (grounded in our code)
 
+*Status (2026-07-15): everything in this section has since been built — memory presets (`app/memory_presets.py`), the runner/bundles/telemetry (`evals/run_battery.py`, `context_stats`), and the trigger gate (`evals/check_triggers.py`). See evals.md "How it runs". Line references below are historical.*
+
 1. **Runner**: a Python script calling `stream_chat(ChatRequest(...))` directly (no HTTP needed) — `app/chat_service.py` is the single entry point. Multi-turn sessions: reuse one `thread_id` across turns (InMemorySaver is in-process, so the runner keeps state naturally). Persist one **trace bundle** JSONL per run: case_id, variant, trial, every ChatEvent, per-call token usage, timings, final answer.
 2. **Parameterize the middlewares**: `build_agent` hard-codes ContextEditing/Summarization params (`app/chat_service.py:832–851`). Add a memory-config parameter (env var or ChatRequest field) selecting variant presets, and include it in the agent cache key. This is the one refactor the harness requires.
 3. **Token/latency capture**: LangChain returns `usage_metadata` per model call; also already in LangSmith runs (tagged with model/thread; add `memory_variant` to the metadata dict at `app/chat_service.py:979–992`). Capture both — bundles for offline analysis, LangSmith for trace browsing during error analysis.
@@ -202,6 +204,8 @@ When a variant regresses, don't stop at the number: diff the failure taxonomies 
 - Have one **counterintuitive result** ready (e.g., "aggressive compression cut cost 70% and memory-probe accuracy only dropped 8 points" or the reverse) — that's what gets shared.
 
 ## 10. The two-week workshop cut (what to actually do before the talk)
+
+*Status (2026-07-15): shipped — see evals.md Parts B/C and the findings log.*
 
 The full plan above is research-grade; the talk needs **demo-grade numbers on a meter plus one honest bake-off table**. The cut:
 

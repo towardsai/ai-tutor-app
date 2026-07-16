@@ -39,6 +39,9 @@ class ChatRequest:
     # Long-term memory key: profile-memory presets read and update the stored
     # student profile under this id. Empty disables profile memory I/O.
     student_id: str = ""
+    # Experiment-only DeepSeek KV-cache namespace. The eval runner generates a
+    # stable opaque id per arm/session/trial to prevent cross-arm cache warming.
+    cache_user_id: str = ""
     # Part C / Axis B ablation: drop the run_kb_command tool (and its prompt
     # section) while keeping retrieval, to measure whether KB browsing helps.
     disable_kb: bool = False

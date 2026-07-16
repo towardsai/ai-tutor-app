@@ -16,7 +16,7 @@ Built by [Louis-François Bouchard](https://www.linkedin.com/in/whats-ai/) ([X](
 
 The live app is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugging Face](https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot) (prod).
 
-**Deployment flow:** every push to `main` auto-deploys to the private dev Space ([ai-tutor](https://huggingface.co/spaces/towardsai-tutors/ai-tutor)) for verification; the prod Space is promoted manually via the "Deploy prod to Hugging Face" workflow in the Actions tab.
+**Deployment flow:** every push to `main` (except docs/markdown-only and scraping-script-only changes) auto-deploys to the private dev Space ([ai-tutor](https://huggingface.co/spaces/towardsai-tutors/ai-tutor)) for verification; the prod Space is promoted manually via the "Deploy prod to Hugging Face" workflow in the Actions tab.
 
 ### Workshop, slides, and going deeper
 
@@ -122,7 +122,7 @@ API notes:
 
 Alongside vector retrieval, the agent can browse a local, file-based knowledge base under `data/kb/` like a filesystem (read-only `rg`/`grep`/`cat`/… via the `run_kb_command` tool). It has three layers: `raw/` (immutable corpus mirrors), `wiki/` (an LLM-maintained synthesis/navigation layer), and `generated/` (machine indexes for manifests, headings, and symbols).
 
-This is a deliberate take on [Andrej Karpathy's "LLM wiki" idea](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — a persistent, compounding wiki an LLM maintains over immutable sources, rather than re-deriving knowledge from scratch on every query. See [data/kb/MAINTAINER.md](./data/kb/MAINTAINER.md) for the design and the wiki-maintainer workflow, and [AGENTS.md](./AGENTS.md) for the overall app architecture.
+This is a deliberate take on [Andrej Karpathy's "LLM wiki" idea](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — a persistent, compounding wiki an LLM maintains over immutable sources, rather than re-deriving knowledge from scratch on every query. The design and wiki-maintainer workflow live in `data/kb/MAINTAINER.md` (not in git — it ships with the private HF KB bundle and is present locally after first start with `HF_TOKEN`); see [AGENTS.md](./AGENTS.md) for the overall app architecture.
 
 ### Rebuild Local Retrieval Index
 
@@ -135,7 +135,7 @@ uv run -m data.scraping_scripts.add_context_to_nodes
 uv run -m data.scraping_scripts.create_vector_stores all_sources
 ```
 
-The KB commands generate browseable markdown, indexes, and wiki navigation pages for the agent. The context command builds the chunk manifest used by the workflows, and the vector command writes dense embeddings into the local Chroma database.
+The KB commands generate browseable markdown, indexes, and wiki navigation pages for the agent. The context command adds Gemini-generated context to each chunk and writes `all_sources_contextual_nodes.pkl` (consumed by the vector build), and the vector command writes dense embeddings into the local Chroma database.
 The vector-store build now shows embedding and Chroma upsert progress in the terminal.
 
 ### Updating Data Sources

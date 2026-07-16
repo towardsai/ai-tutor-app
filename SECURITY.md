@@ -10,7 +10,7 @@ If you would rather start over email, contact a maintainer (see the [README](./R
 
 ## Scope
 
-This repository holds the **application code** for the AI Tutor. The course corpus and embeddings live in **private** Hugging Face datasets gated by `HF_TOKEN`; they are not in this repo.
+This repository holds the **application code** for the AI Tutor. The course corpus and embeddings live in **private** Hugging Face datasets gated by `HF_TOKEN` (a deliberately public docs-only bundle, `ai-tutor-vector-db-public`, contains no course content); they are not in this repo.
 
 ## Never commit
 

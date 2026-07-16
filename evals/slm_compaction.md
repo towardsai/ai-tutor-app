@@ -2,9 +2,9 @@
 
 Two scoped experiments on **how to survive a long lesson in a small context
 window**, run on cheap **local** models (Ollama) instead of a large cloud model,
-across three SLMs that run on a 16 GB Mac. It lives entirely on branch
-`experiment/slm-compaction` and is fully opt-in: the default chat model and all
-production behavior are unchanged.
+across three SLMs that run on a 16 GB Mac. It was developed on branch
+`experiment/slm-compaction` (since merged) and is fully opt-in: the default chat
+model and all production behavior are unchanged.
 
 ## Why this exists (the gap it fills)
 

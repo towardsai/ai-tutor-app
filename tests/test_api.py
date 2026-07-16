@@ -85,7 +85,7 @@ class ApiTestCase(unittest.TestCase):
     def test_list_tools_for_gemini_model(self) -> None:
         with TestClient(app) as client:
             response = client.get(
-                "/api/tools", params={"model": "google-genai:gemini-2.5-flash"}
+                "/api/tools", params={"model": "google-genai:gemini-3.5-flash"}
             )
 
         self.assertEqual(response.status_code, 200)
@@ -95,10 +95,28 @@ class ApiTestCase(unittest.TestCase):
         self.assertIn("url_context", tool_keys)
         self.assertNotIn("web_fetch", tool_keys)
 
+    def test_list_tools_hides_web_toggles_for_pre_gemini_3(self) -> None:
+        """gemini-2.5 must not be offered web toggles it cannot honor.
+
+        It cannot combine built-in tools with our custom function tools (that
+        needs Gemini 3+ tool context circulation), so build_agent drops the web
+        tools for it. Offering the toggle anyway would be a dead switch. The
+        fallback path never reaches here (it binds tools from the requested
+        DeepSeek model), so this only guards direct callers and eval runs.
+        """
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/tools", params={"model": "google-genai:gemini-2.5-flash"}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        tool_keys = {tool["key"] for tool in response.json()["tools"]}
+        self.assertEqual(tool_keys, {"retrieval"})
+
     def test_list_tools_for_anthropic_model(self) -> None:
         with TestClient(app) as client:
             response = client.get(
-                "/api/tools", params={"model": "anthropic:claude-sonnet-4-6"}
+                "/api/tools", params={"model": "anthropic:claude-haiku-4-5"}
             )
 
         self.assertEqual(response.status_code, 200)
@@ -190,7 +208,9 @@ class ApiTestCase(unittest.TestCase):
             ],
             "sourceKeys": ["langchain", "transformers"],
             "enabledTools": ["web_search", "not_a_real_tool"],
-            "model": "google-genai:gemini-2.5-flash",
+            # A selectable model that offers web_search; gemini-2.5-flash is
+            # fallback-only and now 422s here (see test_config.py).
+            "model": "anthropic:claude-haiku-4-5",
             "threadId": "thread_0",
         }
 
@@ -1027,7 +1047,10 @@ def live_tool_names(parts: list[dict]) -> set[str]:
 
 
 def live_answer_text(parts: list[dict]) -> str:
-    return "\n".join(
+    # The AI SDK appends deltas directly to each text block. Inserting a
+    # separator here corrupts providers such as DeepSeek that stream very
+    # fine-grained chunks (for example, "Lo" + "RA").
+    return "".join(
         part.get("delta", "") for part in parts if part["type"] == "text-delta"
     )
 

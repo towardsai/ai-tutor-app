@@ -14,11 +14,13 @@ from threading import Lock
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
+import httpx
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     AgentMiddleware,
     ClearToolUsesEdit,
     ContextEditingMiddleware,
+    ExtendedModelResponse,
     SummarizationMiddleware,
 )
 from langchain.tools import ToolRuntime, tool
@@ -27,11 +29,16 @@ from langchain_core.messages import (
     AIMessageChunk,
     BaseMessage,
     HumanMessage,
+    RemoveMessage,
     SystemMessage,
+    ToolMessage,
 )
+from langchain_core.messages.utils import count_tokens_approximately, get_buffer_string
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.store.memory import InMemoryStore
+from langgraph.types import Command
 
 from .chat_types import ChatEvent, ChatRequest, ChatTurn, SourceMatch
 from .memory_presets import (
@@ -42,9 +49,13 @@ from .memory_presets import (
 )
 from .telemetry import (
     TurnUsageHandler,
+    aggregate_cost_breakdown,
     context_window_stats,
     estimate_cost_usd,
+    pop_turn_events,
     pop_turn_signals,
+    record_turn_event,
+    record_turn_signal,
     record_turn_signal_max,
     reset_turn_signals,
     usage_totals,
@@ -84,6 +95,14 @@ from .config import (
 
 logger = logging.getLogger(__name__)
 
+# Thread state for every model, keyed only by thread_id -- so nothing here
+# stops a caller from pointing two providers at one thread. Do not read that as
+# permission: a checkpoint holds PROVIDER-NATIVE messages (Gemini thought
+# signatures, Anthropic signed thinking blocks, per-provider server-tool
+# blocks), and replaying them to a different provider is a hard 400, not a
+# degraded answer. One thread is one provider; see build_chat_model for the
+# verified failure modes and sync_thread_with_history for the safe way to
+# change provider (branch to a fresh thread seeded with plain text).
 CHECKPOINTER = InMemorySaver()
 # Long-term memory (student profiles), keyed by namespace ("student", <id>).
 # In-process like the checkpointer: profiles survive across threads/sessions
@@ -103,6 +122,12 @@ _THREAD_TRANSCRIPTS: dict[str, tuple[ChatTurn, ...]] = {}
 # with that checkpoint_id forks the thread from the prefix's real state
 # (tool outputs and summaries included) instead of a plain-text rebuild.
 _THREAD_FORK_POINTS: dict[str, dict[int, str]] = {}
+# Provider whose native message blocks are in each thread's checkpoint, taken
+# from the model that ACTUALLY served the turn (the DeepSeek fallback means the
+# serving model is not always the requested one). A turn on a different provider
+# cannot replay those blocks, so sync_thread_with_history branches on mismatch
+# rather than letting the request 400.
+_THREAD_PROVIDERS: dict[str, str] = {}
 # Threads live in process memory only, so idle ones (abandoned tabs, "New
 # chat") must be evicted or the saver grows forever. Eviction is graceful:
 # if the client comes back, the request restores its visible history into
@@ -124,6 +149,9 @@ class AppContext:
     kb_session_id: str = ""
     kb_command_limit: int = DEFAULT_KB_COMMAND_LIMIT
     student_id: str = ""
+    # DeepSeek experiment-only cache namespace. Stable within one trajectory,
+    # distinct across arm/session/trial, and intentionally contains no PII.
+    cache_user_id: str = ""
     # Per-request retrieval token budget (Part C / Axis B sweep); None keeps the
     # retriever's DEFAULT_CONTEXT_TOKEN_BUDGET.
     retrieval_budget: int | None = None
@@ -179,6 +207,24 @@ def _record_thread_transcript(thread_id: str, transcript: tuple[ChatTurn, ...]) 
         _THREAD_TRANSCRIPTS[thread_id] = transcript
 
 
+def _get_thread_provider(thread_id: str) -> str:
+    with _THREAD_TRANSCRIPT_LOCK:
+        return _THREAD_PROVIDERS.get(thread_id, "")
+
+
+def _record_thread_provider(thread_id: str, provider: str) -> None:
+    """Remember which provider's blocks are in this thread's checkpoint.
+
+    Recorded from the model that ACTUALLY served the turn, not the one the
+    request asked for: when the DeepSeek fallback fires, Gemini is what wrote
+    the messages, and that is what the next turn has to replay.
+    """
+    if not provider:
+        return
+    with _THREAD_TRANSCRIPT_LOCK:
+        _THREAD_PROVIDERS[thread_id] = provider
+
+
 def _get_fork_point(thread_id: str, turn_count: int) -> str:
     with _THREAD_TRANSCRIPT_LOCK:
         return _THREAD_FORK_POINTS.get(thread_id, {}).get(turn_count, "")
@@ -207,6 +253,7 @@ def _drop_thread_record(thread_id: str) -> None:
         _THREAD_TRANSCRIPTS.pop(thread_id, None)
         _THREAD_FORK_POINTS.pop(thread_id, None)
         _THREAD_LAST_USED.pop(thread_id, None)
+        _THREAD_PROVIDERS.pop(thread_id, None)
 
 
 def _touch_thread(thread_id: str, now: float | None = None) -> None:
@@ -237,6 +284,7 @@ def _evict_idle_threads(now: float | None = None, *, force: bool = False) -> lis
             _THREAD_LAST_USED.pop(thread_id, None)
             _THREAD_TRANSCRIPTS.pop(thread_id, None)
             _THREAD_FORK_POINTS.pop(thread_id, None)
+            _THREAD_PROVIDERS.pop(thread_id, None)
     for thread_id in expired:
         CHECKPOINTER.delete_thread(thread_id)
     if expired:
@@ -313,12 +361,24 @@ RETRIEVE_TUTOR_CONTEXT_SCHEMA = {
         },
     },
     "required": ["query"],
+    "additionalProperties": False,
 }
 
 
 @tool(args_schema=RETRIEVE_TUTOR_CONTEXT_SCHEMA)
-def retrieve_tutor_context(query: str, runtime: ToolRuntime[AppContext]) -> str:
+def retrieve_tutor_context(
+    query: str, runtime: ToolRuntime[AppContext], **unsupported: Any
+) -> str:
     """Retrieve relevant course and documentation context for an AI tutor question."""
+    if unsupported:
+        names = ", ".join(sorted(unsupported))
+        logger.warning(
+            "retrieve_tutor_context received unsupported arguments: %s", names
+        )
+        return (
+            "retrieve_tutor_context could not run because it received unsupported "
+            f"argument(s): {names}. Retry the tool with only the query argument."
+        )
     try:
         results = select_retriever(
             getattr(runtime.context, "retriever_kind", "")
@@ -357,14 +417,28 @@ RUN_KB_COMMAND_SCHEMA = {
             "type": "integer",
             "description": "Command timeout in seconds, capped by the runtime.",
             "default": 8,
+            "minimum": 1,
+            "maximum": 30,
+        },
+        "timeout": {
+            "type": "integer",
+            "description": (
+                "Alias for timeout_seconds. The runtime still caps the command "
+                "at 30 seconds."
+            ),
+            "minimum": 1,
+            "maximum": 30,
         },
         "max_output_chars": {
             "type": "integer",
             "description": "Maximum stdout/stderr characters to return, capped by the runtime.",
             "default": 40000,
+            "minimum": 1000,
+            "maximum": 80000,
         },
     },
     "required": ["command"],
+    "additionalProperties": False,
 }
 
 
@@ -372,10 +446,23 @@ RUN_KB_COMMAND_SCHEMA = {
 def run_kb_command(
     command: str,
     runtime: ToolRuntime[AppContext],
-    timeout_seconds: int = 8,
+    timeout_seconds: int | None = None,
     max_output_chars: int = 40000,
+    timeout: int | None = None,
+    **unsupported: Any,
 ) -> str:
     """Run a safe, read-only terminal-style command inside the local KB."""
+    if unsupported:
+        names = ", ".join(sorted(unsupported))
+        logger.warning("run_kb_command received unsupported arguments: %s", names)
+        return (
+            f"$ {command}\n"
+            f"error: unsupported run_kb_command argument(s): {names}. "
+            "Use command, timeout_seconds (or timeout), and max_output_chars."
+        )
+    effective_timeout = timeout_seconds if timeout_seconds is not None else timeout
+    if effective_timeout is None:
+        effective_timeout = 8
     allowed, used = _claim_kb_command_budget(
         runtime.context.kb_session_id,
         runtime.context.kb_command_limit,
@@ -394,11 +481,11 @@ def run_kb_command(
     try:
         result = execute_kb_command(
             command,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=effective_timeout,
             max_output_chars=max_output_chars,
         )
         return format_command_payload(result)
-    except (KbCommandError, OSError) as exc:
+    except (KbCommandError, OSError, TypeError, ValueError) as exc:
         return f"$ {command}\nerror: {exc}"
 
 
@@ -478,13 +565,45 @@ def sync_thread_with_history(
     agent,
     thread_id: str,
     history: tuple[ChatTurn, ...],
+    provider: str = "",
 ) -> tuple[str, str]:
     """Pick the thread (and optional fork checkpoint) for this request.
 
     Returns ``(thread_id, fork_checkpoint_id)``. A non-empty checkpoint id
     means the run must fork the thread from that checkpoint (LangGraph
     time travel) instead of continuing from its latest state.
+
+    The branch path at the bottom (fresh thread seeded from the visible
+    transcript via history_to_langgraph_messages) is the ONLY safe way to move
+    a conversation onto a different provider: it reseeds plain user/assistant
+    text and drops the checkpoint's provider-native state -- tool outputs,
+    summaries, thought signatures -- which is exactly what makes it portable.
+    That data loss is the feature, not a bug to fix. Continuing or forking a
+    thread across providers instead replays unportable blocks and 400s; see
+    build_chat_model.
+
+    ``provider`` is the provider serving THIS turn. When it differs from the one
+    that wrote the thread's checkpointed messages, every other path here would
+    replay unportable blocks, so the mismatch branches unconditionally.
     """
+    owner = _get_thread_provider(thread_id)
+    if provider and owner and owner != provider:
+        # The DeepSeek->Gemini fallback is the common way to get here: a
+        # rescued turn checkpoints Gemini-native messages, so the next DeepSeek
+        # turn would 400 and silently re-fall-back to Gemini forever (verified:
+        # a healthy DeepSeek key still 400s on that thread). Branching resets
+        # the conversation onto portable plain text so the requested model
+        # actually serves it.
+        logger.info(
+            "Thread %s was written by %s but this turn runs on %s; branching to a "
+            "fresh thread seeded with plain text (tool outputs and summaries are "
+            "dropped -- provider-native blocks cannot be replayed across providers).",
+            thread_id,
+            owner,
+            provider,
+        )
+        return _branch_to_fresh_thread(agent, thread_id, history), ""
+
     tracked = _get_thread_transcript(thread_id)
     if tracked == history:
         # The client sent back exactly what this thread streamed to it, so
@@ -522,6 +641,20 @@ def sync_thread_with_history(
 
     # No checkpoint maps to the history the client kept: branch to a fresh
     # thread seeded with the visible messages as plain text.
+    return _branch_to_fresh_thread(agent, thread_id, history), ""
+
+
+def _branch_to_fresh_thread(
+    agent,
+    thread_id: str,
+    history: tuple[ChatTurn, ...],
+) -> str:
+    """Reseed the visible transcript as plain text on a brand-new thread.
+
+    Drops everything provider-native in the old checkpoint (tool outputs,
+    summaries, thought/thinking signatures). That loss is the point: plain
+    user/assistant text is the only representation every provider accepts.
+    """
     branched_thread_id = new_thread_id()
     restored_messages = history_to_langgraph_messages(history)
     if restored_messages:
@@ -536,7 +669,7 @@ def sync_thread_with_history(
     # thread is unreachable; drop it or it lives in the in-memory saver forever.
     CHECKPOINTER.delete_thread(thread_id)
     _drop_thread_record(thread_id)
-    return branched_thread_id, ""
+    return branched_thread_id
 
 
 def collect_retrieval_source_matches(payload: str) -> list[SourceMatch]:
@@ -773,6 +906,31 @@ def is_anthropic_model(model_name: str) -> bool:
     return provider == "anthropic"
 
 
+def supports_gemini_tool_combination(model_name: str) -> bool:
+    """True when a Gemini model can mix built-in tools with function tools.
+
+    Gemini calls this "tool context circulation", and it is a Gemini 3+
+    preview: only then does `tool_config.include_server_side_tool_invocations`
+    exist, and only then may google_search/url_context be bound alongside our
+    custom function tools. On gemini-2.5-* the flag is a 400 ("Tool call
+    context circulation is not enabled for models/gemini-2.5-flash") and the
+    tool mix is rejected regardless -- and the agent always binds
+    retrieve_tutor_context + run_kb_command, so there is no combination-free
+    path for a pre-3 model to use web tools here.
+    """
+    if not is_google_genai_model(model_name):
+        return False
+    _provider, _, actual_model = normalize_model_name(model_name).partition(":")
+    # Leading digits only: the generation is followed by "." on point releases
+    # (gemini-3.5-flash) but by "-" on major ones (gemini-3-pro).
+    generation = ""
+    for char in actual_model.removeprefix("gemini-"):
+        if not char.isdigit():
+            break
+        generation += char
+    return bool(generation) and int(generation) >= 3
+
+
 def format_tool_args(args: Any) -> str:
     if isinstance(args, dict):
         query = str(args.get("query", "")).strip()
@@ -897,6 +1055,45 @@ def _build_chat_model_client(provider_model: str, include_thoughts: bool = False
 
 
 def build_chat_model(model_name: str, include_thoughts: bool = False):
+    """Build the chat client for a turn, with the DeepSeek->Gemini rescue path.
+
+    ONE THREAD IS ONE PROVIDER. Read this before touching the fallback.
+
+    A thread's checkpoint stores PROVIDER-NATIVE message objects, not plain
+    text: Gemini reasoning parts carry thought signatures, Anthropic thinking
+    blocks carry a required cryptographic `signature`, and each provider's
+    server-side tool calls are its own block types. Those payloads are not
+    portable. Replaying one provider's checkpointed history to another is a
+    hard API error, not a degraded answer. Both directions are verified:
+
+      Gemini history -> DeepSeek     400 (OpenAI-compatible parser rejects it)
+      Gemini history -> Anthropic    400 "messages.1.content.0.thinking.
+                                     signature: Field required"
+
+    So a fallback is NOT a free "try another model" switch. It is safe here
+    only because of two properties, and it stops being safe if either breaks:
+
+      1. The fallback answers the SAME request the primary just failed, so it
+         reads its own request payload, never a foreign checkpoint.
+      2. build_agent binds tools from the REQUESTED model (deepseek), which has
+         no provider-native web tools, so the fallback is never handed Gemini's
+         google_search/url_context alongside our custom function tools -- a
+         combination gemini-2.5-flash cannot accept (see config.
+         GEMINI_FALLBACK_MODEL_NAME for why).
+
+    A rescued turn still writes GEMINI-shaped messages into a DeepSeek thread's
+    checkpoint. That used to strand the thread: the next DeepSeek turn replayed
+    foreign history, 400'd, and silently fell back again, migrating the thread
+    to Gemini at ~10x the token price forever. It is contained OUTSIDE this
+    function -- sync_thread_with_history records the serving provider per thread
+    and branches to a fresh plain-text thread on mismatch. Do not "fix" that by
+    adding provider translation or another fallback here.
+
+    If you are here to add a fallback, a retry-on-another-provider, or
+    mid-conversation model switching: do not wire it at this layer. Route it
+    through sync_thread_with_history's plain-text branch, which drops the
+    unportable state on purpose.
+    """
     provider_model = normalize_model_name(model_name)
     if provider_model != DEEPSEEK_DIRECT_MODEL_NAME:
         return _build_chat_model_client(
@@ -1054,6 +1251,674 @@ def _turn_id_for(request: Any) -> str:
     runtime = getattr(request, "runtime", None)
     ctx = getattr(runtime, "context", None) if runtime else None
     return getattr(ctx, "kb_session_id", "") if ctx else ""
+
+
+def _cache_user_id_for_runtime(runtime: Any) -> str:
+    ctx = getattr(runtime, "context", None) if runtime else None
+    return str(getattr(ctx, "cache_user_id", "") or "") if ctx else ""
+
+
+class DeepSeekCacheIsolationMiddleware(AgentMiddleware):
+    """Attach DeepSeek ``user_id`` and guard the experimental request size."""
+
+    def __init__(self, max_request_tokens: int | None = None) -> None:
+        super().__init__()
+        self.max_request_tokens = max_request_tokens
+
+    def _isolate(self, request: Any) -> Any:
+        request_messages = list(getattr(request, "messages", None) or [])
+        system_message = getattr(request, "system_message", None)
+        if system_message is not None:
+            request_messages.insert(0, system_message)
+        request_tokens = int(count_tokens_approximately(request_messages))
+        if (
+            self.max_request_tokens is not None
+            and request_tokens > self.max_request_tokens
+        ):
+            raise RuntimeError(
+                "Agent request exceeds the experiment safety guard: "
+                f"{request_tokens:,} > {self.max_request_tokens:,} "
+                "approximate tokens."
+            )
+        user_id = _cache_user_id_for_runtime(getattr(request, "runtime", None))
+        if not user_id:
+            return request
+        settings = dict(getattr(request, "model_settings", None) or {})
+        extra_body = dict(settings.get("extra_body") or {})
+        extra_body["user_id"] = user_id
+        settings["extra_body"] = extra_body
+        return request.override(model_settings=settings)
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._isolate(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._isolate(request))
+
+
+class StableToolOutputCapMiddleware(AgentMiddleware):
+    """Persistently cap tool output once, when it first enters agent history."""
+
+    def __init__(self, max_bytes: int) -> None:
+        super().__init__()
+        self.max_bytes = max(1_024, int(max_bytes))
+
+    @staticmethod
+    def _decode_fragment(fragment: bytes) -> str:
+        return fragment.decode("utf-8", errors="ignore")
+
+    def _cap(self, request: Any, result: Any) -> Any:
+        if not isinstance(result, ToolMessage):
+            return result
+        text = message_content_to_text(result.content)
+        raw = text.encode("utf-8")
+        if len(raw) <= self.max_bytes:
+            return result
+
+        marker = (
+            f"\n\n[... tool output truncated at stable {self.max_bytes}-byte cap; "
+            "middle omitted ...]\n\n"
+        ).encode("utf-8")
+        payload_budget = max(0, self.max_bytes - len(marker))
+        head_bytes = payload_budget // 2
+        tail_bytes = payload_budget - head_bytes
+        capped = (
+            self._decode_fragment(raw[:head_bytes])
+            + marker.decode("utf-8")
+            + self._decode_fragment(raw[-tail_bytes:] if tail_bytes else b"")
+        )
+        capped_bytes = len(capped.encode("utf-8"))
+        metadata = {
+            "original_bytes": len(raw),
+            "original_chars": len(text),
+            "retained_bytes": capped_bytes,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "max_bytes": self.max_bytes,
+        }
+        turn = _turn_id_for(request)
+        record_turn_signal(turn, "tool_outputs_capped", 1)
+        record_turn_signal(turn, "tool_output_original_bytes", len(raw))
+        record_turn_signal(turn, "tool_output_retained_bytes", capped_bytes)
+        additional = dict(result.additional_kwargs or {})
+        additional["stable_tool_cap"] = metadata
+        return result.model_copy(
+            update={"content": capped, "additional_kwargs": additional}
+        )
+
+    def wrap_tool_call(self, request, handler):
+        return self._cap(request, handler(request))
+
+    async def awrap_tool_call(self, request, handler):
+        return self._cap(request, await handler(request))
+
+
+class InstrumentedSummarizationMiddleware(SummarizationMiddleware):
+    """SummarizationMiddleware with full event telemetry and loud failures."""
+
+    MAX_SUMMARY_ATTEMPTS = 3
+    RETRY_BASE_DELAY_SECONDS = 1.0
+
+    def __init__(
+        self,
+        *args: Any,
+        summary_input_guard_tokens: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.summary_input_guard_tokens = summary_input_guard_tokens
+
+    def _configured_token_trigger(self) -> int | None:
+        return next(
+            (
+                int(clause["tokens"])
+                for clause in self._trigger_clauses
+                if "tokens" in clause
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _last_ai_reported_tokens(messages: list[Any]) -> int:
+        last_ai_message = next(
+            (
+                message
+                for message in reversed(messages)
+                if isinstance(message, AIMessage)
+            ),
+            None,
+        )
+        usage = getattr(last_ai_message, "usage_metadata", None) or {}
+        return int(usage.get("total_tokens") or 0)
+
+    def _token_trigger_evidence(
+        self, messages: list[Any], approximate_tokens: int
+    ) -> tuple[str, int]:
+        trigger_tokens = self._configured_token_trigger()
+        if trigger_tokens is None:
+            return "non_token", 0
+        approximate_met = approximate_tokens >= trigger_tokens
+        provider_reported_met = self._should_summarize_based_on_reported_tokens(
+            messages, float(trigger_tokens)
+        )
+        reported_tokens = self._last_ai_reported_tokens(messages)
+        if approximate_met and provider_reported_met:
+            return "approximate_and_provider_reported", reported_tokens
+        if approximate_met:
+            return "approximate", reported_tokens
+        if provider_reported_met:
+            return "provider_reported", reported_tokens
+        return "other", reported_tokens
+
+    def _plan_compaction(self, state: Any) -> dict[str, Any] | None:
+        messages = state["messages"]
+        self._ensure_message_ids(messages)
+        total_tokens = int(self.token_counter(messages))
+        if not self._should_summarize(messages, total_tokens):
+            return None
+        trigger_source, trigger_reported_tokens = self._token_trigger_evidence(
+            messages, total_tokens
+        )
+        cutoff_index = self._determine_cutoff_index(messages)
+        if cutoff_index <= 0:
+            return None
+        selected, preserved = self._partition_messages(messages, cutoff_index)
+        trimmed = self._trim_messages_for_summary(selected)
+        if not trimmed:
+            raise RuntimeError("Summarization selected no usable input messages.")
+        summary_input_tokens = int(self._partial_token_counter(trimmed))
+        if (
+            self.summary_input_guard_tokens is not None
+            and summary_input_tokens > self.summary_input_guard_tokens
+        ):
+            raise RuntimeError(
+                "Summarization input exceeds the experiment safety guard: "
+                f"{summary_input_tokens:,} > "
+                f"{self.summary_input_guard_tokens:,} approximate tokens."
+            )
+        return {
+            "messages": messages,
+            "pre_tokens": total_tokens,
+            "trigger_source": trigger_source,
+            "trigger_reported_tokens": trigger_reported_tokens,
+            "selected": selected,
+            "preserved": preserved,
+            "trimmed": trimmed,
+            "summary_input_tokens": summary_input_tokens,
+        }
+
+    def _summary_prompt_text(self, trimmed: list[Any]) -> str:
+        formatted = get_buffer_string(trimmed, format="xml")
+        return self.summary_prompt.format(messages=formatted).rstrip()
+
+    def _summary_model(self, runtime: Any) -> Any:
+        user_id = _cache_user_id_for_runtime(runtime)
+        if not user_id:
+            return self.model
+        return self.model.bind(extra_body={"user_id": user_id})
+
+    @staticmethod
+    def _is_retryable_exception(exc: BaseException) -> bool:
+        if isinstance(exc, (TimeoutError, ConnectionError, httpx.TransportError)):
+            return True
+        status = getattr(exc, "status_code", None)
+        if status is None:
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
+        if isinstance(status, int):
+            return status in {408, 409, 425, 429} or status >= 500
+        return type(exc).__name__ in {
+            "APIConnectionError",
+            "APITimeoutError",
+            "InternalServerError",
+            "RateLimitError",
+        }
+
+    @staticmethod
+    def _retry_reason(exc: BaseException) -> str:
+        detail = str(exc).strip()
+        return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+
+    @classmethod
+    def _retry_delay(cls, attempt: int) -> float:
+        return cls.RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+
+    def _log_summary_retry(
+        self, runtime: Any, attempt: int, reason: str, delay: float
+    ) -> None:
+        ctx = getattr(runtime, "context", None)
+        message_id = str(getattr(ctx, "kb_session_id", "") or "") if ctx else ""
+        logger.warning(
+            "Retrying summarization after attempt %d/%d in %.1fs. "
+            "message_id=%s reason=%s",
+            attempt,
+            self.MAX_SUMMARY_ATTEMPTS,
+            delay,
+            message_id,
+            reason,
+        )
+
+    def _record_compaction(
+        self, runtime: Any, plan: dict[str, Any], summary: str
+    ) -> dict[str, Any]:
+        if not summary.strip():
+            raise RuntimeError("Summarization returned an empty summary.")
+        if summary.startswith("Error generating summary:"):
+            raise RuntimeError(summary)
+        new_messages = self._build_new_messages(summary)
+        preserved = plan["preserved"]
+        turn = _cache_user_id_for_runtime(runtime)
+        ctx = getattr(runtime, "context", None)
+        message_id = str(getattr(ctx, "kb_session_id", "") or "") if ctx else ""
+        event = {
+            "event": "summarization",
+            "summary_strategy": str(plan.get("summary_strategy") or "xml"),
+            "configured_trigger_tokens": self._configured_token_trigger(),
+            "trigger_source": plan["trigger_source"],
+            "trigger_reported_tokens": int(plan["trigger_reported_tokens"]),
+            "pre_compaction_tokens_approx": int(plan["pre_tokens"]),
+            "pre_compaction_messages": len(plan["messages"]),
+            "selected_messages": len(plan["selected"]),
+            "selected_tokens_approx": int(
+                self._partial_token_counter(plan["selected"])
+            ),
+            "summary_input_messages": len(plan["trimmed"]),
+            "summary_input_tokens_approx": int(plan["summary_input_tokens"]),
+            "summary_input_untrimmed": self.trim_tokens_to_summarize is None
+            and len(plan["trimmed"]) == len(plan["selected"]),
+            "summary_attempts": int(plan.get("summary_attempts") or 1),
+            "summary_retry_reasons": list(plan.get("summary_retry_reasons") or []),
+            "summary_output_tokens_approx": int(
+                count_tokens_approximately([HumanMessage(content=summary)])
+            ),
+            "retained_tail_messages": len(preserved),
+            "retained_tail_tokens_approx": int(self._partial_token_counter(preserved)),
+            "post_compaction_tokens_approx": int(
+                self._partial_token_counter([*new_messages, *preserved])
+            ),
+            "cache_user_id_present": bool(turn),
+        }
+        event.update(plan.get("summary_request_telemetry") or {})
+        event.update(plan.get("summary_provider_telemetry") or {})
+        record_turn_signal(message_id, "compactions_this_turn", 1)
+        record_turn_signal_max(
+            message_id,
+            "max_pre_compaction_tokens_approx",
+            int(plan["pre_tokens"]),
+        )
+        record_turn_event(message_id, event)
+        return {
+            "messages": [
+                RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                *new_messages,
+                *preserved,
+            ]
+        }
+
+    def before_model(self, state, runtime):
+        plan = self._plan_compaction(state)
+        if plan is None:
+            return None
+        model = self._summary_model(runtime)
+        prompt = self._summary_prompt_text(plan["trimmed"])
+        retry_reasons: list[str] = []
+        for attempt in range(1, self.MAX_SUMMARY_ATTEMPTS + 1):
+            try:
+                response = model.invoke(
+                    prompt,
+                    config={"metadata": {"lc_source": "summarization"}},
+                )
+                plan["summary_provider_telemetry"] = self._summary_provider_telemetry(
+                    response
+                )
+                summary = message_content_to_text(response.content).strip()
+            except Exception as exc:
+                if (
+                    attempt >= self.MAX_SUMMARY_ATTEMPTS
+                    or not self._is_retryable_exception(exc)
+                ):
+                    raise
+                reason = self._retry_reason(exc)
+            else:
+                if summary:
+                    plan["summary_attempts"] = attempt
+                    plan["summary_retry_reasons"] = retry_reasons
+                    return self._record_compaction(runtime, plan, summary)
+                if attempt >= self.MAX_SUMMARY_ATTEMPTS:
+                    raise RuntimeError(
+                        "Summarization returned an empty summary after "
+                        f"{attempt} attempts."
+                    )
+                reason = "empty response"
+            retry_reasons.append(reason)
+            delay = self._retry_delay(attempt)
+            self._log_summary_retry(runtime, attempt, reason, delay)
+            time.sleep(delay)
+        raise AssertionError("unreachable")
+
+    async def abefore_model(self, state, runtime):
+        plan = self._plan_compaction(state)
+        if plan is None:
+            return None
+        model = self._summary_model(runtime)
+        prompt = self._summary_prompt_text(plan["trimmed"])
+        retry_reasons: list[str] = []
+        for attempt in range(1, self.MAX_SUMMARY_ATTEMPTS + 1):
+            try:
+                response = await model.ainvoke(
+                    prompt,
+                    config={"metadata": {"lc_source": "summarization"}},
+                )
+                plan["summary_provider_telemetry"] = self._summary_provider_telemetry(
+                    response
+                )
+                summary = message_content_to_text(response.content).strip()
+            except Exception as exc:
+                if (
+                    attempt >= self.MAX_SUMMARY_ATTEMPTS
+                    or not self._is_retryable_exception(exc)
+                ):
+                    raise
+                reason = self._retry_reason(exc)
+            else:
+                if summary:
+                    plan["summary_attempts"] = attempt
+                    plan["summary_retry_reasons"] = retry_reasons
+                    return self._record_compaction(runtime, plan, summary)
+                if attempt >= self.MAX_SUMMARY_ATTEMPTS:
+                    raise RuntimeError(
+                        "Summarization returned an empty summary after "
+                        f"{attempt} attempts."
+                    )
+                reason = "empty response"
+            retry_reasons.append(reason)
+            delay = self._retry_delay(attempt)
+            self._log_summary_retry(runtime, attempt, reason, delay)
+            await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
+
+    @staticmethod
+    def _summary_provider_telemetry(response: Any) -> dict[str, Any]:
+        """Expose provider cache accounting on the compaction event itself."""
+        usage = dict(getattr(response, "usage_metadata", None) or {})
+        details = dict(usage.get("input_token_details") or {})
+        input_tokens = int(usage.get("input_tokens") or 0)
+        cache_read = int(details.get("cache_read") or 0)
+        cache_creation = int(details.get("cache_creation") or 0)
+        cache_miss = max(0, input_tokens - cache_read - cache_creation)
+        return {
+            "summary_provider_usage_reported": bool(usage),
+            "summary_provider_cache_details_reported": "cache_read" in details,
+            "summary_provider_input_tokens": input_tokens,
+            "summary_provider_cache_read_tokens": cache_read,
+            "summary_provider_cache_creation_tokens": cache_creation,
+            "summary_provider_cache_miss_tokens": cache_miss,
+            "summary_provider_output_tokens": int(usage.get("output_tokens") or 0),
+            "summary_provider_cache_hit_ratio": (
+                cache_read / input_tokens if input_tokens else None
+            ),
+        }
+
+
+PREFIX_PRESERVING_COMPACTION_PROMPT = """Create a durable checkpoint summary of the older conversation prefix above.
+
+The first {selected_messages} conversation messages will be replaced by your checkpoint. The final {retained_messages} messages (approximately {retained_tokens} tokens) will remain verbatim. Summarize only the older prefix; do not duplicate the retained tail except where a short reference is necessary to explain a dependency between old and recent work.
+
+Preserve concrete facts, current values after corrections, decisions, constraints, unresolved work, prior tool evidence needed later, and enough causal detail to continue without re-running tools. Omit transient chatter and redundant wording. Never call a tool and do not answer the conversation's latest question.
+
+Return only the checkpoint summary."""
+
+
+class PrefixPreservingCompactionMiddleware(InstrumentedSummarizationMiddleware):
+    """Compact through a structured prefix-extension request.
+
+    LangChain's stock summarizer serializes selected messages into a new XML
+    prompt, so even the summary-generation call loses the provider's cached
+    prefix. This middleware instead runs after request-shaping middleware and
+    binds the exact same model, tool schemas, tool choice, model settings, and
+    system message. It then sends the unchanged *entire* current request prefix
+    followed by one checkpoint instruction. The resulting checkpoint summary
+    may overlap the retained tail; that conservative duplication matches the
+    cache-friendly local Codex pattern and reduces the chance of lost evidence.
+
+    Installing the resulting summary necessarily changes the *next* agent
+    prefix; no client-side middleware can avoid that boundary without a
+    provider-native opaque continuation/compaction primitive.
+    """
+
+    def before_model(self, state, runtime):
+        # Planning must happen after all request-shaping middleware has produced
+        # the final ModelRequest, so wrap_model_call owns the operation.
+        return None
+
+    async def abefore_model(self, state, runtime):
+        return None
+
+    def _checkpoint_instruction(self, plan: dict[str, Any]) -> HumanMessage:
+        return HumanMessage(
+            content=PREFIX_PRESERVING_COMPACTION_PROMPT.format(
+                selected_messages=len(plan["selected"]),
+                retained_messages=len(plan["preserved"]),
+                retained_tokens=int(self._partial_token_counter(plan["preserved"])),
+            )
+        )
+
+    def _summary_messages(
+        self, request: Any, plan: dict[str, Any]
+    ) -> list[BaseMessage]:
+        messages: list[BaseMessage] = []
+        if request.system_message is not None:
+            messages.append(request.system_message)
+        messages.extend(request.messages)
+        messages.append(self._checkpoint_instruction(plan))
+        return messages
+
+    def _prepare_summary_request(
+        self, request: Any, plan: dict[str, Any]
+    ) -> tuple[Any, list[BaseMessage]]:
+        if request.response_format is not None:
+            raise RuntimeError(
+                "Structured-prefix compaction does not support a structured "
+                "agent response format."
+            )
+        if list(request.messages) != list(plan["messages"]):
+            raise RuntimeError(
+                "Structured-prefix compaction requires the finalized model view "
+                "to match checkpoint history exactly; an earlier middleware "
+                "changed request.messages without persisting that change."
+            )
+        messages = self._summary_messages(request, plan)
+        request_tokens = int(count_tokens_approximately(messages))
+        if (
+            self.summary_input_guard_tokens is not None
+            and request_tokens > self.summary_input_guard_tokens
+        ):
+            raise RuntimeError(
+                "Structured-prefix summary request exceeds the experiment safety "
+                f"guard: {request_tokens:,} > "
+                f"{self.summary_input_guard_tokens:,} approximate tokens."
+            )
+
+        settings = dict(request.model_settings or {})
+        if request.tools:
+            summary_model = request.model.bind_tools(
+                request.tools,
+                tool_choice=request.tool_choice,
+                **settings,
+            )
+        else:
+            summary_model = request.model.bind(**settings)
+
+        system_tokens = int(
+            count_tokens_approximately([request.system_message])
+            if request.system_message is not None
+            else 0
+        )
+        instruction_tokens = int(count_tokens_approximately([messages[-1]]))
+        plan["summary_strategy"] = "structured_prefix"
+        plan["summary_request_telemetry"] = {
+            "summary_prefix_messages": len(request.messages),
+            "summary_prefix_tokens_approx": int(
+                count_tokens_approximately(request.messages)
+            ),
+            "summary_selected_messages": len(plan["trimmed"]),
+            "summary_selected_tokens_approx": int(plan["summary_input_tokens"]),
+            "summary_request_messages": len(messages),
+            "summary_request_tokens_approx": request_tokens,
+            "summary_request_is_strict_extension": True,
+            "summary_instruction_selected_messages": len(plan["selected"]),
+            "summary_instruction_retained_messages": len(plan["preserved"]),
+            "summary_instruction_retained_tokens_approx": int(
+                self._partial_token_counter(plan["preserved"])
+            ),
+            "summary_system_tokens_approx": system_tokens,
+            "summary_instruction_tokens_approx": instruction_tokens,
+            "summary_system_message_present": request.system_message is not None,
+            "summary_tools_bound": len(request.tools or []),
+            "summary_tool_choice_preserved": True,
+            "summary_tool_choice_value": (
+                str(request.tool_choice) if request.tool_choice is not None else None
+            ),
+            "summary_model_settings_keys": sorted(settings),
+            "summary_cache_user_id_preserved": bool(
+                (settings.get("extra_body") or {}).get("user_id")
+            ),
+        }
+        return summary_model, messages
+
+    def _invoke_prefix_summary(self, request: Any, plan: dict[str, Any]) -> str:
+        model, messages = self._prepare_summary_request(request, plan)
+        retry_reasons: list[str] = []
+        for attempt in range(1, self.MAX_SUMMARY_ATTEMPTS + 1):
+            try:
+                response = model.invoke(
+                    messages,
+                    config={
+                        "metadata": {
+                            "lc_source": "summarization",
+                            "compaction_strategy": "structured_prefix",
+                        }
+                    },
+                )
+                plan["summary_provider_telemetry"] = self._summary_provider_telemetry(
+                    response
+                )
+                summary = message_content_to_text(response.content).strip()
+            except Exception as exc:
+                if (
+                    attempt >= self.MAX_SUMMARY_ATTEMPTS
+                    or not self._is_retryable_exception(exc)
+                ):
+                    raise
+                reason = self._retry_reason(exc)
+            else:
+                if summary:
+                    plan["summary_attempts"] = attempt
+                    plan["summary_retry_reasons"] = retry_reasons
+                    return summary
+                if attempt >= self.MAX_SUMMARY_ATTEMPTS:
+                    raise RuntimeError(
+                        "Structured-prefix summarization returned an empty summary "
+                        f"after {attempt} attempts."
+                    )
+                reason = "empty response"
+            retry_reasons.append(reason)
+            delay = self._retry_delay(attempt)
+            self._log_summary_retry(request.runtime, attempt, reason, delay)
+            time.sleep(delay)
+        raise AssertionError("unreachable")
+
+    async def _ainvoke_prefix_summary(self, request: Any, plan: dict[str, Any]) -> str:
+        model, messages = self._prepare_summary_request(request, plan)
+        retry_reasons: list[str] = []
+        for attempt in range(1, self.MAX_SUMMARY_ATTEMPTS + 1):
+            try:
+                response = await model.ainvoke(
+                    messages,
+                    config={
+                        "metadata": {
+                            "lc_source": "summarization",
+                            "compaction_strategy": "structured_prefix",
+                        }
+                    },
+                )
+                plan["summary_provider_telemetry"] = self._summary_provider_telemetry(
+                    response
+                )
+                summary = message_content_to_text(response.content).strip()
+            except Exception as exc:
+                if (
+                    attempt >= self.MAX_SUMMARY_ATTEMPTS
+                    or not self._is_retryable_exception(exc)
+                ):
+                    raise
+                reason = self._retry_reason(exc)
+            else:
+                if summary:
+                    plan["summary_attempts"] = attempt
+                    plan["summary_retry_reasons"] = retry_reasons
+                    return summary
+                if attempt >= self.MAX_SUMMARY_ATTEMPTS:
+                    raise RuntimeError(
+                        "Structured-prefix summarization returned an empty summary "
+                        f"after {attempt} attempts."
+                    )
+                reason = "empty response"
+            retry_reasons.append(reason)
+            delay = self._retry_delay(attempt)
+            self._log_summary_retry(request.runtime, attempt, reason, delay)
+            await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
+
+    def _compacted_request_and_command(
+        self, request: Any, plan: dict[str, Any], summary: str
+    ) -> tuple[Any, list[BaseMessage]]:
+        update = self._record_compaction(request.runtime, plan, summary)
+        compacted = list(update["messages"])[1:]
+        compacted_state = dict(request.state)
+        compacted_state["messages"] = compacted
+        return request.override(messages=compacted, state=compacted_state), compacted
+
+    @staticmethod
+    def _with_checkpoint_command(
+        response: Any, compacted: list[BaseMessage]
+    ) -> ExtendedModelResponse:
+        # The model response command is applied first by create_agent. The
+        # additional command then replaces the old checkpoint and re-adds that
+        # same response, so it survives REMOVE_ALL_MESSAGES exactly once.
+        return ExtendedModelResponse(
+            model_response=response,
+            command=Command(
+                update={
+                    "messages": [
+                        RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                        *compacted,
+                        *response.result,
+                    ]
+                }
+            ),
+        )
+
+    def wrap_model_call(self, request, handler):
+        plan = self._plan_compaction(request.state)
+        if plan is None:
+            return handler(request)
+        summary = self._invoke_prefix_summary(request, plan)
+        compacted_request, compacted = self._compacted_request_and_command(
+            request, plan, summary
+        )
+        response = handler(compacted_request)
+        return self._with_checkpoint_command(response, compacted)
+
+    async def awrap_model_call(self, request, handler):
+        plan = self._plan_compaction(request.state)
+        if plan is None:
+            return await handler(request)
+        summary = await self._ainvoke_prefix_summary(request, plan)
+        compacted_request, compacted = self._compacted_request_and_command(
+            request, plan, summary
+        )
+        response = await handler(compacted_request)
+        return self._with_checkpoint_command(response, compacted)
 
 
 class SlidingWindowMiddleware(AgentMiddleware):
@@ -1428,7 +2293,29 @@ def build_agent_middleware(
     model: Any, memory_config: MemoryConfig
 ) -> list[AgentMiddleware]:
     """Assemble the compaction/memory middleware stack for one preset."""
+    if memory_config.summarization_strategy not in {"xml", "structured_prefix"}:
+        raise ValueError(
+            f"Unknown summarization strategy: {memory_config.summarization_strategy!r}"
+        )
+    if (
+        memory_config.summarization_strategy == "structured_prefix"
+        and not memory_config.summarization
+    ):
+        raise ValueError(
+            "structured_prefix summarization strategy requires summarization=True"
+        )
     middleware: list[AgentMiddleware] = []
+    prefix_compactor: PrefixPreservingCompactionMiddleware | None = None
+    if memory_config.experiment_mode:
+        middleware.append(
+            DeepSeekCacheIsolationMiddleware(
+                memory_config.experiment_request_guard_tokens
+            )
+        )
+    if memory_config.tool_output_cap_bytes is not None:
+        middleware.append(
+            StableToolOutputCapMiddleware(memory_config.tool_output_cap_bytes)
+        )
     if memory_config.context_editing:
         middleware.append(
             ContextEditingMiddleware(
@@ -1452,16 +2339,41 @@ def build_agent_middleware(
             )
         )
     if memory_config.summarization:
+        keep: tuple[str, int]
+        if memory_config.summarization_keep_tokens is not None:
+            keep = ("tokens", memory_config.summarization_keep_tokens)
+        else:
+            keep = ("messages", memory_config.summarization_keep_messages)
         summarization_kwargs: dict[str, Any] = {
             "model": model,
             "trigger": ("tokens", memory_config.summarization_trigger_tokens),
-            "keep": ("messages", memory_config.summarization_keep_messages),
+            "keep": keep,
+            "trim_tokens_to_summarize": memory_config.summarization_trim_tokens,
         }
         # A custom summary prompt (selective_retention / context_reset) overrides
         # the library default; None keeps it.
         if memory_config.summary_prompt:
             summarization_kwargs["summary_prompt"] = memory_config.summary_prompt
-        middleware.append(SummarizationMiddleware(**summarization_kwargs))
+        if memory_config.experiment_mode:
+            summarization_kwargs["summary_input_guard_tokens"] = (
+                memory_config.summarization_input_guard_tokens
+            )
+        if memory_config.summarization_strategy == "structured_prefix":
+            if not memory_config.experiment_mode:
+                raise ValueError(
+                    "structured_prefix summarization is restricted to "
+                    "experiment-mode presets"
+                )
+            prefix_compactor = PrefixPreservingCompactionMiddleware(
+                **summarization_kwargs
+            )
+        else:
+            summary_middleware = (
+                InstrumentedSummarizationMiddleware
+                if memory_config.experiment_mode
+                else SummarizationMiddleware
+            )
+            middleware.append(summary_middleware(**summarization_kwargs))
     # Part C per-call-view mechanisms (each preset enables at most one). They
     # reshape only the request, not the checkpoint, and report via the
     # turn-signal registry.
@@ -1496,6 +2408,11 @@ def build_agent_middleware(
     if memory_config.longterm_memory:
         middleware.append(StudentProfileMiddleware())
     middleware.append(SourcePreferenceMiddleware())
+    if prefix_compactor is not None:
+        # wrap_model_call middleware compose left-to-right (first is outermost).
+        # Keep this last so it observes the finalized system message from every
+        # preceding request-shaping middleware before issuing the prefix call.
+        middleware.append(prefix_compactor)
     return middleware
 
 
@@ -1525,7 +2442,9 @@ def build_agent(
         tools = [retrieve_tutor_context, run_kb_command]
     middleware = build_agent_middleware(model, memory_config)
     enabled = set(enabled_tools)
-    if is_google_genai_model(model_name):
+    # Provider-native web tools are bound from the REQUESTED model, so a
+    # fallback client never receives them (see build_chat_model).
+    if supports_gemini_tool_combination(model_name):
         if "web_search" in enabled:
             tools.append({"google_search": {}})
         if "url_context" in enabled:
@@ -1533,6 +2452,17 @@ def build_agent(
         if enabled & {"web_search", "url_context"}:
             middleware.append(GeminiServerSideToolsMiddleware())
     elif is_anthropic_model(model_name):
+        # Anthropic combines server-side tools with function tools natively --
+        # no flag, no generation gate (unlike Gemini above); they just share
+        # this list.
+        #
+        # allowed_callers=["direct"] is LOAD-BEARING, not boilerplate. The
+        # _20260209 tools default to allowing the code-execution caller
+        # (programmatic tool calling), which Haiku 4.5 does not support:
+        # dropping this field 400s with "'claude-haiku-4-5-20251001' does not
+        # support programmatic tool calling ... Explicitly set
+        # allowed_callers=["direct"]". Verified live against both web_fetch
+        # variants.
         if "web_search" in enabled:
             tools.append(
                 {
@@ -1585,7 +2515,7 @@ def effective_tool_names(
     else:
         names = ["retrieve_tutor_context", "run_kb_command"]
     enabled = set(enabled_tools)
-    if is_google_genai_model(model_name):
+    if supports_gemini_tool_combination(model_name):
         if "web_search" in enabled:
             names.append("google_search")
         if "url_context" in enabled:
@@ -1678,6 +2608,7 @@ def agent_run_config(
                 "include_reasoning": bool(request.include_reasoning),
                 "memory_preset": preset,
                 "student_id": request.student_id,
+                "cache_user_id": request.cache_user_id,
             },
         }
     )
@@ -1803,6 +2734,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
         agent,
         request.thread_id.strip() or new_thread_id(),
         normalized_history,
+        model_provider_and_name(request.model_name)[0],
     )
     _touch_thread(active_thread_id)
     run_config = agent_run_config(
@@ -1826,6 +2758,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 kb_session_id=message_id,
                 kb_command_limit=DEFAULT_KB_COMMAND_LIMIT,
                 student_id=request.student_id,
+                cache_user_id=request.cache_user_id,
                 retrieval_budget=request.retrieval_budget,
                 retriever_kind=request.retriever,
             ),
@@ -1920,6 +2853,12 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 # ToolMessage and must not re-emit it as new tool activity.
                 if step == "tools" and getattr(message, "type", None) == "tool":
                     payload = message_content_to_text(message.content)
+                    cap_metadata = dict(
+                        (getattr(message, "additional_kwargs", None) or {}).get(
+                            "stable_tool_cap"
+                        )
+                        or {}
+                    )
                     tool_call_id = str(
                         getattr(message, "tool_call_id", "") or uuid4().hex
                     )
@@ -1956,6 +2895,11 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                             "args": tool_call.get("args"),
                             "args_text": format_tool_args(tool_call.get("args")),
                             "output_text": payload,
+                            "output_was_capped": bool(cap_metadata),
+                            "output_original_bytes": cap_metadata.get("original_bytes"),
+                            "output_original_chars": cap_metadata.get("original_chars"),
+                            "output_retained_bytes": cap_metadata.get("retained_bytes"),
+                            "output_sha256": cap_metadata.get("sha256"),
                             "matches": [
                                 source_match_payload(
                                     match,
@@ -2058,6 +3002,18 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
             len(transcript),
             _latest_checkpoint_id(agent, active_thread_id),
         )
+        # Take ownership from the model that actually answered, which is not
+        # request.model_name when the DeepSeek fallback fired: Gemini is what
+        # wrote the checkpointed blocks, so Gemini is what the next turn would
+        # have to replay. usage_metadata is keyed by served model and only a
+        # call that reached on_llm_end reports usage, so a failed primary never
+        # appears; the last key is what wrote the final messages.
+        served_models = [model for model in usage_handler.usage_metadata if model]
+        if served_models:
+            _record_thread_provider(
+                active_thread_id,
+                model_provider_and_name(served_models[-1])[0],
+            )
         _touch_thread(active_thread_id)
 
     search_completed = google_search.completed_event()
@@ -2112,6 +3068,15 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
         "messages", []
     )
     totals = usage_totals(usage_handler.usage_metadata)
+    cost_breakdown = aggregate_cost_breakdown(usage_handler.usage_metadata)
+    model_calls = list(usage_handler.model_calls)
+    summarization_cost = sum(
+        float((call.get("cost") or {}).get("total_usd") or 0)
+        for call in model_calls
+        if call.get("source") == "summarization"
+    )
+    turn_events = pop_turn_events(message_id)
+    turn_signals = pop_turn_signals(message_id)
     total_ms = int((time.monotonic() - turn_started) * 1000)
     yield ChatEvent(
         "context_stats",
@@ -2126,8 +3091,25 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 model_key: dict(usage)
                 for model_key, usage in usage_handler.usage_metadata.items()
             },
+            "model_calls": model_calls,
             **totals,
+            "cache_miss_tokens": max(
+                0,
+                totals["input_tokens"]
+                - totals["cache_read_tokens"]
+                - totals["cache_creation_tokens"],
+            ),
             "est_cost_usd": estimate_cost_usd(usage_handler.usage_metadata),
+            "cost_breakdown": cost_breakdown,
+            "summarization_cost_usd": summarization_cost,
+            "max_request_context_tokens_approx": max(
+                (
+                    int(call.get("request_context_tokens_approx") or 0)
+                    for call in model_calls
+                ),
+                default=0,
+            ),
+            "compaction_events": turn_events,
             "ttft_ms": (
                 int((first_text_at - turn_started) * 1000)
                 if first_text_at is not None
@@ -2145,7 +3127,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
             **context_window_stats(state_messages, CLEARED_TOOL_OUTPUT_PLACEHOLDER),
             # Signals from per-call-view middlewares (this turn only); absent
             # keys simply mean that mechanism did not fire.
-            **pop_turn_signals(message_id),
+            **turn_signals,
         },
     )
     yield ChatEvent(

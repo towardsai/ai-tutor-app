@@ -327,7 +327,7 @@ class CheckTriggersMainTests(unittest.TestCase):
     def _run_main(self, runs: list[str], results: list[bool]) -> tuple[list[Path], int]:
         calls: list[Path] = []
 
-        def fake_check_run(run_dir: Path, expect_none: bool) -> bool:
+        def fake_check_run(run_dir: Path, expect_none: bool, **_kwargs: object) -> bool:
             calls.append(run_dir)
             return results[len(calls) - 1]
 
