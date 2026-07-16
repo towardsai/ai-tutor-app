@@ -30,7 +30,7 @@ ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-confi
 | Eval harness (run/grade/report batteries) | `evals/`, entry doc `evals.md` |
 | Eval dataset schemas + glossary | `data/eval/README.md` |
 | Data pipeline / workflows (deep guide) | `data/scraping_scripts/README.md` |
-| KB design + wiki maintainer workflow (deep guide) | `data/kb/MAINTAINER.md` |
+| KB design + wiki maintainer workflow (deep guide) | `data/kb/MAINTAINER.md` (not in git — ships with the private KB bundle, present locally after first start with `HF_TOKEN`) |
 
 ## Architecture in brief
 
@@ -91,7 +91,7 @@ uv run -m data.scraping_scripts.retire_source_workflow --sources KEY [--dry-run 
 
 ## Evaluation
 
-**`evals.md` is the entry point** (what we evaluate, the datasets, results, remaining work); `evals/` is the harness (`run_battery` → `grade` → `report`, plus `check_triggers` and the blinded `handgrade_workbook`). Eval datasets and run results contain **real student text**: they are gitignored and ship via the private `ai-tutor-data` HF dataset (`eval/`, `eval_runs/`) — download snippet in `evals.md`. Runs cost real API money (a 4-preset bake-off ≈ $323; the full eval program ≈ $590 across all Gemini 3.5 Flash runs); grading and reporting re-run offline from saved bundles for free. **Running or contributing an experiment? Follow `evals/contributing.md`** (run → upload data to HF → record an `F<N>` finding → merge; with a definition-of-done gate).
+**`evals.md` is the entry point** (what we evaluate, the datasets, results, remaining work); `evals/` is the harness (`run_battery` → `grade` → `report`, plus `check_triggers`, the blinded `handgrade_workbook`, the paired lockstep runner `run_compaction_experiment`, and the subagent-judge grading pipeline `grading_prep` → `grade_workflow.js`/`run_subscription_grading` → `grading_merge`). Eval datasets and run results contain **real student text**: they are gitignored and ship via the private `ai-tutor-data` HF dataset (`eval/`, `eval_runs/`) — download snippet in `evals.md`. Runs cost real API money (a 4-preset bake-off ≈ $323; the full eval program ≈ $590 across all Gemini 3.5 Flash runs); grading and reporting re-run offline from saved bundles for free. **Running or contributing an experiment? Follow `evals/contributing.md`** (run → upload data to HF → record an `F<N>` finding → merge; with a definition-of-done gate).
 
 ## Environment variables
 
@@ -101,7 +101,7 @@ Chat runtime: `COHERE_API_KEY` (retrieval; always required), `DEEPSEEK_API_KEY` 
 
 Both HF Spaces run the same image (`Dockerfile`: FastAPI + Next.js static export, `ripgrep` installed for `run_kb_command`, port :7860), in a dev → prod flow:
 
-- **Dev — `ai-tutor`** (private): `.github/workflows/sync-to-hf.yml` force-pushes on every push to `main`. Verify changes here first.
+- **Dev — `ai-tutor`** (private): `.github/workflows/sync-to-hf.yml` force-pushes on every push to `main` (docs/markdown-only and scraping-script-only pushes are skipped via `paths-ignore`). Verify changes here first.
 - **Prod — `ai-tutor-chatbot`** (public): `.github/workflows/deploy-prod-to-hf.yml`, **manual trigger only** (Actions tab → "Deploy prod to Hugging Face" → Run workflow).
 
 Both Spaces need the same runtime secrets (`COHERE_API_KEY`, model provider key, `HF_TOKEN`, optional `LANGSMITH_*`) configured in their HF settings.
