@@ -32,6 +32,7 @@ from app.chat_service import (
     extract_shell_source_matches,
     resolve_answer_citations,
     retrieve_tutor_context,
+    run_kb_command,
     supports_gemini_tool_combination,
     sync_thread_with_history,
     stream_chat,
@@ -466,6 +467,59 @@ class ChatServiceTestCase(unittest.TestCase):
         finally:
             _clear_kb_command_budget(session_id)
 
+    def test_kb_command_accepts_timeout_alias_with_runtime_cap(self) -> None:
+        session_id = "test_timeout_alias"
+        _clear_kb_command_budget(session_id)
+        runtime = types.SimpleNamespace(
+            context=types.SimpleNamespace(
+                kb_session_id=session_id,
+                kb_command_limit=3,
+            )
+        )
+        try:
+            with (
+                patch("app.chat_service.ensure_local_vector_db"),
+                patch("app.chat_service.execute_kb_command") as execute,
+                patch("app.chat_service.format_command_payload", return_value="$ ls"),
+            ):
+                result = run_kb_command.func(
+                    command="ls",
+                    runtime=runtime,
+                    timeout=5,
+                )
+        finally:
+            _clear_kb_command_budget(session_id)
+        self.assertEqual(result, "$ ls")
+        execute.assert_called_once_with(
+            "ls",
+            timeout_seconds=5,
+            max_output_chars=40000,
+        )
+
+    def test_kb_command_unknown_arguments_return_soft_tool_error(self) -> None:
+        runtime = types.SimpleNamespace(
+            context=types.SimpleNamespace(
+                kb_session_id="test_unknown_tool_arg",
+                kb_command_limit=3,
+            )
+        )
+        with patch("app.chat_service.execute_kb_command") as execute:
+            result = run_kb_command.func(
+                command="ls",
+                runtime=runtime,
+                working_directory="raw",
+            )
+        self.assertIn("unsupported run_kb_command argument", result)
+        self.assertIn("working_directory", result)
+        execute.assert_not_called()
+
+    def test_kb_command_schema_disallows_unpublished_arguments(self) -> None:
+        schema = run_kb_command.args_schema
+        self.assertIsInstance(schema, dict)
+        self.assertFalse(schema["additionalProperties"])
+        self.assertIn("timeout", schema["properties"])
+        self.assertEqual(schema["properties"]["timeout"]["maximum"], 30)
+
     def test_retrieve_tutor_context_degrades_on_retriever_failure(self) -> None:
         runtime = types.SimpleNamespace(
             context=types.SimpleNamespace(allowed_sources=("transformers",))
@@ -479,6 +533,21 @@ class ChatServiceTestCase(unittest.TestCase):
         self.assertIn("run_kb_command", result)
         # ...and the raw provider error is not exposed in the tool output.
         self.assertNotIn("cohere 500 boom", result)
+
+    def test_retrieve_tutor_context_unknown_arguments_return_soft_error(self) -> None:
+        runtime = types.SimpleNamespace(
+            context=types.SimpleNamespace(allowed_sources=("transformers",))
+        )
+        with patch("app.chat_service.select_retriever") as select:
+            result = retrieve_tutor_context.func(
+                query="What is RAG?",
+                runtime=runtime,
+                top_k=20,
+            )
+        self.assertIn("unsupported argument", result)
+        self.assertIn("top_k", result)
+        select.assert_not_called()
+        self.assertFalse(retrieve_tutor_context.args_schema["additionalProperties"])
 
     def test_resolve_answer_citations_uses_current_turn_evidence(self) -> None:
         retrieval = SourceMatch(

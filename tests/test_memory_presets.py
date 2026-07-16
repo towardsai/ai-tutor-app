@@ -5,7 +5,11 @@ import unittest
 from unittest.mock import patch
 
 from app.chat_service import (
+    DeepSeekCacheIsolationMiddleware,
+    InstrumentedSummarizationMiddleware,
+    PrefixPreservingCompactionMiddleware,
     SourcePreferenceMiddleware,
+    StableToolOutputCapMiddleware,
     StudentProfileMiddleware,
     build_agent,
     build_agent_middleware,
@@ -58,6 +62,26 @@ class MemoryPresetResolutionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 resolve_memory_preset("")
 
+    def test_deepseek_experiment_arms_are_single_axis_configs(self) -> None:
+        raw = MEMORY_PRESETS["exp_fh_raw"]
+        capped = MEMORY_PRESETS["exp_fh_cap10k"]
+        compact = MEMORY_PRESETS["exp_c200_cap10k"]
+        self.assertTrue(raw.experiment_mode)
+        self.assertFalse(raw.summarization)
+        self.assertFalse(raw.context_editing)
+        self.assertEqual(capped.tool_output_cap_bytes, 40_000)
+        self.assertEqual(compact.summarization_trigger_tokens, 200_000)
+        self.assertEqual(compact.summarization_keep_tokens, 50_000)
+        self.assertIsNone(compact.summarization_trim_tokens)
+        self.assertEqual(compact.summarization_input_guard_tokens, 900_000)
+        self.assertEqual(compact.experiment_request_guard_tokens, 990_000)
+        self.assertFalse(compact.context_editing)
+        structured = MEMORY_PRESETS["exp_c200_cap10k_structured"]
+        self.assertEqual(structured.summarization_strategy, "structured_prefix")
+        self.assertEqual(structured.summarization_trigger_tokens, 200_000)
+        self.assertEqual(structured.summarization_keep_tokens, 50_000)
+        self.assertEqual(structured.tool_output_cap_bytes, 40_000)
+
 
 class MiddlewareAssemblyTests(unittest.TestCase):
     def test_full_history_disables_compaction(self) -> None:
@@ -100,6 +124,40 @@ class MiddlewareAssemblyTests(unittest.TestCase):
         )
         self.assertTrue(
             any(isinstance(m, StudentProfileMiddleware) for m in middleware)
+        )
+
+    def test_experiment_stack_has_isolation_cap_and_full_input_summary(self) -> None:
+        middleware = build_agent_middleware(
+            _stub_model(), MEMORY_PRESETS["exp_c200_cap10k"]
+        )
+        self.assertTrue(
+            any(isinstance(m, DeepSeekCacheIsolationMiddleware) for m in middleware)
+        )
+        self.assertTrue(
+            any(isinstance(m, StableToolOutputCapMiddleware) for m in middleware)
+        )
+        summary = next(
+            m for m in middleware if isinstance(m, InstrumentedSummarizationMiddleware)
+        )
+        self.assertEqual(summary.keep, ("tokens", 50_000))
+        self.assertIsNone(summary.trim_tokens_to_summarize)
+        self.assertEqual(summary.summary_input_guard_tokens, 900_000)
+        self.assertFalse(
+            any(isinstance(m, ContextEditingMiddleware) for m in middleware)
+        )
+
+    def test_structured_compactor_runs_after_request_shaping_middleware(self) -> None:
+        middleware = build_agent_middleware(
+            _stub_model(), MEMORY_PRESETS["exp_c200_cap10k_structured"]
+        )
+        self.assertIsInstance(middleware[0], DeepSeekCacheIsolationMiddleware)
+        self.assertTrue(
+            any(isinstance(m, StableToolOutputCapMiddleware) for m in middleware)
+        )
+        self.assertIsInstance(middleware[-2], SourcePreferenceMiddleware)
+        self.assertIsInstance(middleware[-1], PrefixPreservingCompactionMiddleware)
+        self.assertFalse(
+            any(type(m) is InstrumentedSummarizationMiddleware for m in middleware)
         )
 
     def test_build_agent_cache_keys_include_memory_config(self) -> None:

@@ -92,9 +92,26 @@ class MemoryConfig:
     summarization: bool = True
     summarization_trigger_tokens: int = 30_000
     summarization_keep_messages: int = 20
+    # Experiment arms use token-based retention so a single large tool message
+    # cannot make the post-compaction window vary by hundreds of thousands of
+    # tokens. None preserves the historical message-count behavior.
+    summarization_keep_tokens: int | None = None
+    # LangChain defaults this to 4k. None deliberately sends the entire selected
+    # older history to the summarizer (the corrected long-context experiment).
+    summarization_trim_tokens: int | None = 4_000
+    # Fail rather than silently trim if a full-input experimental summary would
+    # approach the provider's context ceiling. None disables the guard.
+    summarization_input_guard_tokens: int | None = None
     # Custom SummarizationMiddleware prompt (None = the library default). Used by
     # the selective_retention / context_reset arms; must template {messages}.
     summary_prompt: str | None = None
+    # ``xml`` is LangChain's historical behavior: serialize selected messages
+    # into one new prompt string. ``structured_prefix`` keeps the original
+    # system message, tool schemas, model settings, and selected message prefix
+    # byte-for-byte at the message boundary, then appends one checkpoint
+    # instruction. The latter is experiment-only because it changes request
+    # shape and checkpoint installation semantics.
+    summarization_strategy: str = "xml"
     context_editing: bool = True
     context_editing_trigger_tokens: int = 5_000
     context_editing_keep: int = 5
@@ -112,6 +129,19 @@ class MemoryConfig:
     truncate_head_chars: int = 2_000
     truncate_tail_chars: int = 500
     truncate_trigger_chars: int = 4_000
+    # Persistent insertion-time cap: unlike truncate_tool_outputs, this changes
+    # the checkpoint itself, so every later model call and the summarizer see the
+    # same stable text. The experiment uses 40k UTF-8 bytes as a nominal 10k-token
+    # cap, matching the reproducible approximation used by the Codex harness.
+    tool_output_cap_bytes: int | None = None
+    # Enables explanatory compaction telemetry and DeepSeek user_id isolation.
+    # Kept off for production and historical presets so this study is additive.
+    experiment_mode: bool = False
+    # Fail before an experimental agent call exceeds this approximate input
+    # size. The approximation over-counted the provider-reported input by about
+    # 29k near 870k, so 990k preserves real headroom inside DeepSeek's 1M window
+    # without prematurely truncating the full-history control.
+    experiment_request_guard_tokens: int = 990_000
     compress_prompt: bool = False  # deterministic per-call text compaction
     # In-context history retrieval (Axis A subsystem): keep the last N turn-blocks
     # and retrieve only the top-k most relevant older blocks. None disables it.
@@ -131,6 +161,78 @@ MEMORY_PRESETS: dict[str, MemoryConfig] = {
     # token-cost worst case.
     "full_history": MemoryConfig(
         name="full_history", summarization=False, context_editing=False
+    ),
+    # --- DeepSeek long-context compaction experiment ----------------------
+    # Four mechanism-isolation arms. All disable age-based context editing;
+    # the capped arms instead perform one stable rewrite when tool output first
+    # enters history. C200 arms summarize the complete selected prefix at 200k
+    # and retain a controlled 50k-token recent tail.
+    "exp_fh_raw": MemoryConfig(
+        name="exp_fh_raw",
+        summarization=False,
+        context_editing=False,
+        experiment_mode=True,
+    ),
+    "exp_fh_cap10k": MemoryConfig(
+        name="exp_fh_cap10k",
+        summarization=False,
+        context_editing=False,
+        tool_output_cap_bytes=40_000,
+        experiment_mode=True,
+    ),
+    "exp_c200_raw": MemoryConfig(
+        name="exp_c200_raw",
+        summarization_trigger_tokens=200_000,
+        summarization_keep_tokens=50_000,
+        summarization_trim_tokens=None,
+        summarization_input_guard_tokens=900_000,
+        context_editing=False,
+        experiment_mode=True,
+    ),
+    "exp_c200_cap10k": MemoryConfig(
+        name="exp_c200_cap10k",
+        summarization_trigger_tokens=200_000,
+        summarization_keep_tokens=50_000,
+        summarization_trim_tokens=None,
+        summarization_input_guard_tokens=900_000,
+        context_editing=False,
+        tool_output_cap_bytes=40_000,
+        experiment_mode=True,
+    ),
+    # Cache-friendly version of exp_c200_cap10k. It deliberately remains a
+    # separate arm so the completed XML run stays reproducible and comparable.
+    "exp_c200_cap10k_structured": MemoryConfig(
+        name="exp_c200_cap10k_structured",
+        summarization_trigger_tokens=200_000,
+        summarization_keep_tokens=50_000,
+        summarization_trim_tokens=None,
+        summarization_input_guard_tokens=900_000,
+        summarization_strategy="structured_prefix",
+        context_editing=False,
+        tool_output_cap_bytes=40_000,
+        experiment_mode=True,
+    ),
+    # Stage-2 threshold sensitivity arms share the exact same cap, summary
+    # input, and post-compaction retention. Only the trigger changes.
+    "exp_c400_cap10k": MemoryConfig(
+        name="exp_c400_cap10k",
+        summarization_trigger_tokens=400_000,
+        summarization_keep_tokens=50_000,
+        summarization_trim_tokens=None,
+        summarization_input_guard_tokens=900_000,
+        context_editing=False,
+        tool_output_cap_bytes=40_000,
+        experiment_mode=True,
+    ),
+    "exp_c800_cap10k": MemoryConfig(
+        name="exp_c800_cap10k",
+        summarization_trigger_tokens=800_000,
+        summarization_keep_tokens=50_000,
+        summarization_trim_tokens=None,
+        summarization_input_guard_tokens=900_000,
+        context_editing=False,
+        tool_output_cap_bytes=40_000,
+        experiment_mode=True,
     ),
     # What production runs today.
     "prod": MemoryConfig(name="prod"),

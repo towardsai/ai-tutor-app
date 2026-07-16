@@ -16,13 +16,15 @@ number.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from langchain_core.callbacks.usage import UsageMetadataCallbackHandler
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.messages.utils import count_tokens_approximately
-from langchain_core.outputs import LLMResult
+from langchain_core.outputs import ChatGeneration, LLMResult
 
 
 # --- Turn-scoped middleware signals ------------------------------------------
@@ -39,6 +41,7 @@ from langchain_core.outputs import LLMResult
 # wrap_model_call in a worker thread, where a ContextVar update lands on a copy
 # and is lost. A plain global + lock is visible from any thread.
 _TURN_SIGNALS: dict[str, dict[str, int]] = {}
+_TURN_EVENTS: dict[str, list[dict[str, Any]]] = {}
 _TURN_SIGNALS_LOCK = threading.Lock()
 _MAX_TRACKED_TURNS = 256
 
@@ -67,8 +70,11 @@ def reset_turn_signals(turn_id: str) -> None:
         # Never clear() the whole dict — that would wipe concurrent in-flight
         # turns' signals and could mis-grade a probe as "compaction never fired".
         while len(_TURN_SIGNALS) >= _MAX_TRACKED_TURNS:
-            _TURN_SIGNALS.pop(next(iter(_TURN_SIGNALS)), None)
+            oldest = next(iter(_TURN_SIGNALS))
+            _TURN_SIGNALS.pop(oldest, None)
+            _TURN_EVENTS.pop(oldest, None)
         _TURN_SIGNALS[turn_id] = {}
+        _TURN_EVENTS[turn_id] = []
 
 
 def record_turn_signal(turn_id: str, name: str, amount: int = 1) -> None:
@@ -103,16 +109,107 @@ def pop_turn_signals(turn_id: str) -> dict[str, int]:
         return _TURN_SIGNALS.pop(turn_id, {})
 
 
+def record_turn_event(turn_id: str, event: dict[str, Any]) -> None:
+    """Append structured middleware telemetry for one turn (thread-safe)."""
+    if not turn_id:
+        return
+    with _TURN_SIGNALS_LOCK:
+        _TURN_EVENTS.setdefault(turn_id, []).append(dict(event))
+
+
+def pop_turn_events(turn_id: str) -> list[dict[str, Any]]:
+    """Take and clear a turn's structured middleware events."""
+    if not turn_id:
+        return []
+    with _TURN_SIGNALS_LOCK:
+        return _TURN_EVENTS.pop(turn_id, [])
+
+
 class TurnUsageHandler(UsageMetadataCallbackHandler):
-    """Aggregate per-model usage for one turn and count chat-model calls."""
+    """Aggregate usage and retain one explanatory record per model call."""
 
     def __init__(self) -> None:
         super().__init__()
         self.llm_calls = 0
+        self.model_calls: list[dict[str, Any]] = []
+        self._call_starts: dict[UUID, dict[str, Any]] = {}
+
+    def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list[BaseMessage]],
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        del serialized, parent_run_id, tags, kwargs
+        request_messages = messages[0] if messages else []
+        try:
+            request_tokens = int(count_tokens_approximately(request_messages))
+        except Exception:  # telemetry must never break a model call
+            request_tokens = 0
+        call_metadata = metadata or {}
+        with self._lock:
+            self._call_starts[run_id] = {
+                "started_at": time.monotonic(),
+                "source": str(call_metadata.get("lc_source") or "agent"),
+                "request_context_tokens_approx": request_tokens,
+            }
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        run_id = kwargs.get("run_id")
+        generation = None
+        try:
+            generation = response.generations[0][0]
+        except IndexError:
+            pass
+
+        message = generation.message if isinstance(generation, ChatGeneration) else None
+        usage = (
+            dict(message.usage_metadata or {}) if isinstance(message, AIMessage) else {}
+        )
+        model_name = (
+            str(message.response_metadata.get("model_name") or "")
+            if isinstance(message, AIMessage)
+            else ""
+        )
+        details = dict(usage.get("input_token_details") or {})
+        breakdown = usage_cost_breakdown(model_name, usage) if model_name else None
         with self._lock:
             self.llm_calls += 1
+            start = self._call_starts.pop(run_id, {}) if run_id else {}
+            self.model_calls.append(
+                {
+                    "sequence": self.llm_calls,
+                    "source": start.get("source", "agent"),
+                    "model": model_name,
+                    "input_tokens": int(usage.get("input_tokens", 0) or 0),
+                    "cache_read_tokens": int(details.get("cache_read", 0) or 0),
+                    "cache_miss_tokens": max(
+                        0,
+                        int(usage.get("input_tokens", 0) or 0)
+                        - int(details.get("cache_read", 0) or 0)
+                        - int(details.get("cache_creation", 0) or 0),
+                    ),
+                    "cache_creation_tokens": int(details.get("cache_creation", 0) or 0),
+                    "output_tokens": int(usage.get("output_tokens", 0) or 0),
+                    "total_tokens": int(usage.get("total_tokens", 0) or 0),
+                    "usage_reported": bool(usage),
+                    "cache_details_reported": "cache_read" in details,
+                    "request_context_tokens_approx": int(
+                        start.get("request_context_tokens_approx", 0) or 0
+                    ),
+                    "duration_ms": (
+                        int((time.monotonic() - start["started_at"]) * 1000)
+                        if start.get("started_at") is not None
+                        else None
+                    ),
+                    "cost": breakdown,
+                }
+            )
         super().on_llm_end(response, **kwargs)
 
 
@@ -165,6 +262,52 @@ def pricing_for_model(model_key: str) -> ModelPricing | None:
     return best[1] if best else None
 
 
+def usage_cost_breakdown(
+    model_key: str, usage: dict[str, Any]
+) -> dict[str, float] | None:
+    """Return mutually exclusive USD components for one model's usage."""
+    pricing = pricing_for_model(model_key)
+    if pricing is None:
+        return None
+    input_tokens = int(usage.get("input_tokens", 0) or 0)
+    output_tokens = int(usage.get("output_tokens", 0) or 0)
+    details = usage.get("input_token_details") or {}
+    cache_read = int(details.get("cache_read", 0) or 0)
+    cache_creation = int(details.get("cache_creation", 0) or 0)
+    plain_input = max(0, input_tokens - cache_read - cache_creation)
+    write_rate = (
+        pricing.cache_write if pricing.cache_write is not None else pricing.input
+    )
+    result = {
+        "cache_miss_input_usd": plain_input * pricing.input / 1_000_000,
+        "cache_read_input_usd": cache_read * pricing.cache_read / 1_000_000,
+        "cache_creation_input_usd": cache_creation * write_rate / 1_000_000,
+        "output_usd": output_tokens * pricing.output / 1_000_000,
+    }
+    result["total_usd"] = sum(result.values())
+    return result
+
+
+def aggregate_cost_breakdown(
+    usage_by_model: dict[str, Any],
+) -> dict[str, float] | None:
+    """Sum cost components across every model used in a turn."""
+    totals = {
+        "cache_miss_input_usd": 0.0,
+        "cache_read_input_usd": 0.0,
+        "cache_creation_input_usd": 0.0,
+        "output_usd": 0.0,
+        "total_usd": 0.0,
+    }
+    for model_key, usage in usage_by_model.items():
+        breakdown = usage_cost_breakdown(model_key, usage)
+        if breakdown is None:
+            return None
+        for key in totals:
+            totals[key] += breakdown[key]
+    return totals
+
+
 def usage_totals(usage_by_model: dict[str, Any]) -> dict[str, int]:
     """Sum usage across models into the fields the stats event reports."""
     totals = {
@@ -191,27 +334,8 @@ def estimate_cost_usd(usage_by_model: dict[str, Any]) -> float | None:
     includes them (LangChain's UsageMetadata convention), so they are carved
     out of the plain-input bucket rather than added on top.
     """
-    total = 0.0
-    for model_key, usage in usage_by_model.items():
-        pricing = pricing_for_model(model_key)
-        if pricing is None:
-            return None
-        input_tokens = int(usage.get("input_tokens", 0) or 0)
-        output_tokens = int(usage.get("output_tokens", 0) or 0)
-        details = usage.get("input_token_details") or {}
-        cache_read = int(details.get("cache_read", 0) or 0)
-        cache_creation = int(details.get("cache_creation", 0) or 0)
-        plain_input = max(0, input_tokens - cache_read - cache_creation)
-        write_rate = (
-            pricing.cache_write if pricing.cache_write is not None else pricing.input
-        )
-        total += (
-            plain_input * pricing.input
-            + cache_read * pricing.cache_read
-            + cache_creation * write_rate
-            + output_tokens * pricing.output
-        ) / 1_000_000
-    return total
+    breakdown = aggregate_cost_breakdown(usage_by_model)
+    return breakdown["total_usd"] if breakdown is not None else None
 
 
 def context_window_stats(
