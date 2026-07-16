@@ -70,15 +70,35 @@ KB_AGENTS_PATH = f"{KB_DIR}/AGENTS.md"
 # In-git template, copied into data/kb/AGENTS.md by ensure_kb_agents_md().
 KB_AGENTS_TEMPLATE_PATH = "data/scraping_scripts/kb_agents_template.md"
 DEEPSEEK_DIRECT_MODEL_NAME = "deepseek:deepseek-v4-flash"
-GEMINI_FALLBACK_MODEL_NAME = "google-genai:gemini-2.5-flash"
 DEFAULT_MODEL_NAME = DEEPSEEK_DIRECT_MODEL_NAME
+
+# Two distinct roles, deliberately kept apart:
+#
+#   AVAILABLE_MODELS          models a user may SELECT (the /api/tools picker;
+#                             build_chat_request 422s on anything else).
+#   GEMINI_FALLBACK_MODEL_NAME  rescue-only. Never selectable — see below.
+#
+# The fallback is NOT in AVAILABLE_MODELS on purpose, and the pairing is
+# asserted in tests/test_config.py so this cannot drift back.
+#
+# Why gemini-2.5-flash may serve traffic but must never be selectable:
+# combining Gemini's server-side tools (google_search, url_context) with our
+# custom function tools in one request needs `tool_config.
+# include_server_side_tool_invocations`, and that flag is a Gemini 3+ preview
+# feature ("tool context circulation"). Sending it to a 2.5 model returns
+# 400 INVALID_ARGUMENT; omitting it makes 2.5 reject the tool mix anyway. The
+# agent ALWAYS binds retrieve_tutor_context + run_kb_command, so a selectable
+# 2.5 would be one web-search toggle away from a hard failure. As a fallback it
+# is safe: the fallback never gets web tools, because build_agent binds them
+# from the REQUESTED model (deepseek), which has none. See build_chat_model in
+# app/chat_service.py.
+GEMINI_FALLBACK_MODEL_NAME = "google-genai:gemini-2.5-flash"
 
 AVAILABLE_MODELS: tuple[dict[str, str], ...] = (
     {
         "id": DEEPSEEK_DIRECT_MODEL_NAME,
         "label": "DeepSeek V4 Flash",
     },
-    {"id": GEMINI_FALLBACK_MODEL_NAME, "label": "Gemini 2.5 Flash"},
     {"id": "anthropic:claude-haiku-4-5", "label": "Claude Haiku 4.5"},
 )
 

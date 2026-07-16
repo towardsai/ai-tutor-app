@@ -19,7 +19,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .chat_service import (
     is_anthropic_model,
-    is_google_genai_model,
+    supports_gemini_tool_combination,
     message_content_to_text,
     stream_chat,
     warm_up_retriever,
@@ -714,7 +714,11 @@ def _tool_catalog(model_name: str) -> list[dict[str, Any]]:
         "sources": _source_entries(),
     }
     tools: list[dict[str, Any]] = [retrieval_tool]
-    if is_google_genai_model(model_name):
+    # Only offer a toggle the model can actually honor: build_agent binds these
+    # from the same predicates, so a toggle shown here but dropped there would
+    # be a dead switch (and, for pre-3 Gemini, a 400). Models with no
+    # provider-native web tools (DeepSeek, gemini-2.5-*) get the KB tool only.
+    if supports_gemini_tool_combination(model_name):
         tools.append(
             {
                 "key": "web_search",

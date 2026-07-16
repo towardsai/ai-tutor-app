@@ -84,6 +84,14 @@ from .config import (
 
 logger = logging.getLogger(__name__)
 
+# Thread state for every model, keyed only by thread_id -- so nothing here
+# stops a caller from pointing two providers at one thread. Do not read that as
+# permission: a checkpoint holds PROVIDER-NATIVE messages (Gemini thought
+# signatures, Anthropic signed thinking blocks, per-provider server-tool
+# blocks), and replaying them to a different provider is a hard 400, not a
+# degraded answer. One thread is one provider; see build_chat_model for the
+# verified failure modes and sync_thread_with_history for the safe way to
+# change provider (branch to a fresh thread seeded with plain text).
 CHECKPOINTER = InMemorySaver()
 # Long-term memory (student profiles), keyed by namespace ("student", <id>).
 # In-process like the checkpointer: profiles survive across threads/sessions
@@ -103,6 +111,12 @@ _THREAD_TRANSCRIPTS: dict[str, tuple[ChatTurn, ...]] = {}
 # with that checkpoint_id forks the thread from the prefix's real state
 # (tool outputs and summaries included) instead of a plain-text rebuild.
 _THREAD_FORK_POINTS: dict[str, dict[int, str]] = {}
+# Provider whose native message blocks are in each thread's checkpoint, taken
+# from the model that ACTUALLY served the turn (the DeepSeek fallback means the
+# serving model is not always the requested one). A turn on a different provider
+# cannot replay those blocks, so sync_thread_with_history branches on mismatch
+# rather than letting the request 400.
+_THREAD_PROVIDERS: dict[str, str] = {}
 # Threads live in process memory only, so idle ones (abandoned tabs, "New
 # chat") must be evicted or the saver grows forever. Eviction is graceful:
 # if the client comes back, the request restores its visible history into
@@ -179,6 +193,24 @@ def _record_thread_transcript(thread_id: str, transcript: tuple[ChatTurn, ...]) 
         _THREAD_TRANSCRIPTS[thread_id] = transcript
 
 
+def _get_thread_provider(thread_id: str) -> str:
+    with _THREAD_TRANSCRIPT_LOCK:
+        return _THREAD_PROVIDERS.get(thread_id, "")
+
+
+def _record_thread_provider(thread_id: str, provider: str) -> None:
+    """Remember which provider's blocks are in this thread's checkpoint.
+
+    Recorded from the model that ACTUALLY served the turn, not the one the
+    request asked for: when the DeepSeek fallback fires, Gemini is what wrote
+    the messages, and that is what the next turn has to replay.
+    """
+    if not provider:
+        return
+    with _THREAD_TRANSCRIPT_LOCK:
+        _THREAD_PROVIDERS[thread_id] = provider
+
+
 def _get_fork_point(thread_id: str, turn_count: int) -> str:
     with _THREAD_TRANSCRIPT_LOCK:
         return _THREAD_FORK_POINTS.get(thread_id, {}).get(turn_count, "")
@@ -207,6 +239,7 @@ def _drop_thread_record(thread_id: str) -> None:
         _THREAD_TRANSCRIPTS.pop(thread_id, None)
         _THREAD_FORK_POINTS.pop(thread_id, None)
         _THREAD_LAST_USED.pop(thread_id, None)
+        _THREAD_PROVIDERS.pop(thread_id, None)
 
 
 def _touch_thread(thread_id: str, now: float | None = None) -> None:
@@ -237,6 +270,7 @@ def _evict_idle_threads(now: float | None = None, *, force: bool = False) -> lis
             _THREAD_LAST_USED.pop(thread_id, None)
             _THREAD_TRANSCRIPTS.pop(thread_id, None)
             _THREAD_FORK_POINTS.pop(thread_id, None)
+            _THREAD_PROVIDERS.pop(thread_id, None)
     for thread_id in expired:
         CHECKPOINTER.delete_thread(thread_id)
     if expired:
@@ -478,13 +512,45 @@ def sync_thread_with_history(
     agent,
     thread_id: str,
     history: tuple[ChatTurn, ...],
+    provider: str = "",
 ) -> tuple[str, str]:
     """Pick the thread (and optional fork checkpoint) for this request.
 
     Returns ``(thread_id, fork_checkpoint_id)``. A non-empty checkpoint id
     means the run must fork the thread from that checkpoint (LangGraph
     time travel) instead of continuing from its latest state.
+
+    The branch path at the bottom (fresh thread seeded from the visible
+    transcript via history_to_langgraph_messages) is the ONLY safe way to move
+    a conversation onto a different provider: it reseeds plain user/assistant
+    text and drops the checkpoint's provider-native state -- tool outputs,
+    summaries, thought signatures -- which is exactly what makes it portable.
+    That data loss is the feature, not a bug to fix. Continuing or forking a
+    thread across providers instead replays unportable blocks and 400s; see
+    build_chat_model.
+
+    ``provider`` is the provider serving THIS turn. When it differs from the one
+    that wrote the thread's checkpointed messages, every other path here would
+    replay unportable blocks, so the mismatch branches unconditionally.
     """
+    owner = _get_thread_provider(thread_id)
+    if provider and owner and owner != provider:
+        # The DeepSeek->Gemini fallback is the common way to get here: a
+        # rescued turn checkpoints Gemini-native messages, so the next DeepSeek
+        # turn would 400 and silently re-fall-back to Gemini forever (verified:
+        # a healthy DeepSeek key still 400s on that thread). Branching resets
+        # the conversation onto portable plain text so the requested model
+        # actually serves it.
+        logger.info(
+            "Thread %s was written by %s but this turn runs on %s; branching to a "
+            "fresh thread seeded with plain text (tool outputs and summaries are "
+            "dropped -- provider-native blocks cannot be replayed across providers).",
+            thread_id,
+            owner,
+            provider,
+        )
+        return _branch_to_fresh_thread(agent, thread_id, history), ""
+
     tracked = _get_thread_transcript(thread_id)
     if tracked == history:
         # The client sent back exactly what this thread streamed to it, so
@@ -522,6 +588,20 @@ def sync_thread_with_history(
 
     # No checkpoint maps to the history the client kept: branch to a fresh
     # thread seeded with the visible messages as plain text.
+    return _branch_to_fresh_thread(agent, thread_id, history), ""
+
+
+def _branch_to_fresh_thread(
+    agent,
+    thread_id: str,
+    history: tuple[ChatTurn, ...],
+) -> str:
+    """Reseed the visible transcript as plain text on a brand-new thread.
+
+    Drops everything provider-native in the old checkpoint (tool outputs,
+    summaries, thought/thinking signatures). That loss is the point: plain
+    user/assistant text is the only representation every provider accepts.
+    """
     branched_thread_id = new_thread_id()
     restored_messages = history_to_langgraph_messages(history)
     if restored_messages:
@@ -536,7 +616,7 @@ def sync_thread_with_history(
     # thread is unreachable; drop it or it lives in the in-memory saver forever.
     CHECKPOINTER.delete_thread(thread_id)
     _drop_thread_record(thread_id)
-    return branched_thread_id, ""
+    return branched_thread_id
 
 
 def collect_retrieval_source_matches(payload: str) -> list[SourceMatch]:
@@ -773,6 +853,31 @@ def is_anthropic_model(model_name: str) -> bool:
     return provider == "anthropic"
 
 
+def supports_gemini_tool_combination(model_name: str) -> bool:
+    """True when a Gemini model can mix built-in tools with function tools.
+
+    Gemini calls this "tool context circulation", and it is a Gemini 3+
+    preview: only then does `tool_config.include_server_side_tool_invocations`
+    exist, and only then may google_search/url_context be bound alongside our
+    custom function tools. On gemini-2.5-* the flag is a 400 ("Tool call
+    context circulation is not enabled for models/gemini-2.5-flash") and the
+    tool mix is rejected regardless -- and the agent always binds
+    retrieve_tutor_context + run_kb_command, so there is no combination-free
+    path for a pre-3 model to use web tools here.
+    """
+    if not is_google_genai_model(model_name):
+        return False
+    _provider, _, actual_model = normalize_model_name(model_name).partition(":")
+    # Leading digits only: the generation is followed by "." on point releases
+    # (gemini-3.5-flash) but by "-" on major ones (gemini-3-pro).
+    generation = ""
+    for char in actual_model.removeprefix("gemini-"):
+        if not char.isdigit():
+            break
+        generation += char
+    return bool(generation) and int(generation) >= 3
+
+
 def format_tool_args(args: Any) -> str:
     if isinstance(args, dict):
         query = str(args.get("query", "")).strip()
@@ -897,6 +1002,45 @@ def _build_chat_model_client(provider_model: str, include_thoughts: bool = False
 
 
 def build_chat_model(model_name: str, include_thoughts: bool = False):
+    """Build the chat client for a turn, with the DeepSeek->Gemini rescue path.
+
+    ONE THREAD IS ONE PROVIDER. Read this before touching the fallback.
+
+    A thread's checkpoint stores PROVIDER-NATIVE message objects, not plain
+    text: Gemini reasoning parts carry thought signatures, Anthropic thinking
+    blocks carry a required cryptographic `signature`, and each provider's
+    server-side tool calls are its own block types. Those payloads are not
+    portable. Replaying one provider's checkpointed history to another is a
+    hard API error, not a degraded answer. Both directions are verified:
+
+      Gemini history -> DeepSeek     400 (OpenAI-compatible parser rejects it)
+      Gemini history -> Anthropic    400 "messages.1.content.0.thinking.
+                                     signature: Field required"
+
+    So a fallback is NOT a free "try another model" switch. It is safe here
+    only because of two properties, and it stops being safe if either breaks:
+
+      1. The fallback answers the SAME request the primary just failed, so it
+         reads its own request payload, never a foreign checkpoint.
+      2. build_agent binds tools from the REQUESTED model (deepseek), which has
+         no provider-native web tools, so the fallback is never handed Gemini's
+         google_search/url_context alongside our custom function tools -- a
+         combination gemini-2.5-flash cannot accept (see config.
+         GEMINI_FALLBACK_MODEL_NAME for why).
+
+    A rescued turn still writes GEMINI-shaped messages into a DeepSeek thread's
+    checkpoint. That used to strand the thread: the next DeepSeek turn replayed
+    foreign history, 400'd, and silently fell back again, migrating the thread
+    to Gemini at ~10x the token price forever. It is contained OUTSIDE this
+    function -- sync_thread_with_history records the serving provider per thread
+    and branches to a fresh plain-text thread on mismatch. Do not "fix" that by
+    adding provider translation or another fallback here.
+
+    If you are here to add a fallback, a retry-on-another-provider, or
+    mid-conversation model switching: do not wire it at this layer. Route it
+    through sync_thread_with_history's plain-text branch, which drops the
+    unportable state on purpose.
+    """
     provider_model = normalize_model_name(model_name)
     if provider_model != DEEPSEEK_DIRECT_MODEL_NAME:
         return _build_chat_model_client(
@@ -1525,7 +1669,9 @@ def build_agent(
         tools = [retrieve_tutor_context, run_kb_command]
     middleware = build_agent_middleware(model, memory_config)
     enabled = set(enabled_tools)
-    if is_google_genai_model(model_name):
+    # Provider-native web tools are bound from the REQUESTED model, so a
+    # fallback client never receives them (see build_chat_model).
+    if supports_gemini_tool_combination(model_name):
         if "web_search" in enabled:
             tools.append({"google_search": {}})
         if "url_context" in enabled:
@@ -1533,6 +1679,17 @@ def build_agent(
         if enabled & {"web_search", "url_context"}:
             middleware.append(GeminiServerSideToolsMiddleware())
     elif is_anthropic_model(model_name):
+        # Anthropic combines server-side tools with function tools natively --
+        # no flag, no generation gate (unlike Gemini above); they just share
+        # this list.
+        #
+        # allowed_callers=["direct"] is LOAD-BEARING, not boilerplate. The
+        # _20260209 tools default to allowing the code-execution caller
+        # (programmatic tool calling), which Haiku 4.5 does not support:
+        # dropping this field 400s with "'claude-haiku-4-5-20251001' does not
+        # support programmatic tool calling ... Explicitly set
+        # allowed_callers=["direct"]". Verified live against both web_fetch
+        # variants.
         if "web_search" in enabled:
             tools.append(
                 {
@@ -1585,7 +1742,7 @@ def effective_tool_names(
     else:
         names = ["retrieve_tutor_context", "run_kb_command"]
     enabled = set(enabled_tools)
-    if is_google_genai_model(model_name):
+    if supports_gemini_tool_combination(model_name):
         if "web_search" in enabled:
             names.append("google_search")
         if "url_context" in enabled:
@@ -1803,6 +1960,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
         agent,
         request.thread_id.strip() or new_thread_id(),
         normalized_history,
+        model_provider_and_name(request.model_name)[0],
     )
     _touch_thread(active_thread_id)
     run_config = agent_run_config(
@@ -2058,6 +2216,18 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
             len(transcript),
             _latest_checkpoint_id(agent, active_thread_id),
         )
+        # Take ownership from the model that actually answered, which is not
+        # request.model_name when the DeepSeek fallback fired: Gemini is what
+        # wrote the checkpointed blocks, so Gemini is what the next turn would
+        # have to replay. usage_metadata is keyed by served model and only a
+        # call that reached on_llm_end reports usage, so a failed primary never
+        # appears; the last key is what wrote the final messages.
+        served_models = [model for model in usage_handler.usage_metadata if model]
+        if served_models:
+            _record_thread_provider(
+                active_thread_id,
+                model_provider_and_name(served_models[-1])[0],
+            )
         _touch_thread(active_thread_id)
 
     search_completed = google_search.completed_event()
