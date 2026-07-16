@@ -40,6 +40,22 @@ def extract_thought_summaries(content: Any) -> list[str]:
     return thoughts
 
 
+def extract_reasoning_deltas(message: Any) -> list[str]:
+    """Extract provider reasoning fragments from a streamed LangChain message.
+
+    Gemini and Anthropic expose reasoning as typed content blocks. DeepSeek's
+    provider adapter preserves its sibling ``reasoning_content`` response field
+    in ``additional_kwargs`` instead.
+    """
+    thoughts = extract_thought_summaries(getattr(message, "content", None))
+    additional_kwargs = getattr(message, "additional_kwargs", None)
+    if isinstance(additional_kwargs, dict):
+        reasoning_content = additional_kwargs.get("reasoning_content")
+        if isinstance(reasoning_content, str) and reasoning_content.strip():
+            thoughts.append(reasoning_content)
+    return thoughts
+
+
 def extract_web_search_queries(response_metadata: Any) -> list[str]:
     """Pull the queries Gemini ran against google_search from grounding metadata."""
     if not isinstance(response_metadata, dict):

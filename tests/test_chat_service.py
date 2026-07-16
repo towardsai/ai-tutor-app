@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 from langchain_core.runnables.fallbacks import RunnableWithFallbacks
 
 from app.config import DEEPSEEK_DIRECT_MODEL_NAME, GEMINI_FALLBACK_MODEL_NAME
+from app.deepseek_chat import TutorChatDeepSeek
 from app.chat_service import (
     THREAD_IDLE_TTL_SECONDS,
     _claim_kb_command_budget,
@@ -127,6 +128,32 @@ class FakeAnswerAgent(FakeAgent):
         yield {
             "type": "updates",
             "data": {"model": {"messages": [AIMessage(content=self.answer)]}},
+        }
+
+
+class FakeDeepSeekReasoningAgent(FakeAgent):
+    async def astream(self, *args, **kwargs):
+        for fragment in ("Inspect ", "the course sources."):
+            yield {
+                "type": "messages",
+                "data": (
+                    AIMessageChunk(
+                        content="",
+                        additional_kwargs={"reasoning_content": fragment},
+                    ),
+                    {"langgraph_node": "model"},
+                ),
+            }
+        yield {
+            "type": "messages",
+            "data": (
+                AIMessageChunk(content="Final answer"),
+                {"langgraph_node": "model"},
+            ),
+        }
+        yield {
+            "type": "updates",
+            "data": {"model": {"messages": [AIMessage(content="Final answer")]}},
         }
 
 
@@ -421,9 +448,12 @@ class ChatServiceTestCase(unittest.TestCase):
             model = build_chat_model(DEEPSEEK_DIRECT_MODEL_NAME)
 
         self.assertIsInstance(model, RunnableWithFallbacks)
+        self.assertIsInstance(model.runnable, TutorChatDeepSeek)
         self.assertEqual(model.runnable.model_name, "deepseek-v4-flash")
+        self.assertEqual(str(model.runnable.api_base), "https://api.deepseek.com")
         self.assertEqual(
-            str(model.runnable.openai_api_base), "https://api.deepseek.com"
+            model.runnable.extra_body,
+            {"thinking": {"type": "disabled"}},
         )
         self.assertEqual(len(model.fallbacks), 1)
         self.assertEqual(
@@ -442,7 +472,57 @@ class ChatServiceTestCase(unittest.TestCase):
             model = build_chat_model(DEEPSEEK_DIRECT_MODEL_NAME)
 
         self.assertNotIsInstance(model, RunnableWithFallbacks)
+        self.assertIsInstance(model, TutorChatDeepSeek)
         self.assertEqual(model.model_name, "deepseek-v4-flash")
+
+    def test_deepseek_reasoning_mode_is_explicitly_enabled(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"DEEPSEEK_API_KEY": "deepseek-test-key"},
+            clear=True,
+        ):
+            model = build_chat_model(
+                DEEPSEEK_DIRECT_MODEL_NAME,
+                include_thoughts=True,
+            )
+
+        self.assertIsInstance(model, TutorChatDeepSeek)
+        self.assertIsNone(model.temperature)
+        self.assertEqual(
+            model.extra_body,
+            {"thinking": {"type": "enabled"}},
+        )
+
+    def test_deepseek_thinking_tool_call_replays_reasoning_content(self) -> None:
+        model = TutorChatDeepSeek(
+            model="deepseek-v4-flash",
+            api_key="deepseek-test-key",
+            extra_body={"thinking": {"type": "enabled"}},
+        )
+        messages = [
+            HumanMessage(content="Find the course repository"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "name": "retrieve_tutor_context",
+                        "args": {"query": "course repository"},
+                    }
+                ],
+                additional_kwargs={
+                    "reasoning_content": "I should search the selected course."
+                },
+            ),
+            ToolMessage(content="result", tool_call_id="call_1"),
+        ]
+
+        payload = model._get_request_payload(messages)
+
+        self.assertEqual(
+            payload["messages"][1]["reasoning_content"],
+            "I should search the selected course.",
+        )
 
     def test_deepseek_direct_default_uses_gemini_when_deepseek_key_missing(
         self,
@@ -756,6 +836,40 @@ class ChatServiceTestCase(unittest.TestCase):
         # The tool-call token precedes the first answer text, so first-token
         # latency never exceeds time-to-first-answer.
         self.assertLessEqual(first_token, ttft)
+
+    def test_stream_chat_emits_deepseek_reasoning_content(self) -> None:
+        agent = FakeDeepSeekReasoningAgent([])
+        build_agent_mock = MagicMock(return_value=agent)
+        self.addCleanup(_drop_thread_record, "thread_deepseek_reasoning")
+        request = ChatRequest(
+            query="Find the course repository",
+            source_keys=("peft",),
+            model_name=DEEPSEEK_DIRECT_MODEL_NAME,
+            include_reasoning=True,
+            enabled_tools=(),
+        )
+
+        async def collect_events():
+            return [event async for event in stream_chat(request)]
+
+        with (
+            patch("app.chat_service.build_agent", build_agent_mock),
+            patch(
+                "app.chat_service.new_thread_id",
+                return_value="thread_deepseek_reasoning",
+            ),
+        ):
+            events = asyncio.run(collect_events())
+
+        reasoning = [
+            event.data["text"] for event in events if event.type == "reasoning_delta"
+        ]
+        self.assertEqual(reasoning, ["Inspect ", "the course sources."])
+        self.assertEqual(
+            [event.data["text"] for event in events if event.type == "text_delta"],
+            ["Final answer"],
+        )
+        self.assertTrue(build_agent_mock.call_args.kwargs["include_thoughts"])
 
     def test_stream_chat_resolves_shell_citation_after_final_answer(self) -> None:
         agent = FakeStreamingAgent([])

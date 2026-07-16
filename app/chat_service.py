@@ -41,6 +41,7 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
 from .chat_types import ChatEvent, ChatRequest, ChatTurn, SourceMatch
+from .deepseek_chat import TutorChatDeepSeek
 from .memory_presets import (
     DEFAULT_MEMORY_PRESET,
     MEMORY_PRESETS,
@@ -78,7 +79,7 @@ from .prompts import build_system_prompt, ensure_kb_agents_instructions
 from .provider_events import (
     GoogleSearchActivity,
     extract_anthropic_source_matches,
-    extract_thought_summaries,
+    extract_reasoning_deltas,
 )
 from .config import (
     BM25_INDEX_PATH,
@@ -906,6 +907,12 @@ def is_anthropic_model(model_name: str) -> bool:
     return provider == "anthropic"
 
 
+def is_deepseek_model(model_name: str) -> bool:
+    provider_model = normalize_model_name(model_name)
+    provider, _, _actual_model = provider_model.partition(":")
+    return provider == "deepseek"
+
+
 def supports_gemini_tool_combination(model_name: str) -> bool:
     """True when a Gemini model can mix built-in tools with function tools.
 
@@ -981,18 +988,23 @@ def _build_chat_model_client(provider_model: str, include_thoughts: bool = False
             max_retries=12,
         )
     if provider == "deepseek":
-        # DeepSeek first-party API (OpenAI-compatible, base https://api.deepseek.com).
+        # Use the provider-specific adapter: the generic ChatOpenAI wrapper
+        # intentionally discards DeepSeek's non-standard reasoning_content
+        # field even though the transport itself is OpenAI-compatible.
         # stream_usage=True so the streamed response carries token usage ->
         # context_stats / cost telemetry populates, including the cached-prefix
         # tokens that drive the cost comparison (DeepSeek caches prefixes
         # automatically; cache-hit input is ~50x cheaper than cache-miss). Reads
         # DEEPSEEK_API_KEY.
-        return ChatOpenAI(
+        return TutorChatDeepSeek(
             model=actual_model,
-            temperature=1,
+            temperature=None if include_thoughts else 1,
             base_url="https://api.deepseek.com",
             api_key=os.environ.get("DEEPSEEK_API_KEY"),
             stream_usage=True,
+            extra_body={
+                "thinking": {"type": "enabled" if include_thoughts else "disabled"}
+            },
             # A few retries ride out transient 429/5xx on long agentic sessions
             # without failing the whole session (we run evals at concurrency 1).
             max_retries=6,
@@ -1284,7 +1296,20 @@ class DeepSeekCacheIsolationMiddleware(AgentMiddleware):
         if not user_id:
             return request
         settings = dict(getattr(request, "model_settings", None) or {})
-        extra_body = dict(settings.get("extra_body") or {})
+        model = getattr(request, "model", None)
+        model_extra_body: Any = None
+        # Runnable bindings/fallbacks wrap the underlying provider model. Keep
+        # its DeepSeek thinking toggle when adding the experiment-only user_id;
+        # a call-time extra_body otherwise replaces the model-level mapping.
+        for _ in range(4):
+            model_extra_body = getattr(model, "extra_body", None)
+            if model_extra_body is not None:
+                break
+            model = getattr(model, "runnable", None) or getattr(model, "bound", None)
+            if model is None:
+                break
+        extra_body = dict(model_extra_body or {})
+        extra_body.update(settings.get("extra_body") or {})
         extra_body["user_id"] = user_id
         settings["extra_body"] = extra_body
         return request.override(model_settings=settings)
@@ -2690,6 +2715,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     include_reasoning = bool(request.include_reasoning) and (
         is_google_genai_model(request.model_name)
         or is_anthropic_model(request.model_name)
+        or is_deepseek_model(request.model_name)
     )
     # Gemini streams each thought summary as one complete block; Anthropic
     # streams partial fragments of a single thought. The encoder uses this to
@@ -2777,7 +2803,7 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
 
                 step = str(metadata.get("langgraph_node", ""))
                 if include_reasoning:
-                    thought_text = "\n\n".join(extract_thought_summaries(token.content))
+                    thought_text = "\n\n".join(extract_reasoning_deltas(token))
                     if thought_text:
                         if first_token_at is None:
                             first_token_at = time.monotonic()

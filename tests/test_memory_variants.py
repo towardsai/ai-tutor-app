@@ -383,14 +383,24 @@ class ExperimentCompactionMiddlewareTests(unittest.TestCase):
             context=SimpleNamespace(cache_user_id="eval_abc", kb_session_id="turn")
         )
         request = SimpleNamespace(
-            runtime=runtime, model_settings={}, messages=[], system_message=None
+            runtime=runtime,
+            model=SimpleNamespace(extra_body={"thinking": {"type": "enabled"}}),
+            model_settings={},
+            messages=[],
+            system_message=None,
         )
         request.override = lambda **updates: SimpleNamespace(
             runtime=runtime,
             model_settings=updates.get("model_settings", request.model_settings),
         )
         isolated = DeepSeekCacheIsolationMiddleware()._isolate(request)
-        self.assertEqual(isolated.model_settings["extra_body"], {"user_id": "eval_abc"})
+        self.assertEqual(
+            isolated.model_settings["extra_body"],
+            {
+                "thinking": {"type": "enabled"},
+                "user_id": "eval_abc",
+            },
+        )
 
     def test_agent_request_guard_fails_before_model_handler(self) -> None:
         runtime = SimpleNamespace(

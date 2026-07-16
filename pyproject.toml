@@ -14,6 +14,7 @@ dependencies = [
     "huggingface-hub",
     "langchain",
     "langchain-anthropic",
+    "langchain-deepseek>=1.1.0",
     "langchain-google-genai",
     "langchain-openai",
     "llama-index",
