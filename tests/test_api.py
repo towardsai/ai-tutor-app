@@ -657,6 +657,29 @@ class ApiTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    def test_chat_rejects_oversized_serialized_message(self) -> None:
+        """Direct callers cannot bypass the public-endpoint guard by hiding
+        a large payload in a non-text UI part the chat history ignores."""
+        from app.api import MAX_MESSAGE_JSON_CHARS
+
+        messages = [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool-untrusted",
+                        "output": {"text": "x" * MAX_MESSAGE_JSON_CHARS},
+                    }
+                ],
+            },
+            {"role": "user", "parts": [{"type": "text", "text": "hi"}]},
+        ]
+        with TestClient(app) as client:
+            response = client.post("/api/chat", json={"messages": messages})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("serialized characters", response.text)
+
     def test_chat_rejects_oversized_body(self) -> None:
         from app.api import MAX_BODY_BYTES
 

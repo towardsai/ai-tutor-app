@@ -1040,6 +1040,7 @@ class ChatServiceTestCase(unittest.TestCase):
         )
 
     def test_tool_using_turn_reuses_checkpointed_thread(self) -> None:
+        large_tool_output = "retrieved context " * 20_000
         agent = FakeAgent(
             [
                 HumanMessage(content="What is LoRA?"),
@@ -1054,7 +1055,7 @@ class ChatServiceTestCase(unittest.TestCase):
                     ],
                 ),
                 ToolMessage(
-                    content="payload",
+                    content=large_tool_output,
                     name="retrieve_tutor_context",
                     tool_call_id="call_1",
                 ),
@@ -1071,7 +1072,55 @@ class ChatServiceTestCase(unittest.TestCase):
         )
 
         self.assertEqual(active_thread_id, "thread_0")
+        self.assertEqual(fork_checkpoint_id, "")
         self.assertEqual(agent.updated_states, [])
+        state_messages = agent.get_state({}).values["messages"]
+        tool_message = next(
+            message for message in state_messages if isinstance(message, ToolMessage)
+        )
+        self.assertEqual(tool_message.content, large_tool_output)
+
+    def test_regenerate_uses_checkpoint_before_the_replayed_user_turn(self) -> None:
+        """AI SDK regeneration removes the assistant answer but retains its
+        user prompt. The API extracts that last user message as the new query,
+        leaving the preceding transcript to select the correct fork point."""
+        from app.api import ApiChatRequest, build_chat_request
+
+        tracked = (
+            ChatTurn(role="user", content="q1"),
+            ChatTurn(role="assistant", content="a1"),
+            ChatTurn(role="user", content="q2"),
+            ChatTurn(role="assistant", content="a2"),
+        )
+        self.addCleanup(_drop_thread_record, "thread_regenerate")
+        _record_thread_transcript("thread_regenerate", tracked)
+        _record_fork_point("thread_regenerate", 2, "ckpt_turn_1")
+        _record_fork_point("thread_regenerate", 4, "ckpt_turn_2")
+        request = build_chat_request(
+            ApiChatRequest(
+                threadId="thread_regenerate",
+                messages=[
+                    {"role": "user", "parts": [{"type": "text", "text": "q1"}]},
+                    {
+                        "role": "assistant",
+                        "parts": [{"type": "text", "text": "a1"}],
+                    },
+                    {"role": "user", "parts": [{"type": "text", "text": "q2"}]},
+                ],
+            )
+        )
+
+        active_thread_id, fork_checkpoint_id = sync_thread_with_history(
+            FakeAgent([]),
+            request.thread_id,
+            request.history,
+        )
+
+        self.assertEqual(request.query, "q2")
+        self.assertEqual(request.history, tracked[:2])
+        self.assertEqual(active_thread_id, "thread_regenerate")
+        self.assertEqual(fork_checkpoint_id, "ckpt_turn_1")
+        self.assertEqual(_get_fork_point("thread_regenerate", 4), "")
 
     def test_summarized_thread_reuses_tracked_transcript(self) -> None:
         # After SummarizationMiddleware rewrites thread state, the checkpoint
@@ -1194,6 +1243,7 @@ class ChatServiceTestCase(unittest.TestCase):
         self.assertEqual(len(agent.updated_states), 1)
         seeded = agent.updated_states[0][1]["messages"]
         self.assertEqual([m.content for m in seeded], ["q1", "a1"])
+        self.assertEqual([m.type for m in seeded], ["human", "ai"])
         # The superseded thread is unreachable, so its records are gone.
         self.assertIsNone(_get_thread_transcript("thread_owned"))
         self.assertEqual(_get_thread_provider("thread_owned"), "")

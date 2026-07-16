@@ -2,11 +2,13 @@
   "name": "ai-tutor-frontend",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "packageManager": "npm@11.12.1",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "node --test lib/chat-transport.test.mts",
     "lint": "eslint ."
   },
   "dependencies": {

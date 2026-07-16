@@ -18,6 +18,7 @@ import {
   type AvailableModel,
   type TutorTool,
 } from "@/lib/api";
+import { prepareTutorChatRequest } from "@/lib/chat-transport";
 import {
   getMessageTextContent,
   hasRenderableContent,
@@ -62,7 +63,11 @@ function pickStreamingWordForKey(key: string) {
 
 export function ChatShell() {
   const [transport] = useState(
-    () => new DefaultChatTransport({ api: `${getApiBaseUrl()}/api/chat` }),
+    () =>
+      new DefaultChatTransport({
+        api: `${getApiBaseUrl()}/api/chat`,
+        prepareSendMessagesRequest: prepareTutorChatRequest,
+      }),
   );
   const [tools, setTools] = useState<TutorTool[]>([]);
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
