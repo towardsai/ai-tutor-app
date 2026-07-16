@@ -389,11 +389,28 @@ def grade_run(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]
             "time_to_first_token_ms": stats.get("time_to_first_token_ms"),
             "total_ms": stats.get("total_ms"),
             "input_tokens": stats.get("input_tokens"),
+            "cache_read_tokens": stats.get("cache_read_tokens"),
+            "cache_miss_tokens": stats.get("cache_miss_tokens"),
             "output_tokens": stats.get("output_tokens"),
             "est_cost_usd": stats.get("est_cost_usd"),
+            "cache_read_input_usd": (stats.get("cost_breakdown") or {}).get(
+                "cache_read_input_usd"
+            ),
+            "cache_miss_input_usd": (stats.get("cost_breakdown") or {}).get(
+                "cache_miss_input_usd"
+            ),
+            "output_usd": (stats.get("cost_breakdown") or {}).get("output_usd"),
+            "summarization_cost_usd": stats.get("summarization_cost_usd"),
             "llm_calls": stats.get("llm_calls"),
             "context_tokens_approx": stats.get("context_tokens_approx"),
+            "max_request_context_tokens_approx": stats.get(
+                "max_request_context_tokens_approx"
+            ),
             "summary_messages": stats.get("summary_messages"),
+            "compactions_this_turn": stats.get("compactions_this_turn", 0),
+            "tool_outputs_capped": stats.get("tool_outputs_capped", 0),
+            "tool_output_original_bytes": stats.get("tool_output_original_bytes", 0),
+            "tool_output_retained_bytes": stats.get("tool_output_retained_bytes", 0),
             "cleared_tool_outputs": stats.get("cleared_tool_outputs"),
             "history_embedding_texts": stats.get("history_embedding_texts"),
             "history_embedding_chars": stats.get("history_embedding_chars"),

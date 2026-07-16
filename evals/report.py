@@ -61,6 +61,7 @@ def load_run(run_dir: Path) -> dict[str, Any]:
         "battery_type": grades[0]["battery_type"],
         "model": grades[0]["model"],
         "grades": grades,
+        "bundles": load_jsonl(run_dir / "bundles.jsonl"),
         "merged": grades_path.name == "grades_merged.jsonl",
         "grade_source": grade_source,
     }
@@ -88,6 +89,32 @@ def fmt_mean(values: list[Any], spec: str = "{:.0f}") -> str:
 
 def col(grades: list[dict[str, Any]], key: str) -> list[Any]:
     return [g.get(key) for g in grades]
+
+
+def _cache_hit_rate(grades: list[dict[str, Any]]) -> str:
+    hits = sum(int(g.get("cache_read_tokens") or 0) for g in grades)
+    inputs = sum(int(g.get("input_tokens") or 0) for g in grades)
+    return f"{hits / inputs:.1%}" if inputs else "—"
+
+
+def _trajectory_sum_mean(grades: list[dict[str, Any]], key: str) -> str:
+    totals: dict[tuple[str, int], float] = defaultdict(float)
+    for grade in grades:
+        value = grade.get(key)
+        if isinstance(value, (int, float)):
+            totals[(grade["unit_id"], grade["trial"])] += float(value)
+    return f"{mean(totals.values()):.4f}" if totals else "—"
+
+
+def _trajectory_difference_mean(
+    grades: list[dict[str, Any]], positive_key: str, negative_key: str
+) -> str:
+    totals: dict[tuple[str, int], float] = defaultdict(float)
+    for grade in grades:
+        key = (grade["unit_id"], grade["trial"])
+        totals[key] += float(grade.get(positive_key) or 0)
+        totals[key] -= float(grade.get(negative_key) or 0)
+    return f"{mean(totals.values()):.0f}" if totals else "—"
 
 
 def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]]:
@@ -131,9 +158,40 @@ def metric_rows(battery_type: str, runs: list[dict[str, Any]]) -> list[list[str]
         lambda g: fmt_mean(col(g, "context_tokens_approx")),
     )
     add("output tok/turn", lambda g: fmt_mean(col(g, "output_tokens")))
+    add("cache hit ratio (all input)", _cache_hit_rate)
     add(
         "est cost/turn $",
         lambda g: fmt_mean(col(g, "est_cost_usd"), "{:.4f}"),
+    )
+    add(
+        "model cost/trajectory $ (mean)",
+        lambda g: _trajectory_sum_mean(g, "est_cost_usd"),
+    )
+    add(
+        "summarization cost/trajectory $ (mean)",
+        lambda g: _trajectory_sum_mean(g, "summarization_cost_usd"),
+    )
+    add(
+        "compactions/trajectory (mean)",
+        lambda g: _trajectory_sum_mean(g, "compactions_this_turn"),
+    )
+    add(
+        "tool outputs capped/trajectory (mean)",
+        lambda g: _trajectory_sum_mean(g, "tool_outputs_capped"),
+    )
+    add(
+        "tool-output bytes removed/trajectory (mean)",
+        lambda g: _trajectory_difference_mean(
+            g, "tool_output_original_bytes", "tool_output_retained_bytes"
+        ),
+    )
+    add(
+        "max model request context tokens",
+        lambda g: (
+            str(max(int(x.get("max_request_context_tokens_approx") or 0) for x in g))
+            if g
+            else "—"
+        ),
     )
     # --- Latency: TIME-OF-RUN CONFOUNDED (sequential arms meet different API
     # load) -> supporting, not headline; `total - ttft` does NOT de-confound (it
@@ -383,6 +441,112 @@ def _plot_token_curves(rows: list[dict[str, Any]], out_dir: Path) -> None:
     fig.savefig(out_dir / "tokens_by_turn.png", dpi=150)
 
 
+def write_cost_curves(runs: list[dict[str, Any]], out_dir: Path) -> None:
+    """Write cached + uncached + output cumulative model-cost trajectories."""
+    session_runs = [run for run in runs if run["battery_type"] == "sessions"]
+    if not session_runs:
+        return
+    rows: list[dict[str, Any]] = []
+    for run in session_runs:
+        cumulative: dict[tuple[str, int], dict[str, float]] = defaultdict(
+            lambda: defaultdict(float)
+        )
+        for bundle in sorted(
+            run["bundles"],
+            key=lambda item: (
+                item["unit_id"],
+                item["trial"],
+                item.get("turn_index") or 0,
+            ),
+        ):
+            if bundle.get("turn_index") is None:
+                continue
+            stats = bundle.get("context_stats") or {}
+            cost = stats.get("cost_breakdown") or {}
+            components_available = bool(cost)
+            key = (bundle["unit_id"], bundle["trial"])
+            values = {
+                "cache_read_input_usd": float(cost.get("cache_read_input_usd") or 0),
+                "cache_miss_input_usd": float(cost.get("cache_miss_input_usd") or 0),
+                "cache_creation_input_usd": float(
+                    cost.get("cache_creation_input_usd") or 0
+                ),
+                "output_usd": float(cost.get("output_usd") or 0),
+                "total_usd": float(
+                    cost.get("total_usd")
+                    if cost.get("total_usd") is not None
+                    else stats.get("est_cost_usd") or 0
+                ),
+                "summarization_usd": float(stats.get("summarization_cost_usd") or 0),
+            }
+            for name, value in values.items():
+                cumulative[key][name] += value
+            rows.append(
+                {
+                    "preset": run["label"],
+                    "cost_components_available": components_available,
+                    "session_id": bundle["unit_id"],
+                    "trial": bundle["trial"],
+                    "turn_index": bundle["turn_index"],
+                    **{f"turn_{name}": value for name, value in values.items()},
+                    **{f"cumulative_{name}": cumulative[key][name] for name in values},
+                    "input_tokens": stats.get("input_tokens") or 0,
+                    "cache_read_tokens": stats.get("cache_read_tokens") or 0,
+                    "cache_miss_tokens": stats.get("cache_miss_tokens") or 0,
+                    "active_context_tokens_approx": stats.get("context_tokens_approx")
+                    or 0,
+                    "max_request_context_tokens_approx": stats.get(
+                        "max_request_context_tokens_approx"
+                    )
+                    or 0,
+                    "compactions_this_turn": stats.get("compactions_this_turn") or 0,
+                    "tool_outputs_capped": stats.get("tool_outputs_capped") or 0,
+                    "tool_output_original_bytes": stats.get(
+                        "tool_output_original_bytes"
+                    )
+                    or 0,
+                    "tool_output_retained_bytes": stats.get(
+                        "tool_output_retained_bytes"
+                    )
+                    or 0,
+                }
+            )
+    if not rows:
+        return
+    path = out_dir / "trajectory_cost_by_turn.csv"
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    try:
+        _plot_cost_curves(rows, out_dir)
+    except ImportError:
+        print("matplotlib not installed; wrote cost CSV only.")
+
+
+def _plot_cost_curves(rows: list[dict[str, Any]], out_dir: Path) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    by_preset: dict[str, dict[int, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for row in rows:
+        by_preset[row["preset"]][row["turn_index"]].append(row["cumulative_total_usd"])
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for preset, by_turn in sorted(by_preset.items()):
+        turns = sorted(by_turn)
+        ax.plot(turns, [mean(by_turn[t]) for t in turns], marker="o", label=preset)
+    ax.set_xlabel("turn")
+    ax.set_ylabel("cumulative model cost, USD (mean)")
+    ax.set_title("Cached + cache-miss + output cost by trajectory")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_dir / "trajectory_cost_by_turn.png", dpi=150)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs", nargs="+", required=True)
@@ -429,6 +593,7 @@ def main() -> None:
             lines.append("| " + " | ".join(row) + " |")
     (out_dir / "report.md").write_text("\n".join(lines) + "\n")
     write_token_curves(runs, out_dir)
+    write_cost_curves(runs, out_dir)
     print(f"Report written to {out_dir}/report.md")
 
 

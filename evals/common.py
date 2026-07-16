@@ -94,3 +94,26 @@ def percentile(values: list[float], pct: float) -> float | None:
     ordered = sorted(values)
     rank = max(0, min(len(ordered) - 1, round(pct / 100 * (len(ordered) - 1))))
     return ordered[rank]
+
+
+# Batteries superseded after a validity audit found probe-invalidating defects.
+# The frozen files stay on disk (completed runs regrade against them), but new
+# runs must target the repaired successor instead.
+DEPRECATED_BATTERIES: dict[str, str] = {
+    "battery_sessions_v2.jsonl": (
+        "the 2026-07-15 audits found its recycled v1 filler injects first-person "
+        "persona/update/pivot claims that collide with planted facts in 4 of 6 "
+        "sessions (evals.md, harness corrections); use the repaired "
+        "battery_sessions_v2_1.jsonl"
+    ),
+}
+
+
+def ensure_battery_not_deprecated(path: str | Path, *, override: bool) -> None:
+    """Refuse to start a run on a battery superseded for validity defects."""
+    reason = DEPRECATED_BATTERIES.get(Path(path).name)
+    if reason and not override:
+        raise SystemExit(
+            f"{Path(path).name} is deprecated for new runs: {reason}. "
+            "Pass --allow-deprecated-battery only to reproduce a historical run."
+        )

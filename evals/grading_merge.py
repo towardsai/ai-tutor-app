@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .grading_content import hydrate_full_inputs, verify_integrity
+
 csv.field_size_limit(10_000_000)
 
 
@@ -52,6 +54,14 @@ COMBINED_COLS = [
 DROP_ITEM_TYPES = {"faithfulness"}
 
 
+def _integrity_required(gdir: Path) -> bool:
+    manifest_path = gdir / "manifest.json"
+    if not manifest_path.exists():
+        return False
+    manifest = json.loads(manifest_path.read_text())
+    return int(manifest.get("manifest_version", 1)) >= 2
+
+
 def load_verdicts(
     gdir: Path,
 ) -> tuple[dict[tuple[str, str], dict], dict[tuple[str, str], dict]]:
@@ -64,8 +74,12 @@ def load_verdicts(
     """
     verdicts: dict[tuple[str, str], dict] = {}
     content: dict[tuple[str, str], dict] = {}
+    require_integrity = _integrity_required(gdir)
     for cf in sorted(gdir.glob("chunk_*.csv")):
         crows = list(csv.DictReader(cf.open()))
+        if require_integrity:
+            for row in crows:
+                verify_integrity(row)
         vf = gdir / cf.name.replace("chunk_", "verdicts_").replace(".csv", ".json")
         if not vf.exists():
             continue
@@ -92,8 +106,11 @@ def load_verdicts(
 
 def expected_keys(gdir: Path) -> set[tuple[str, str]]:
     keys: set[tuple[str, str]] = set()
+    require_integrity = _integrity_required(gdir)
     for ch in sorted(gdir.glob("chunk_*.csv")):
         for r in csv.DictReader(ch.open()):
+            if require_integrity:
+                verify_integrity(r)
             keys.add((r["sheet_row_id"], _ah(r.get("answer") or "")))
     return keys
 
@@ -102,10 +119,31 @@ def note_for(v: dict) -> str:
     return f"[judge:{v.get('confidence', 'high')}] {v.get('reason', '')}".strip()
 
 
+def manifest_runs(manifest: dict, gdir: Path) -> list[tuple[str, Path, Path]]:
+    """Return (display-name, run-dir, keep-file) for v1 and v2 manifests."""
+
+    records = manifest.get("run_records")
+    if records:
+        return [
+            (
+                record["name"],
+                Path(record["path"]),
+                gdir / record.get("keep_file", f"keep/{record['name']}.csv"),
+            )
+            for record in records
+        ]
+    return [
+        (name, Path("runs") / name, gdir / "keep" / f"{name}.csv")
+        for name in manifest["runs"]
+    ]
+
+
 def main() -> None:
-    battery = sys.argv[1] if len(sys.argv) > 1 else "singleturn"
-    gdir = Path("runs/_grading") / battery
+    grading_id = sys.argv[1] if len(sys.argv) > 1 else "singleturn"
+    gdir = Path("runs/_grading") / grading_id
     manifest = json.loads((gdir / "manifest.json").read_text())
+    battery = manifest.get("battery", grading_id)
+    full_inputs = int(manifest.get("manifest_version", 1)) >= 2
     verdicts, content = load_verdicts(gdir)
     expected = expected_keys(gdir)
     missing = sorted(expected - set(verdicts))
@@ -113,12 +151,12 @@ def main() -> None:
 
     merged_runs = 0
     key_to_run: dict[tuple[str, str], str] = {}
-    for name in manifest["runs"]:
-        run_dir = Path("runs") / name
-        sheet = list(csv.DictReader((run_dir / "handgrade_sheet.csv").open()))
+    runs = manifest_runs(manifest, gdir)
+    for name, run_dir, keep_path in runs:
+        previews = list(csv.DictReader((run_dir / "handgrade_sheet.csv").open()))
+        sheet = hydrate_full_inputs(run_dir, previews) if full_inputs else previews
         combined: list[dict] = []
         # kept existing grades (columns may differ across old files; normalize)
-        keep_path = gdir / "keep" / f"{name}.csv"
         if keep_path.exists():
             for r in csv.DictReader(keep_path.open()):
                 combined.append({c: r.get(c, "") for c in COMBINED_COLS})
@@ -167,7 +205,7 @@ def main() -> None:
             print(f"  MERGE FAILED {name}: {res.stderr.strip()[-300:]}")
         else:
             merged_runs += 1
-    print(f"merged {merged_runs}/{len(manifest['runs'])} runs")
+    print(f"merged {merged_runs}/{len(runs)} runs")
 
     # ---- uncertain queue (the deliverable) --------------------------------
     low = [
