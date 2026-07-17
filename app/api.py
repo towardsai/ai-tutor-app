@@ -26,7 +26,7 @@ from .chat_service import (
 )
 from .chat_types import ChatEvent, ChatRequest, ChatTurn
 from .kb_manifest import available_source_keys, load_manifest_entries
-from .memory_presets import MEMORY_PRESETS
+from .memory_presets import resolve_memory_preset
 from .config import (
     AVAILABLE_MODELS,
     AVAILABLE_SOURCES,
@@ -73,8 +73,8 @@ class ApiChatRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     includeReasoning: bool = True
     threadId: str = Field(default="", max_length=128)
-    # Memory/context-management preset (experiments + workshop toggles).
-    # Omitted means the server-side default resolution order.
+    # Direct API/eval override for memory/context management. The normal
+    # frontend omits it, invoking the server-side default resolution order.
     memoryPreset: str | None = Field(default=None, max_length=64)
     # Long-term memory key for profile-memory presets.
     studentId: str = Field(default="", max_length=128)
@@ -293,8 +293,10 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
     if model_name not in {model["id"] for model in AVAILABLE_MODELS}:
         raise HTTPException(status_code=422, detail="Unknown model")
     memory_preset = (payload.memoryPreset or "").strip()
-    if memory_preset and memory_preset not in MEMORY_PRESETS:
-        raise HTTPException(status_code=422, detail="Unknown memory preset")
+    try:
+        resolve_memory_preset(memory_preset or None, model_name=model_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if payload.enabledTools is None:
         # `active` only governs the frontend's initial checkbox state; the
         # browser always sends an explicit enabledTools list (possibly []). A

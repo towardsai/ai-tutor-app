@@ -43,8 +43,6 @@ from langgraph.types import Command
 from .chat_types import ChatEvent, ChatRequest, ChatTurn, SourceMatch
 from .deepseek_chat import TutorChatDeepSeek
 from .memory_presets import (
-    DEFAULT_MEMORY_PRESET,
-    MEMORY_PRESETS,
     MemoryConfig,
     resolve_memory_preset,
 )
@@ -2449,12 +2447,14 @@ def build_agent(
     kb_agents_instructions: str | None = None,
     include_local_tools: bool = True,
     disable_kb: bool = False,
-    memory_config: MemoryConfig = MEMORY_PRESETS[DEFAULT_MEMORY_PRESET],
+    memory_config: MemoryConfig | None = None,
 ):
     # kb_agents_instructions is part of the cache key on purpose: an agent
     # built before data/kb/AGENTS.md existed must not pin its degraded
     # system prompt for the process lifetime. memory_config (frozen, hashable)
     # is too: each preset gets its own agent.
+    if memory_config is None:
+        memory_config = resolve_memory_preset(model_name=model_name)
     model = build_chat_model(model_name, include_thoughts=include_thoughts)
     # An explicit empty source selection turns the knowledge base off: no
     # retrieval, no KB browsing, and a system prompt that says so.
@@ -2605,7 +2605,7 @@ def agent_run_config(
         SOURCE_KEY_TO_LABEL.get(source_key, source_key)
         for source_key in request.source_keys
     ]
-    preset = memory_preset or DEFAULT_MEMORY_PRESET
+    preset = memory_preset or resolve_memory_preset(model_name=request.model_name).name
     config = thread_config(active_thread_id)
     config.update(
         {
@@ -2686,9 +2686,12 @@ async def _update_student_profile(
 
 async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
     turn_started = time.monotonic()
-    # Raises on unknown preset names: a mislabeled experiment run must fail,
-    # not silently fall back to prod. The API layer pre-validates to a 422.
-    memory_config = resolve_memory_preset(request.memory_preset)
+    # Raises on unknown/incompatible preset names: a mislabeled experiment run
+    # must fail, not silently fall back. The API layer pre-validates to a 422.
+    memory_config = resolve_memory_preset(
+        request.memory_preset,
+        model_name=request.model_name,
+    )
     # Token usage and call counts come from the model calls themselves
     # (middleware summarization and profile updates included), so eval runs
     # never depend on LangSmith being enabled or within plan limits.

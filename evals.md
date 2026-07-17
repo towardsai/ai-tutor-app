@@ -12,6 +12,7 @@ Plain-English map:
 - A **trace bundle** is the saved JSON record for one tutor turn: the question, answer, tool calls, sources, token usage, timing, and any error.
 - A **grade** is the pass/fail or metric row computed later from saved trace bundles.
 - A **memory preset** is a named setting that controls how much chat history the tutor keeps, summarizes, or stores as a student profile.
+- Production requests normally omit `memoryPreset`; the server chooses `prod_v2` for DeepSeek/Gemini and legacy `prod` for other providers. Evals always pass an explicit preset so a saved arm name identifies one immutable configuration.
 - An **axis** is one independent dimension the experiment varies. Part B varied a single axis (the memory preset). Part C uses two: **A — memory & context management** (how conversation history is kept or compacted) and **B — retrieval & tool outputs** (how retrieved docs and tool results are sized, cleared, or whether the KB tool exists). A **single-axis** run changes one variant on one axis and holds everything else at the production baseline, so any difference is attributable to that one change; a **cross-product** tests every Axis-A × Axis-B combination at once (far more runs, far bigger bill).
 
 ## What we evaluate, and what varies
@@ -25,7 +26,8 @@ The system under test is the production tutor (`app/`): the same agent, retrieva
 | Arm | Axis | Technique | What it tests | Phase |
 |---|---|---|---|---|
 | `full_history` | — | keep everything (no compaction) | quality/memory upper bound; token worst case | B + C anchor |
-| `prod` | A+B | summarization + tool-result clearing | the live production baseline | B + C anchor, D |
+| `prod` | A+B | 30k XML summarization + per-call tool-result clearing | immutable legacy production baseline used by the historical findings below | B + C anchor, D |
+| `prod_v2` | A+B | structured-prefix compaction at 800k + stable 40k-byte tool-output cap | current DeepSeek/Gemini production default; Claude stays on `prod` because its input window is 200k | operational smoke only: repaired-v2.1 1×36t passed, peaked at 287k so the 800k trigger remains unvalidated |
 | `aggressive` | A+B | early summarization + clearing | high-pressure compaction | B |
 | `profile_memory` | A (store) | semantic profile store + prod compaction | long-term personalization | B, D rerun |
 | `summarization_only` / `editing_only` | A / B | one compaction technique alone | isolate each half of prod's bundle | defined, folded/dropped (F3) |
@@ -85,7 +87,7 @@ Source: `data/academy_discussion_eval.jsonl` — 151 real student posts from the
 ## How it runs
 
 ```bash
-uv run -m evals.run_battery --battery data/eval/battery_singleturn_v1.jsonl --preset prod --trials 2 --out runs/exp
+uv run -m evals.run_battery --battery data/eval/battery_singleturn_v1.jsonl --preset prod_v2 --trials 2 --out runs/exp
 uv run -m evals.grade  --run runs/exp                      # code checks + handgrade_sheet.csv
 uv run -m evals.check_triggers --runs runs/exp             # gate: compaction fired where probes assume
 uv run -m evals.report --runs runs/expA runs/expB          # side-by-side tables + token curves

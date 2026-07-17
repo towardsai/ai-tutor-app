@@ -77,7 +77,7 @@ LangSmith already captures token usage and latency per run (runs are tagged with
 - **Holistic pass/fail** (secondary): "Would the course staff member have approved sending this answer? pass/fail + critique" — few-shot prompt built from *our own labeled critiques*, validated to >90% TPR/TNR agreement against ~30–50 human-labeled traces before we trust it. The team member who actually answers academy questions is the "benevolent dictator" labeler.
 
 ### Layer 5 — Memory-specific probes (the differentiator — this is OUR design; no source covers it)
-Memory methods only differ when context pressure exists. Single-turn evals will show **zero difference** between variants (our SummarizationMiddleware triggers at 30k tokens, ContextEditing at 5k tool-tokens — a one-shot question never trips them). So:
+Memory methods only differ when context pressure exists. In the original screen, the legacy `prod` arm's SummarizationMiddleware triggered at 30k tokens and ContextEditing at 5k tool-tokens, so the sessions were designed to cross those thresholds. (`prod_v2`, adopted later, uses a different long-context policy.) So:
 - **Recall-after-compression probes**: plant a fact early (turn 1–2: "I'm on the Agentic AI course, lesson 4, using Python 3.13 on Windows, my API key is set via .env"), drive 5–10 heavy turns (each invoking retrieval/KB to inflate tool tokens past the triggers), then probe: "given my setup, why might X fail?" Binary: does the answer use the planted facts?
 - **Consistency**: does turn N contradict what the tutor said in turn 2? (Judge check on conversation pairs.)
 - **No re-asking**: does the agent ask for information the user already provided? (Strong signal of memory loss; cheap judge check.)
@@ -153,7 +153,7 @@ How a **tutor** differs from a **coding agent** (your instinct is right):
 | Variant | Description |
 |---|---|
 | **A. Full history** (baseline) | No summarization, no context editing. Upper bound on quality/memory, worst tokens/cost. |
-| **B. Current prod** | ContextEditing(trigger 5k tool-tokens, keep 5) + Summarization(trigger 30k, keep last 20 msgs). |
+| **B. Legacy prod** (production at study-design time) | ContextEditing(trigger 5k tool-tokens, keep 5) + Summarization(trigger 30k, keep last 20 msgs). |
 | **C. Summarization only** | Isolate the summarizer's contribution. |
 | **D. Context-editing only** | Isolate tool-result pruning. |
 | **E. Aggressive compression** | e.g. Summarization @ 8k keep 8, editing @ 2k keep 2. The "how bad can cheap get" point. |
