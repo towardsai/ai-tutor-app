@@ -17,6 +17,10 @@ from app.chat_service import (
 from app.memory_presets import (
     DEFAULT_MEMORY_PRESET,
     MEMORY_PRESETS,
+    PRODUCTION_FALLBACK_MEMORY_PRESET,
+    PRODUCTION_MEMORY_PRESET,
+    memory_preset_supports_model,
+    production_memory_preset_name,
     resolve_memory_preset,
 )
 from langchain.agents.middleware import (
@@ -31,7 +35,7 @@ def _stub_model():
 
 
 class MemoryPresetResolutionTests(unittest.TestCase):
-    def test_prod_preset_matches_production_constants(self) -> None:
+    def test_legacy_prod_preset_remains_immutable(self) -> None:
         prod = MEMORY_PRESETS["prod"]
         self.assertTrue(prod.summarization)
         self.assertEqual(prod.summarization_trigger_tokens, 30_000)
@@ -41,6 +45,18 @@ class MemoryPresetResolutionTests(unittest.TestCase):
         self.assertEqual(prod.context_editing_keep, 5)
         self.assertFalse(prod.longterm_memory)
 
+    def test_prod_v2_matches_structured_800k_policy(self) -> None:
+        prod_v2 = MEMORY_PRESETS["prod_v2"]
+        self.assertEqual(prod_v2.summarization_trigger_tokens, 800_000)
+        self.assertEqual(prod_v2.summarization_keep_tokens, 50_000)
+        self.assertIsNone(prod_v2.summarization_trim_tokens)
+        self.assertEqual(prod_v2.summarization_input_guard_tokens, 900_000)
+        self.assertEqual(prod_v2.summarization_strategy, "structured_prefix")
+        self.assertFalse(prod_v2.context_editing)
+        self.assertEqual(prod_v2.tool_output_cap_bytes, 40_000)
+        self.assertTrue(prod_v2.experiment_mode)
+        self.assertEqual(prod_v2.experiment_request_guard_tokens, 990_000)
+
     def test_default_resolution(self) -> None:
         with patch.dict("os.environ", {}, clear=False):
             import os
@@ -48,6 +64,42 @@ class MemoryPresetResolutionTests(unittest.TestCase):
             os.environ.pop("AI_TUTOR_MEMORY_PRESET", None)
             self.assertEqual(resolve_memory_preset("").name, DEFAULT_MEMORY_PRESET)
             self.assertEqual(resolve_memory_preset(None).name, DEFAULT_MEMORY_PRESET)
+            self.assertEqual(DEFAULT_MEMORY_PRESET, PRODUCTION_MEMORY_PRESET)
+            self.assertEqual(
+                resolve_memory_preset(
+                    None, model_name="deepseek:deepseek-v4-flash"
+                ).name,
+                "prod_v2",
+            )
+            self.assertEqual(
+                resolve_memory_preset(
+                    None, model_name="google-genai:gemini-2.5-flash"
+                ).name,
+                "prod_v2",
+            )
+            self.assertEqual(
+                resolve_memory_preset(
+                    None, model_name="anthropic:claude-haiku-4-5"
+                ).name,
+                "prod",
+            )
+            self.assertEqual(
+                production_memory_preset_name("openai:gpt-5.6"),
+                PRODUCTION_FALLBACK_MEMORY_PRESET,
+            )
+
+    def test_prod_v2_rejects_short_context_providers(self) -> None:
+        self.assertTrue(
+            memory_preset_supports_model("prod_v2", "deepseek:deepseek-v4-flash")
+        )
+        self.assertTrue(
+            memory_preset_supports_model("prod_v2", "google-genai:gemini-2.5-flash")
+        )
+        self.assertFalse(
+            memory_preset_supports_model("prod_v2", "anthropic:claude-haiku-4-5")
+        )
+        with self.assertRaisesRegex(ValueError, "does not support provider"):
+            resolve_memory_preset("prod_v2", model_name="anthropic:claude-haiku-4-5")
 
     def test_env_var_default_and_explicit_override(self) -> None:
         with patch.dict("os.environ", {"AI_TUTOR_MEMORY_PRESET": "full_history"}):
@@ -159,6 +211,23 @@ class MiddlewareAssemblyTests(unittest.TestCase):
         self.assertFalse(
             any(type(m) is InstrumentedSummarizationMiddleware for m in middleware)
         )
+
+    def test_prod_v2_uses_the_structured_experiment_stack(self) -> None:
+        middleware = build_agent_middleware(_stub_model(), MEMORY_PRESETS["prod_v2"])
+        self.assertEqual(
+            [type(item) for item in middleware],
+            [
+                DeepSeekCacheIsolationMiddleware,
+                StableToolOutputCapMiddleware,
+                SourcePreferenceMiddleware,
+                PrefixPreservingCompactionMiddleware,
+            ],
+        )
+        compactor = middleware[-1]
+        self.assertEqual(compactor.trigger, ("tokens", 800_000))
+        self.assertEqual(compactor.keep, ("tokens", 50_000))
+        self.assertIsNone(compactor.trim_tokens_to_summarize)
+        self.assertEqual(compactor.summary_input_guard_tokens, 900_000)
 
     def test_build_agent_cache_keys_include_memory_config(self) -> None:
         build_agent.cache_clear()

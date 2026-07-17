@@ -34,7 +34,7 @@ class ChatRequest:
     thread_id: str = ""
     enabled_tools: tuple[str, ...] = ()
     # Memory/context-management preset name (see app/memory_presets.py).
-    # Empty means the env-var/default resolution order.
+    # Empty means environment override, then model-aware production selection.
     memory_preset: str = ""
     # Long-term memory key: profile-memory presets read and update the stored
     # student profile under this id. Empty disables profile memory I/O.

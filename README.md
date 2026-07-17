@@ -117,6 +117,8 @@ API notes:
 - API clients should usually send only the new user message and continue the conversation with `threadId` (the `data-thread` part of the stream carries it; send it back on the next request).
 - The source filter is request-scoped, so you can keep the same `threadId` while changing sources between turns.
 - Sending an empty `threadId` starts a new backend conversation.
+- `memoryPreset` is an optional direct-API/eval override. The normal frontend omits it, so the server selects the production preset from the requested model: DeepSeek and Gemini use `prod_v2`; other providers use the immutable legacy `prod` preset.
+- Memory-preset precedence is `memoryPreset` request value → `AI_TUTOR_MEMORY_PRESET` environment override → model-aware production selection. Leave the environment variable unset for normal production behavior; incompatible preset/model combinations return HTTP 422.
 
 ### Knowledge Base (file-based)
 

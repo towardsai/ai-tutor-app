@@ -894,8 +894,8 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(request.memory_preset, "full_history")
         self.assertEqual(request.student_id, "student-1")
 
-        # Omitted preset stays empty so the server-side default resolution
-        # (env var, then "prod") applies at stream time.
+        # Omitted preset stays empty so the model-aware server-side production
+        # resolution applies at stream time.
         omitted = build_chat_request(ApiChatRequest(query="What is RAG?"))
         self.assertEqual(omitted.memory_preset, "")
 
@@ -904,6 +904,17 @@ class ApiTestCase(unittest.TestCase):
                 ApiChatRequest(query="What is RAG?", memoryPreset="typo")
             )
         self.assertEqual(raised.exception.status_code, 422)
+
+        with self.assertRaises(HTTPException) as incompatible:
+            build_chat_request(
+                ApiChatRequest(
+                    query="What is RAG?",
+                    model="anthropic:claude-haiku-4-5",
+                    memoryPreset="prod_v2",
+                )
+            )
+        self.assertEqual(incompatible.exception.status_code, 422)
+        self.assertIn("does not support provider", incompatible.exception.detail)
 
     def test_encoder_emits_transient_context_stats_part(self) -> None:
         encoder = UIMessageStreamEncoder()
