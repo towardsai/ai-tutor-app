@@ -574,11 +574,11 @@ function ToolKindIcon({ type, className }: { type: string; className?: string })
   if (name.includes("kb_command") || name.includes("shell") || name.includes("command")) {
     return <Terminal className={className} />;
   }
-  if (name.includes("retrieve") || name.includes("search")) {
-    return <Database className={className} />;
-  }
   if (name.includes("web") || name.includes("url") || name.includes("google")) {
     return <Globe className={className} />;
+  }
+  if (name.includes("retrieve") || name.includes("search")) {
+    return <Database className={className} />;
   }
   return <Wrench className={className} />;
 }

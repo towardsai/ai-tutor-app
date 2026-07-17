@@ -480,7 +480,11 @@ function formatIndexedMonth(isoDate: string | null | undefined): string | null {
   if (!isoDate) return null;
   const date = new Date(isoDate);
   if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleString("en-US", { month: "short", year: "numeric" });
+  return date.toLocaleString("en-US", {
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 function getPopoverInfo(source: TutorSource): PopoverInfo | undefined {

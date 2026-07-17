@@ -75,6 +75,7 @@ export function ChatShell() {
   const [selectedSourceKeys, setSelectedSourceKeys] = useState<string[]>([]);
   const [enabledToolKeys, setEnabledToolKeys] = useState<string[]>([]);
   const [sourceError, setSourceError] = useState<string | null>(null);
+  const [toolRegistryReady, setToolRegistryReady] = useState(false);
   const [input, setInput] = useState("");
   const [threadId, setThreadId] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -84,6 +85,7 @@ export function ChatShell() {
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const pendingScrollRef = useRef(false);
   const spacerRef = useRef<HTMLDivElement>(null);
+  const acceptThreadDataRef = useRef(false);
 
   const {
     messages,
@@ -97,7 +99,7 @@ export function ChatShell() {
   } = useChat({
     transport,
     onData: (part) => {
-      if (part.type === "data-thread") {
+      if (part.type === "data-thread" && acceptThreadDataRef.current) {
         const nextThreadId = (part as ThreadDataPart).data.threadId;
         if (nextThreadId) {
           // Urgent update on purpose: deferring it (startTransition) lets a
@@ -141,6 +143,7 @@ export function ChatShell() {
             .map((tool) => tool.key),
         );
         setSourceError(null);
+        setToolRegistryReady(true);
       } catch (loadError) {
         if (controller.signal.aborted) {
           return;
@@ -150,6 +153,7 @@ export function ChatShell() {
             ? loadError.message
             : "Unable to load tool registry.",
         );
+        setToolRegistryReady(false);
       }
     }
 
@@ -179,6 +183,8 @@ export function ChatShell() {
             .filter((tool) => tool.kind === "toggle" && tool.active)
             .map((tool) => tool.key),
         );
+        setSourceError(null);
+        setToolRegistryReady(true);
       } catch (loadError) {
         if (controller.signal.aborted) {
           return;
@@ -188,6 +194,7 @@ export function ChatShell() {
             ? loadError.message
             : "Unable to load tool registry.",
         );
+        setToolRegistryReady(false);
       }
     }
 
@@ -199,7 +206,8 @@ export function ChatShell() {
   // After a stream error the SDK parks status on "error" until clearError()
   // or the next request; handleSubmit clears it, so the error state must
   // stay sendable or the Send button locks out mouse users for good.
-  const canSend = status === "ready" || status === "error";
+  const canSend =
+    toolRegistryReady && (status === "ready" || status === "error");
   const typedMessages = messages as TutorMessage[];
   const latestMessage = typedMessages[typedMessages.length - 1];
   const streamingAssistantId =
@@ -282,11 +290,12 @@ export function ChatShell() {
 
   async function handleSubmit(override?: string) {
     const trimmed = (override ?? input).trim();
-    if (!trimmed || isStreaming) {
+    if (!trimmed || !canSend) {
       return;
     }
 
     clearError();
+    acceptThreadDataRef.current = true;
     setCopiedMessageId(null);
     setEditingMessageId(null);
     setEditingText("");
@@ -307,7 +316,11 @@ export function ChatShell() {
   }
 
   async function handleRedo(messageId?: string) {
+    if (!canSend) {
+      return;
+    }
     clearError();
+    acceptThreadDataRef.current = true;
     setCopiedMessageId(null);
     await regenerate({
       messageId,
@@ -362,11 +375,12 @@ export function ChatShell() {
 
   async function handleEditSave(messageId: string) {
     const trimmed = editingText.trim();
-    if (!trimmed || isStreaming) {
+    if (!trimmed || !canSend) {
       return;
     }
 
     clearError();
+    acceptThreadDataRef.current = true;
     setCopiedMessageId(null);
     setEditingMessageId(null);
     setEditingText("");
@@ -386,6 +400,7 @@ export function ChatShell() {
   }
 
   function handleNewChat() {
+    acceptThreadDataRef.current = false;
     if (isStreaming) {
       stop();
     }
@@ -500,7 +515,13 @@ export function ChatShell() {
                   <ModelPicker
                     availableModels={availableModels}
                     locked={typedMessages.length > 0}
-                    onSelect={setSelectedModel}
+                    onSelect={(modelId) => {
+                      if (modelId === selectedModel) {
+                        return;
+                      }
+                      setToolRegistryReady(false);
+                      setSelectedModel(modelId);
+                    }}
                     selectedModel={selectedModel}
                   />
                   <ComposerActionButton

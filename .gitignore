@@ -251,3 +251,4 @@ workshop_AIE/
 
 # Local course-content working data (private Thinkific curriculum mapping + markdown) — never commit
 /full_stack_course/
+/output/playwright/

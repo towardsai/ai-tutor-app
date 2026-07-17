@@ -109,7 +109,14 @@ export function hasRenderableContent(message: TutorMessage): boolean {
       continue;
     }
     const type = String(part.type);
-    if (type === "text" || type === "reasoning" || type.startsWith("tool-")) {
+    if (type === "text" || type === "reasoning") {
+      const text = "text" in part ? part.text : "";
+      if (typeof text === "string" && text.trim()) {
+        return true;
+      }
+      continue;
+    }
+    if (type.startsWith("tool-")) {
       return true;
     }
   }

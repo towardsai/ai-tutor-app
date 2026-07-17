@@ -8,7 +8,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --test lib/chat-transport.test.mts",
+    "test": "npm run test:unit && npm run test:components",
+    "test:unit": "node --test lib/*.test.mts",
+    "test:components": "vitest run",
+    "test:e2e": "playwright test",
+    "test:watch": "vitest",
     "lint": "eslint ."
   },
   "dependencies": {
@@ -26,13 +30,19 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.1",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.1.17",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.3",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.2.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
   }
 }
