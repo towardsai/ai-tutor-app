@@ -11,14 +11,17 @@ import re
 import threading
 import time
 from collections import Counter, deque
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 from urllib.parse import unquote, urlparse
 
 import chromadb
 import cohere
 import tiktoken
+from langsmith import trace, traceable
+from langsmith.run_helpers import get_current_run_tree
 from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
@@ -162,6 +165,78 @@ class SearchResult:
     chunk_content: str
     heading_path: str = ""
     retrieval_method: str = ""
+
+
+RETRIEVAL_STAGE_NAMES = (
+    "embed_ms",
+    "chroma_ms",
+    "dense_hydration_ms",
+    "bm25_ms",
+    "fusion_ms",
+    "rerank_ms",
+    "token_budget_ms",
+)
+
+RETRIEVAL_STAGE_TRACE_NAMES = {
+    "embed_ms": "Cohere Embed",
+    "chroma_ms": "Chroma Vector Search",
+    "dense_hydration_ms": "Dense Result Hydration",
+    "bm25_ms": "BM25 Search",
+    "fusion_ms": "RRF Fusion",
+    "rerank_ms": "Cohere Rerank",
+    "token_budget_ms": "Token Budget",
+}
+
+
+@contextmanager
+def _measure_retrieval_stage(
+    timings: dict[str, float],
+    stage: str,
+    *,
+    trace_inputs: dict[str, Any] | None = None,
+) -> Iterator[None]:
+    started_at = time.perf_counter()
+    with trace(
+        RETRIEVAL_STAGE_TRACE_NAMES[stage],
+        run_type="chain",
+        inputs=trace_inputs or {},
+        metadata={"retrieval_stage": stage},
+    ) as stage_run:
+        try:
+            yield
+        except BaseException:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            timings[stage] = elapsed_ms
+            stage_run.add_metadata({"duration_ms": round(elapsed_ms, 2)})
+            raise
+        else:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            timings[stage] = elapsed_ms
+            stage_run.end(metadata={"duration_ms": round(elapsed_ms, 2)})
+
+
+def _trace_retrieval_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    allowed_sources = inputs.get("allowed_sources")
+    return {
+        "query": str(inputs.get("query", "")),
+        "requested_source_count": len(set(allowed_sources or [])),
+        "token_budget": inputs.get("token_budget"),
+    }
+
+
+def _trace_retrieval_outputs(results: Any) -> dict[str, Any]:
+    if not isinstance(results, list):
+        return {"result_type": type(results).__name__}
+    return {
+        "result_count": len(results),
+        "sources": sorted(
+            {
+                result.source
+                for result in results
+                if isinstance(result, SearchResult) and result.source
+            }
+        ),
+    }
 
 
 @dataclass(slots=True)
@@ -842,7 +917,14 @@ def _wait_for_cohere_retry(
     else:
         delay = min(window_seconds, max(15.0, 2.0**attempt))
 
-    time.sleep(delay + random.uniform(0.5, 2.0))
+    sleep_seconds = delay + random.uniform(0.5, 2.0)
+    logger.warning(
+        "cohere_embed_retry attempt=%d delay_seconds=%.2f status_code=%s",
+        attempt,
+        sleep_seconds,
+        getattr(exc, "status_code", 429),
+    )
+    time.sleep(sleep_seconds)
 
 
 def _cohere_embeddings_list(response: Any) -> list[list[float]]:
@@ -1253,8 +1335,50 @@ class LocalChromaRetriever:
             self._document_dict: dict[str, dict[str, Any]] = pickle.load(handle)
 
         self._bm25_index = load_bm25_index(self._bm25_index_path)
+        document_sources = {
+            str(document.get("source", "")).strip()
+            for document in self._document_dict.values()
+            if isinstance(document, dict) and document.get("source")
+        }
+        bm25_sources = (
+            {
+                str(record.metadata.get("source", "")).strip()
+                for record in self._bm25_index.records
+                if record.metadata.get("source")
+            }
+            if self._bm25_index is not None
+            else set()
+        )
+        # These artifacts are loaded once by the process-cached retriever. Use
+        # their actual source set instead of a configured UI default so a
+        # complete source selection can safely skip Chroma's redundant,
+        # expensive all-record metadata filter.
+        self._indexed_sources = frozenset(document_sources | bm25_sources)
         self._cohere = cohere.ClientV2(api_key=cohere_api_key)
 
+    def _effective_allowed_sources(
+        self, allowed_sources: list[str] | None
+    ) -> tuple[list[str] | None, str]:
+        if allowed_sources is None:
+            return None, "unfiltered"
+
+        requested_sources = frozenset(allowed_sources)
+        if not requested_sources:
+            # The normal chat path disables local tools for an explicit empty
+            # source selection. Preserve the existing helper semantics here.
+            return allowed_sources, "empty_selection"
+        if self._indexed_sources and self._indexed_sources.issubset(requested_sources):
+            return None, "all_sources_omitted"
+        if len(requested_sources) == 1:
+            return allowed_sources, "single_source"
+        return allowed_sources, "source_subset"
+
+    @traceable(
+        name="Hybrid Retrieval Pipeline",
+        run_type="retriever",
+        process_inputs=_trace_retrieval_inputs,
+        process_outputs=_trace_retrieval_outputs,
+    )
     def search(
         self,
         query: str,
@@ -1262,67 +1386,200 @@ class LocalChromaRetriever:
         allowed_sources: list[str] | None = None,
         token_budget: int | None = None,
     ) -> list[SearchResult]:
-        dense_hits = self._dense_search(query, allowed_sources=allowed_sources)
-        bm25_hits = self._bm25_search(query, allowed_sources=allowed_sources)
-        fused_hits = reciprocal_rank_fusion(
-            [hits for hits in (dense_hits, bm25_hits) if hits],
-            rrf_k=self._rrf_k,
-            top_k=self._fusion_top_k,
+        started_at = time.perf_counter()
+        timings = {stage: 0.0 for stage in RETRIEVAL_STAGE_NAMES}
+        effective_sources, filter_mode = self._effective_allowed_sources(
+            allowed_sources
         )
-        if not fused_hits:
-            return []
+        requested_source_count = len(set(allowed_sources or []))
+        counts = {
+            "dense_hit_count": 0,
+            "bm25_hit_count": 0,
+            "fused_hit_count": 0,
+            "reranked_hit_count": 0,
+            "result_count": 0,
+        }
+        status = "success"
 
-        reranked = rerank_results(
-            self._cohere,
-            query,
-            fused_hits,
-            model=self._rerank_model,
-            top_n=self._rerank_top_k,
-        )
-        return self._apply_token_budget(reranked, token_budget)
+        try:
+            dense_hits = self._dense_search(
+                query,
+                allowed_sources=effective_sources,
+                timings=timings,
+            )
+            counts["dense_hit_count"] = len(dense_hits)
+
+            with _measure_retrieval_stage(
+                timings,
+                "bm25_ms",
+                trace_inputs={
+                    "top_k": self._bm25_top_k,
+                    "filter_applied": effective_sources is not None,
+                    "source_count": len(set(effective_sources or [])),
+                },
+            ):
+                bm25_hits = self._bm25_search(query, allowed_sources=effective_sources)
+            counts["bm25_hit_count"] = len(bm25_hits)
+
+            with _measure_retrieval_stage(
+                timings,
+                "fusion_ms",
+                trace_inputs={
+                    "dense_hit_count": len(dense_hits),
+                    "bm25_hit_count": len(bm25_hits),
+                    "top_k": self._fusion_top_k,
+                    "rrf_k": self._rrf_k,
+                },
+            ):
+                fused_hits = reciprocal_rank_fusion(
+                    [hits for hits in (dense_hits, bm25_hits) if hits],
+                    rrf_k=self._rrf_k,
+                    top_k=self._fusion_top_k,
+                )
+            counts["fused_hit_count"] = len(fused_hits)
+            if not fused_hits:
+                return []
+
+            with _measure_retrieval_stage(
+                timings,
+                "rerank_ms",
+                trace_inputs={
+                    "model": self._rerank_model,
+                    "candidate_count": len(fused_hits),
+                    "top_n": self._rerank_top_k,
+                },
+            ):
+                reranked = rerank_results(
+                    self._cohere,
+                    query,
+                    fused_hits,
+                    model=self._rerank_model,
+                    top_n=self._rerank_top_k,
+                )
+            counts["reranked_hit_count"] = len(reranked)
+
+            with _measure_retrieval_stage(
+                timings,
+                "token_budget_ms",
+                trace_inputs={
+                    "candidate_count": len(reranked),
+                    "token_budget": (
+                        self._token_budget if token_budget is None else token_budget
+                    ),
+                },
+            ):
+                results = self._apply_token_budget(reranked, token_budget)
+            counts["result_count"] = len(results)
+            return results
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            total_ms = (time.perf_counter() - started_at) * 1000
+            timing_metadata: dict[str, Any] = {
+                "status": status,
+                "filter_mode": filter_mode,
+                "requested_source_count": requested_source_count,
+                "indexed_source_count": len(self._indexed_sources),
+                "total_ms": round(total_ms, 2),
+                "stage_ms": {
+                    stage: round(timings[stage], 2) for stage in RETRIEVAL_STAGE_NAMES
+                },
+                **counts,
+            }
+            current_run = get_current_run_tree()
+            if current_run is not None:
+                current_run.add_metadata({"retrieval_timing": timing_metadata})
+
+            logger.info(
+                "retrieval_timing status=%s filter_mode=%s "
+                "requested_sources=%d indexed_sources=%d total_ms=%.2f "
+                "embed_ms=%.2f chroma_ms=%.2f dense_hydration_ms=%.2f "
+                "bm25_ms=%.2f fusion_ms=%.2f rerank_ms=%.2f "
+                "token_budget_ms=%.2f dense_hits=%d bm25_hits=%d "
+                "fused_hits=%d reranked_hits=%d results=%d",
+                status,
+                filter_mode,
+                requested_source_count,
+                len(self._indexed_sources),
+                total_ms,
+                timings["embed_ms"],
+                timings["chroma_ms"],
+                timings["dense_hydration_ms"],
+                timings["bm25_ms"],
+                timings["fusion_ms"],
+                timings["rerank_ms"],
+                timings["token_budget_ms"],
+                counts["dense_hit_count"],
+                counts["bm25_hit_count"],
+                counts["fused_hit_count"],
+                counts["reranked_hit_count"],
+                counts["result_count"],
+            )
 
     def _dense_search(
         self,
         query: str,
         *,
         allowed_sources: list[str] | None = None,
+        timings: dict[str, float] | None = None,
     ) -> list[SearchResult]:
-        query_embedding = embed_texts(
-            self._cohere,
-            [query],
-            input_type="search_query",
-            model=self._embed_model,
-        )[0]
+        stage_timings = timings if timings is not None else {}
+        with _measure_retrieval_stage(
+            stage_timings,
+            "embed_ms",
+            trace_inputs={"model": self._embed_model, "input_count": 1},
+        ):
+            query_embedding = embed_texts(
+                self._cohere,
+                [query],
+                input_type="search_query",
+                model=self._embed_model,
+            )[0]
 
         where = build_where_filter(allowed_sources)
-        raw_results = self._collection.query(
-            query_embeddings=[query_embedding],
-            n_results=self._dense_top_k,
-            where=where,
-            include=["documents", "metadatas", "distances"],
-        )
-
-        chunk_ids = _flatten_query_results(raw_results.get("ids"))
-        documents = _flatten_query_results(raw_results.get("documents"))
-        metadatas = _flatten_query_results(raw_results.get("metadatas"))
-        distances = _flatten_query_results(raw_results.get("distances"))
-
-        dense_hits: list[SearchResult] = []
-        for chunk_id, chunk_text, metadata, distance in zip(
-            chunk_ids, documents, metadatas, distances, strict=False
+        with _measure_retrieval_stage(
+            stage_timings,
+            "chroma_ms",
+            trace_inputs={
+                "collection": self._collection_name,
+                "top_k": self._dense_top_k,
+                "where": where,
+            },
         ):
-            if metadata is None:
-                continue
-
-            dense_hits.append(
-                self._search_result_from_metadata(
-                    chunk_id=str(chunk_id),
-                    score=_distance_to_score(distance),
-                    chunk_text=str(chunk_text),
-                    metadata=dict(metadata),
-                    retrieval_method="dense",
-                )
+            raw_results = self._collection.query(
+                query_embeddings=[query_embedding],
+                n_results=self._dense_top_k,
+                where=where,
+                include=["documents", "metadatas", "distances"],
             )
+
+        with _measure_retrieval_stage(
+            stage_timings,
+            "dense_hydration_ms",
+            trace_inputs={"requested_top_k": self._dense_top_k},
+        ):
+            chunk_ids = _flatten_query_results(raw_results.get("ids"))
+            documents = _flatten_query_results(raw_results.get("documents"))
+            metadatas = _flatten_query_results(raw_results.get("metadatas"))
+            distances = _flatten_query_results(raw_results.get("distances"))
+
+            dense_hits: list[SearchResult] = []
+            for chunk_id, chunk_text, metadata, distance in zip(
+                chunk_ids, documents, metadatas, distances, strict=False
+            ):
+                if metadata is None:
+                    continue
+
+                dense_hits.append(
+                    self._search_result_from_metadata(
+                        chunk_id=str(chunk_id),
+                        score=_distance_to_score(distance),
+                        chunk_text=str(chunk_text),
+                        metadata=dict(metadata),
+                        retrieval_method="dense",
+                    )
+                )
         return dense_hits
 
     def _bm25_search(

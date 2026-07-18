@@ -688,6 +688,46 @@ def collect_retrieval_source_matches(payload: str) -> list[SourceMatch]:
     return matches
 
 
+def _source_match_record(match: SourceMatch) -> dict[str, Any]:
+    """Store lightweight source metadata alongside a persistently capped tool."""
+    return {
+        "doc_id": match.doc_id,
+        "title": match.title,
+        "url": match.url,
+        "source_key": match.source_key,
+        "source_label": match.source_label,
+        "score": match.score,
+        "group": match.group,
+        "path": match.path,
+    }
+
+
+def _source_matches_from_records(records: Any) -> list[SourceMatch]:
+    """Restore source metadata retained outside a truncated retrieval payload."""
+    if not isinstance(records, list):
+        return []
+    matches: list[SourceMatch] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        try:
+            matches.append(
+                SourceMatch(
+                    doc_id=str(record.get("doc_id", "")),
+                    title=str(record.get("title", "")),
+                    url=str(record.get("url", "")),
+                    source_key=str(record.get("source_key", "")),
+                    source_label=str(record.get("source_label", "")),
+                    score=float(record.get("score", 0.0)),
+                    group=str(record.get("group", "")),
+                    path=str(record.get("path", "")),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return matches
+
+
 def _record_evidence(
     target: dict[str, SourceMatch], matches: list[SourceMatch]
 ) -> None:
@@ -1358,6 +1398,15 @@ class StableToolOutputCapMiddleware(AgentMiddleware):
             "sha256": hashlib.sha256(raw).hexdigest(),
             "max_bytes": self.max_bytes,
         }
+        if getattr(result, "name", "") == "retrieve_tutor_context":
+            # Capping inserts a head/tail marker and intentionally makes the
+            # JSON content unparsable. Preserve only lightweight source
+            # metadata so citations and the UI's chunk count stay accurate
+            # without keeping the discarded chunk bodies in the checkpoint.
+            retrieval_matches = collect_retrieval_source_matches(text)
+            metadata["retrieval_matches"] = [
+                _source_match_record(match) for match in retrieval_matches
+            ]
         turn = _turn_id_for(request)
         record_turn_signal(turn, "tool_outputs_capped", 1)
         record_turn_signal(turn, "tool_output_original_bytes", len(raw))
@@ -2894,7 +2943,11 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                     tool_name = str(getattr(message, "name", "tool"))
                     call_matches: list[SourceMatch] = []
                     if tool_name == "retrieve_tutor_context":
-                        call_matches = collect_retrieval_source_matches(payload)
+                        call_matches = _source_matches_from_records(
+                            cap_metadata.get("retrieval_matches")
+                        )
+                        if not call_matches:
+                            call_matches = collect_retrieval_source_matches(payload)
                         _record_evidence(retrieval_evidence, call_matches)
 
                     tool_call = tool_calls_by_id.get(
@@ -3009,10 +3062,44 @@ async def stream_chat(request: ChatRequest) -> AsyncIterator[ChatEvent]:
                 if getattr(message, "tool_calls", None):
                     # The completed message has fully parsed args; streamed
                     # fragments may have announced the call with empty args.
+                    # Publish the completed arguments now, before the tools
+                    # node returns, so a long-running search shows its query
+                    # while it is running rather than only with its result.
                     for tool_call in message.tool_calls:
                         call_id = str(tool_call.get("id") or "")
-                        if call_id:
-                            tool_calls_by_id[call_id] = tool_call
+                        if not call_id:
+                            continue
+                        previous = tool_calls_by_id.get(call_id)
+                        tool_calls_by_id[call_id] = tool_call
+                        if previous is None:
+                            if first_token_at is None:
+                                first_token_at = time.monotonic()
+                            yield ChatEvent(
+                                "tool_call_started",
+                                {
+                                    "message_id": message_id,
+                                    "call_id": call_id,
+                                    "tool_name": str(tool_call.get("name", "tool")),
+                                    "args": tool_call.get("args"),
+                                    "args_text": format_tool_args(
+                                        tool_call.get("args")
+                                    ),
+                                },
+                            )
+                            continue
+                        args = tool_call.get("args")
+                        if args == previous.get("args"):
+                            continue
+                        yield ChatEvent(
+                            "tool_call_args_available",
+                            {
+                                "message_id": message_id,
+                                "call_id": call_id,
+                                "tool_name": str(tool_call.get("name", "tool")),
+                                "args": args,
+                                "args_text": format_tool_args(args),
+                            },
+                        )
                     continue
                 completed_answer = message_content_to_text(message.content)
     finally:

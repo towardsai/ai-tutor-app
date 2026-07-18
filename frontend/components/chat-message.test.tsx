@@ -54,6 +54,7 @@ describe("ChatMessage activity rendering", () => {
     expect(items[0]?.textContent).toContain("Continuation of the first thought");
     expect(items[1]?.textContent).toContain("Hybrid search");
     expect(items[1]?.textContent).toContain("agent memory");
+    expect(items[1]?.textContent).toContain("3 chunks");
     expect(items[2]?.textContent).toContain("Second thought after retrieval");
     expect(screen.getByText("Final answer")).toBeTruthy();
   });

@@ -5,7 +5,7 @@ import pickle
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, Mock, patch
 
 import chromadb
 import tiktoken
@@ -351,11 +351,123 @@ class TokenBudgetTestCase(unittest.TestCase):
         self.assertEqual(len(kept_all), 3)
 
 
+class SourceNormalizationAndTimingTestCase(unittest.TestCase):
+    def _retriever(self) -> LocalChromaRetriever:
+        retriever = LocalChromaRetriever.__new__(LocalChromaRetriever)
+        retriever._indexed_sources = frozenset({"langchain", "peft"})
+        retriever._rrf_k = 60
+        retriever._bm25_top_k = 30
+        retriever._fusion_top_k = 30
+        retriever._rerank_model = "rerank-test"
+        retriever._rerank_top_k = 5
+        retriever._token_budget = 100_000
+        retriever._cohere = object()
+        return retriever
+
+    def _result(self) -> SearchResult:
+        return SearchResult(
+            chunk_id="chunk-1",
+            doc_id="doc-1",
+            title="Doc",
+            url="https://example.com",
+            source="peft",
+            retrieve_doc=False,
+            tokens=10,
+            score=0.9,
+            content="content",
+            chunk_content="content",
+            retrieval_method="dense",
+        )
+
+    def test_complete_indexed_source_selection_omits_filter(self) -> None:
+        retriever = self._retriever()
+
+        effective, mode = retriever._effective_allowed_sources(["langchain", "peft"])
+        self.assertIsNone(effective)
+        self.assertEqual(mode, "all_sources_omitted")
+
+        # Unknown requested keys do not change the result set, so a superset
+        # still safely covers every source present in the retrieval artifacts.
+        effective, mode = retriever._effective_allowed_sources(
+            ["langchain", "peft", "future-source"]
+        )
+        self.assertIsNone(effective)
+        self.assertEqual(mode, "all_sources_omitted")
+
+    def test_partial_source_selection_keeps_filter(self) -> None:
+        retriever = self._retriever()
+
+        sources = ["peft"]
+        effective, mode = retriever._effective_allowed_sources(sources)
+
+        self.assertEqual(effective, sources)
+        self.assertEqual(mode, "single_source")
+
+    def test_search_logs_and_traces_stage_timings_after_normalization(self) -> None:
+        retriever = self._retriever()
+        result = self._result()
+        retriever._dense_search = Mock(return_value=[result])
+        retriever._bm25_search = Mock(return_value=[])
+        retriever._apply_token_budget = Mock(return_value=[result])
+
+        class _FakeRun:
+            def __init__(self) -> None:
+                self.metadata: dict[str, object] = {}
+
+            def add_metadata(self, metadata: dict[str, object]) -> None:
+                self.metadata.update(metadata)
+
+        fake_run = _FakeRun()
+        with (
+            patch(
+                "app.chroma_rag.rerank_results",
+                return_value=[result],
+            ),
+            patch(
+                "app.chroma_rag.get_current_run_tree",
+                return_value=fake_run,
+            ),
+            self.assertLogs("app.chroma_rag", level="INFO") as captured_logs,
+        ):
+            results = retriever.search(
+                "adapter configuration",
+                allowed_sources=["langchain", "peft"],
+            )
+
+        self.assertEqual(results, [result])
+        retriever._dense_search.assert_called_once_with(
+            "adapter configuration",
+            allowed_sources=None,
+            timings=ANY,
+        )
+        retriever._bm25_search.assert_called_once_with(
+            "adapter configuration",
+            allowed_sources=None,
+        )
+        timing = fake_run.metadata["retrieval_timing"]
+        assert isinstance(timing, dict)
+        self.assertEqual(timing["filter_mode"], "all_sources_omitted")
+        self.assertEqual(timing["requested_source_count"], 2)
+        self.assertEqual(timing["indexed_source_count"], 2)
+        self.assertEqual(timing["result_count"], 1)
+        self.assertIn("stage_ms", timing)
+        self.assertTrue(
+            any(
+                "filter_mode=all_sources_omitted" in message and "chroma_ms=" in message
+                for message in captured_logs.output
+            )
+        )
+
+
 class CollectionOpenTestCase(unittest.TestCase):
-    def _write_document_dict(self, directory: str) -> str:
+    def _write_document_dict(
+        self,
+        directory: str,
+        documents: dict[str, dict[str, object]] | None = None,
+    ) -> str:
         path = Path(directory) / "document_dict_test.pkl"
         with open(path, "wb") as handle:
-            pickle.dump({}, handle)
+            pickle.dump(documents or {}, handle)
         return str(path)
 
     def test_init_fails_loudly_when_collection_missing(self) -> None:
@@ -383,7 +495,13 @@ class CollectionOpenTestCase(unittest.TestCase):
             chromadb.PersistentClient(path=temp_dir).create_collection(
                 name="test-collection"
             )
-            document_dict_path = self._write_document_dict(temp_dir)
+            document_dict_path = self._write_document_dict(
+                temp_dir,
+                {
+                    "doc-1": {"source": "peft"},
+                    "doc-2": {"source": "langchain"},
+                },
+            )
 
             retriever = LocalChromaRetriever(
                 db_path=temp_dir,
@@ -393,6 +511,10 @@ class CollectionOpenTestCase(unittest.TestCase):
             )
 
             self.assertEqual(retriever._collection.name, "test-collection")
+            self.assertEqual(
+                retriever._indexed_sources,
+                frozenset({"peft", "langchain"}),
+            )
 
 
 if __name__ == "__main__":

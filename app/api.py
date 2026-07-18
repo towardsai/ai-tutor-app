@@ -344,6 +344,7 @@ class UIMessageStreamEncoder:
         self.active_reasoning_id = ""
         self.open_tool_call_ids: list[str] = []
         self.announced_tool_call_ids: set[str] = set()
+        self.available_tool_call_ids: set[str] = set()
         self.closed = False
 
     def close_reasoning_block(self) -> list[dict[str, Any]]:
@@ -463,7 +464,7 @@ class UIMessageStreamEncoder:
             )
             args = event.data.get("args")
             args_text = str(event.data.get("args_text", "")).strip()
-            if isinstance(args, dict):
+            if isinstance(args, dict) and args:
                 parts.append(
                     {
                         "type": "tool-input-available",
@@ -472,6 +473,7 @@ class UIMessageStreamEncoder:
                         "input": args,
                     }
                 )
+                self.available_tool_call_ids.add(call_id)
             elif args_text:
                 parts.append(
                     {
@@ -481,6 +483,40 @@ class UIMessageStreamEncoder:
                         "input": {"text": args_text},
                     }
                 )
+                self.available_tool_call_ids.add(call_id)
+            return parts
+
+        if event.type == "tool_call_args_available":
+            call_id = str(event.data.get("call_id", uuid4().hex))
+            tool_name = str(event.data.get("tool_name", "tool"))
+            if call_id not in self.open_tool_call_ids:
+                self.open_tool_call_ids.append(call_id)
+            if call_id not in self.announced_tool_call_ids:
+                parts.append(
+                    {
+                        "type": "tool-input-start",
+                        "toolCallId": call_id,
+                        "toolName": tool_name,
+                    }
+                )
+                self.announced_tool_call_ids.add(call_id)
+            args = event.data.get("args")
+            args_text = str(event.data.get("args_text", "")).strip()
+            if isinstance(args, dict):
+                input_data = args
+            elif args_text:
+                input_data = {"text": args_text}
+            else:
+                return parts
+            parts.append(
+                {
+                    "type": "tool-input-available",
+                    "toolCallId": call_id,
+                    "toolName": tool_name,
+                    "input": input_data,
+                }
+            )
+            self.available_tool_call_ids.add(call_id)
             return parts
 
         if event.type == "source_match":
@@ -507,16 +543,11 @@ class UIMessageStreamEncoder:
             parts.extend(self.close_reasoning_block())
             call_id = str(event.data.get("call_id", uuid4().hex))
             args = event.data.get("args")
-            if (
-                isinstance(args, dict) and args
-            ) or call_id not in self.announced_tool_call_ids:
-                # Providers that stream tool calls incrementally announce the
-                # call before its args are parsed; refresh the input now that
-                # the full args are known. A call id the stream never
-                # announced (e.g. a ToolMessage with a missing id) must also
-                # get an input part first: the AI SDK client throws on an
-                # output for an unknown tool call and drops the rest of the
-                # stream.
+            if call_id not in self.available_tool_call_ids:
+                # The completed-model update normally supplies full arguments
+                # before execution. Keep this completion-time fallback for
+                # providers that omit that update and for orphan ToolMessages:
+                # the AI SDK requires an input part before the output.
                 parts.append(
                     {
                         "type": "tool-input-available",
@@ -526,6 +557,7 @@ class UIMessageStreamEncoder:
                     }
                 )
                 self.announced_tool_call_ids.add(call_id)
+                self.available_tool_call_ids.add(call_id)
             output = {
                 "text": str(event.data.get("output_text", "")),
                 "matches": [

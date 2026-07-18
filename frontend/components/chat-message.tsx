@@ -463,6 +463,7 @@ function ToolRow({ part }: { part: TutorMessagePart }) {
     ? outputObject.matches.length
     : 0;
   const resultSummary = formatToolResultSummary({
+    toolType: part.type,
     outputText,
     matchCount,
     state: part.state,
@@ -600,11 +601,13 @@ function formatToolStateBadge(
 }
 
 function formatToolResultSummary({
+  toolType,
   outputText,
   matchCount,
   state,
   errorText,
 }: {
+  toolType: string;
   outputText: string;
   matchCount: number;
   state?: string;
@@ -614,7 +617,10 @@ function formatToolResultSummary({
     return "";
   }
   if (matchCount > 0) {
-    return `${matchCount} match${matchCount === 1 ? "" : "es"}`;
+    const isRetrieval =
+      toolType.replace(/^tool-/, "") === "retrieve_tutor_context";
+    const noun = isRetrieval ? "chunk" : "match";
+    return `${matchCount} ${noun}${matchCount === 1 ? "" : "s"}`;
   }
   if (outputText) {
     const lineCount = outputText.split("\n").length;

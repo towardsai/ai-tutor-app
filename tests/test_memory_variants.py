@@ -9,6 +9,7 @@ no model client, no API keys, no vector DB.
 from __future__ import annotations
 
 import hashlib
+import json
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -299,6 +300,43 @@ class StableToolOutputCapTests(unittest.TestCase):
             signals["tool_output_original_bytes"],
             signals["tool_output_retained_bytes"],
         )
+
+    def test_cap_preserves_retrieval_chunk_metadata(self) -> None:
+        raw = json.dumps(
+            {
+                "query": "secure API key storage",
+                "matches": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "doc_id": "doc-1",
+                        "title": "Manage API keys",
+                        "url": "https://example.com/keys",
+                        "source": "langchain",
+                        "retrieve_doc": True,
+                        "tokens": 1200,
+                        "score": 0.9,
+                        "content": "x" * 5_000,
+                        "chunk_content": "API key guidance",
+                        "heading_path": "Testing > Manage API keys",
+                        "retrieval_method": "hybrid",
+                    }
+                ],
+            }
+        )
+        result = StableToolOutputCapMiddleware(2_048)._cap(
+            make_request([], "retrieval-cap"),
+            ToolMessage(
+                content=raw,
+                name="retrieve_tutor_context",
+                tool_call_id="call-retrieval",
+            ),
+        )
+
+        self.assertIn("tool output truncated", result.content)
+        retained = result.additional_kwargs["stable_tool_cap"]["retrieval_matches"]
+        self.assertEqual(len(retained), 1)
+        self.assertEqual(retained[0]["doc_id"], "doc-1")
+        self.assertEqual(retained[0]["source_key"], "langchain")
 
 
 class ExperimentCompactionMiddlewareTests(unittest.TestCase):

@@ -176,6 +176,10 @@ Expected result:
 - The stream includes `tool-input-*`, `tool-output-available`, `text-delta`,
   `source-url`, `source-document`, `data-source`, and `finish` parts.
 - Tool calls include `retrieve_tutor_context` and `run_kb_command`.
+- Every `retrieve_tutor_context` tool run has a nested
+  `Hybrid Retrieval Pipeline` span. Expanding it in the waterfall shows
+  separate Cohere embed, Chroma, dense hydration, BM25, RRF, Cohere rerank,
+  and token-budget runs.
 - The answer has inline citations, not only a final sources list.
 - `data-source` parts include the source cards the frontend will render.
 
@@ -266,6 +270,45 @@ jq -r '
 ' "/tmp/ai_tutor_trace_${TRACE_ID}.json"
 ```
 
+Hybrid retrieval latency breakdown:
+
+```bash
+jq -r '
+  .runs[]
+  | select(.name == "Hybrid Retrieval Pipeline")
+  | (.custom_metadata.retrieval_timing
+      // .extra.metadata.retrieval_timing
+      // {}) as $timing
+  | [
+      (.inputs.query // ""),
+      ($timing.status // ""),
+      ($timing.filter_mode // ""),
+      ($timing.total_ms // ""),
+      ($timing.stage_ms.embed_ms // ""),
+      ($timing.stage_ms.chroma_ms // ""),
+      ($timing.stage_ms.dense_hydration_ms // ""),
+      ($timing.stage_ms.bm25_ms // ""),
+      ($timing.stage_ms.fusion_ms // ""),
+      ($timing.stage_ms.rerank_ms // ""),
+      ($timing.stage_ms.token_budget_ms // "")
+    ]
+  | @tsv
+' "/tmp/ai_tutor_trace_${TRACE_ID}.json"
+```
+
+The columns are query, status, filter mode, total, embed, Chroma, dense-result
+hydration, BM25, RRF, rerank, and token-budget latency, all in milliseconds.
+The backend logs the same values as one `retrieval_timing` line without logging
+the raw student query. A complete source selection should report
+`filter_mode=all_sources_omitted`; real source subsets should report
+`single_source` or `source_subset`.
+
+In the LangSmith waterfall, expand `retrieve_tutor_context`, then
+`Hybrid Retrieval Pipeline`, to see the same stages as individually timed child
+runs. Their names are `Cohere Embed`, `Chroma Vector Search`,
+`Dense Result Hydration`, `BM25 Search`, `RRF Fusion`, `Cohere Rerank`, and
+`Token Budget`.
+
 LLM calls:
 
 ```bash
@@ -295,9 +338,12 @@ For latency debugging, compare these numbers:
 - Root trace duration.
 - Count of `run_kb_command` calls.
 - Total shell/tool duration.
+- The `Hybrid Retrieval Pipeline` stage breakdown for every retrieval call.
 - Count of LLM/chat model calls.
 - Longest LLM call duration.
 - Whether the trace ended in `success`, `error`, or cancellation.
 
-If shell/tool duration is tiny but total trace duration is large, the bottleneck
-is model inference or repeated model turns, not filesystem access.
+If `Hybrid Retrieval Pipeline` is fast but total trace duration is large, the
+bottleneck is model inference or repeated model turns. If retrieval is slow,
+its child runs and metadata identify whether the time was spent in Cohere
+embedding, Chroma, BM25/RRF, Cohere reranking, or token budgeting.

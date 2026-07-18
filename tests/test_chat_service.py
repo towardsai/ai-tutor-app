@@ -117,6 +117,90 @@ class FakeStreamingAgent(FakeAgent):
         }
 
 
+class FakeIncrementalRetrievalAgent(FakeAgent):
+    """DeepSeek-like stream: tool id/name first, complete args at model end."""
+
+    async def astream(self, *args, **kwargs):
+        yield {
+            "type": "messages",
+            "data": (
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_retrieval",
+                            "name": "retrieve_tutor_context",
+                            "args": {},
+                        }
+                    ],
+                ),
+                {"langgraph_node": "model"},
+            ),
+        }
+        yield {
+            "type": "updates",
+            "data": {
+                "model": {
+                    "messages": [
+                        AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "id": "call_retrieval",
+                                    "name": "retrieve_tutor_context",
+                                    "args": {"query": "secure API key storage"},
+                                }
+                            ],
+                        )
+                    ]
+                }
+            },
+        }
+        yield {
+            "type": "updates",
+            "data": {
+                "tools": {
+                    "messages": [
+                        ToolMessage(
+                            content=(
+                                '{"query":"secure API key storage","matches":[...\n\n'
+                                "[... tool output truncated ...]\n\n...]}"
+                            ),
+                            name="retrieve_tutor_context",
+                            tool_call_id="call_retrieval",
+                            additional_kwargs={
+                                "stable_tool_cap": {
+                                    "retrieval_matches": [
+                                        {
+                                            "doc_id": "doc-keys",
+                                            "title": "Manage API keys",
+                                            "url": "https://example.com/keys",
+                                            "source_key": "langchain",
+                                            "source_label": "LangChain Docs",
+                                            "score": 0.9,
+                                            "group": "docs",
+                                            "path": "",
+                                        }
+                                    ]
+                                }
+                            },
+                        )
+                    ]
+                }
+            },
+        }
+        yield {
+            "type": "updates",
+            "data": {
+                "model": {
+                    "messages": [
+                        AIMessage(content="Store secrets outside source control.")
+                    ]
+                }
+            },
+        }
+
+
 class FakeAnswerAgent(FakeAgent):
     """Agent that streams nothing and answers with one final AI message."""
 
@@ -870,6 +954,51 @@ class ChatServiceTestCase(unittest.TestCase):
             ["Final answer"],
         )
         self.assertTrue(build_agent_mock.call_args.kwargs["include_thoughts"])
+
+    def test_stream_chat_publishes_completed_tool_args_before_result(self) -> None:
+        agent = FakeIncrementalRetrievalAgent([])
+        self.addCleanup(_drop_thread_record, "thread_incremental_tool")
+        request = ChatRequest(
+            query="Where should I store API keys?",
+            source_keys=("langchain",),
+            model_name=DEEPSEEK_DIRECT_MODEL_NAME,
+            include_reasoning=False,
+            enabled_tools=(),
+        )
+
+        async def collect_events():
+            return [event async for event in stream_chat(request)]
+
+        with (
+            patch("app.chat_service.build_agent", return_value=agent),
+            patch(
+                "app.chat_service.new_thread_id",
+                return_value="thread_incremental_tool",
+            ),
+        ):
+            events = asyncio.run(collect_events())
+
+        event_types = [event.type for event in events]
+        self.assertLess(
+            event_types.index("tool_call_started"),
+            event_types.index("tool_call_args_available"),
+        )
+        self.assertLess(
+            event_types.index("tool_call_args_available"),
+            event_types.index("tool_call_completed"),
+        )
+        args_event = next(
+            event for event in events if event.type == "tool_call_args_available"
+        )
+        self.assertEqual(
+            args_event.data["args"],
+            {"query": "secure API key storage"},
+        )
+        completed = next(
+            event for event in events if event.type == "tool_call_completed"
+        )
+        self.assertEqual(len(completed.data["matches"]), 1)
+        self.assertEqual(completed.data["matches"][0]["doc_id"], "doc-keys")
 
     def test_stream_chat_resolves_shell_citation_after_final_answer(self) -> None:
         agent = FakeStreamingAgent([])

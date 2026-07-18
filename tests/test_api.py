@@ -612,6 +612,60 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(matches[0]["score"], 0.9)
         self.assertEqual(matches[0]["path"], "raw/docs/peft/lora.md")
 
+    def test_completed_tool_args_refresh_while_the_tool_is_running(self) -> None:
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+
+        started = encoder.encode(
+            ChatEvent(
+                "tool_call_started",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_1",
+                    "tool_name": "retrieve_tutor_context",
+                    "args": {},
+                },
+            )
+        )
+        self.assertEqual([part["type"] for part in started], ["tool-input-start"])
+
+        refreshed = encoder.encode(
+            ChatEvent(
+                "tool_call_args_available",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_1",
+                    "tool_name": "retrieve_tutor_context",
+                    "args": {"query": "secure API key storage"},
+                },
+            )
+        )
+        self.assertEqual(
+            [part["type"] for part in refreshed],
+            ["tool-input-available"],
+        )
+        self.assertEqual(
+            refreshed[0]["input"],
+            {"query": "secure API key storage"},
+        )
+
+        completed = encoder.encode(
+            ChatEvent(
+                "tool_call_completed",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_1",
+                    "tool_name": "retrieve_tutor_context",
+                    "args": {"query": "secure API key storage"},
+                    "output_text": "payload",
+                },
+            )
+        )
+        self.assertNotIn(
+            "tool-input-available",
+            [part["type"] for part in completed],
+        )
+
     def test_chat_rejects_oversized_query(self) -> None:
         from app.api import MAX_QUERY_CHARS
 
