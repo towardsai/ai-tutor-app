@@ -67,7 +67,7 @@ describe("SourceSidebar", () => {
   it("reports active tools and routes new-chat, source, and tool actions", () => {
     const handlers = renderSidebar();
 
-    expect(screen.getByText("2/2")).toBeTruthy();
+    expect(screen.getByText("2 of 2 on")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Course A" }).getAttribute(
         "aria-pressed",

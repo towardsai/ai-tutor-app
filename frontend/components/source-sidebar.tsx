@@ -12,6 +12,7 @@ import {
   Link as LinkIcon,
   SquarePen,
   Wrench,
+  X,
 } from "lucide-react";
 import {
   useEffect,
@@ -32,6 +33,7 @@ type SourceSidebarProps = {
   enabledToolKeys: string[];
   sourceError: string | null;
   tools: TutorTool[];
+  onClose?: () => void;
 };
 
 type ToggleToolMeta = {
@@ -67,6 +69,7 @@ export function SourceSidebar({
   enabledToolKeys,
   sourceError,
   tools,
+  onClose,
 }: SourceSidebarProps) {
   const retrievalTool = tools.find(
     (tool): tool is Extract<TutorTool, { kind: "configurable" }> =>
@@ -106,31 +109,40 @@ export function SourceSidebar({
   }, [openToolInfoKey]);
 
   return (
-    <aside className="glass-panel relative overflow-hidden rounded-[1.5rem] p-2.5 lg:flex lg:min-h-0 lg:max-h-[calc(100vh-1rem)] lg:min-h-[calc(100vh-1rem)] lg:flex-col">
+    <aside className="glass-panel relative flex h-full min-h-0 flex-col overflow-hidden rounded-[1rem] p-2.5">
       <div className="grain-mask absolute inset-0" />
-      <div className="relative flex flex-col gap-2.5 lg:min-h-0 lg:flex-1">
-        <div className="flex items-center gap-2.5 px-1 pt-0.5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/towardsai-logo.png"
-            alt="Towards AI"
-            width={48}
-            height={48}
-            className="shrink-0 rounded-full shadow-[0_4px_12px_rgba(11,136,238,0.18)]"
-          />
-          <h1 className="text-[1.35rem] font-semibold leading-none tracking-[-0.03em] text-[var(--accent)]">
-            AI Tutor
+      <div className="relative flex min-h-0 flex-1 flex-col gap-2.5">
+        <div className="flex items-center justify-between gap-2 px-1 pt-1.5 pb-1">
+          <h1 className="flex min-w-0 items-baseline gap-1.5">
+            <span
+              role="img"
+              aria-label="Towards AI"
+              className="ta-wordmark h-[12px] w-[127px] shrink-0"
+            />
+            <span className="font-serif text-[16px] font-medium italic leading-none text-[var(--accent)]">
+              Tutor
+            </span>
           </h1>
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close sources and tools"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--ink)] lg:hidden"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
         </div>
 
         <div className="border-t border-[var(--line)] px-1 pt-2">
           <button
             type="button"
             onClick={onNewChat}
-            className="group flex w-full items-center gap-2 rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--accent-faint)] px-2.5 py-2 text-left shadow-[0_4px_12px_rgba(11,136,238,0.08)] transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:shadow-[0_8px_20px_rgba(11,136,238,0.16)]"
+            className="group flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--heading)] px-2.5 py-2 text-center transition hover:bg-[var(--heading)]"
           >
-            <SquarePen className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-            <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold tracking-[-0.01em] text-[var(--accent)]">
+            <SquarePen className="h-3.5 w-3.5 shrink-0 text-[var(--heading)] transition group-hover:text-[var(--paper-strong)]" />
+            <span className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--heading)] transition group-hover:text-[var(--paper-strong)]">
               New chat
             </span>
           </button>
@@ -139,13 +151,16 @@ export function SourceSidebar({
         <div className="space-y-1 border-t border-[var(--line)] px-1 pt-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
-              <Wrench className="h-3.5 w-3.5 text-[var(--accent)]" />
-              <span className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+              <Wrench className="h-3 w-3 text-[var(--accent)]" />
+              <span className="eyebrow text-[10px] text-[var(--accent)]">
                 Tools
               </span>
             </div>
-            <span className="rounded-full bg-[var(--accent-faint)] px-2 py-0.5 text-[10.5px] font-semibold tracking-[-0.01em] text-[var(--accent)]">
-              {activeCount}/{totalCount}
+            <span
+              className="eyebrow text-[9.5px] text-[var(--muted)]"
+              title={`${activeCount} of ${totalCount} tools on`}
+            >
+              {activeCount} of {totalCount} on
             </span>
           </div>
           <p className="text-[11px] leading-[1.4] text-[var(--muted)]">
@@ -153,7 +168,7 @@ export function SourceSidebar({
           </p>
         </div>
 
-        <div className="scrollbar-thin space-y-2 pr-0.5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+        <div className="scrollbar-thin min-h-0 flex-1 space-y-2 overflow-y-auto pr-0.5">
           {retrievalTool ? (
             <RetrievalTool
               tool={retrievalTool}
@@ -288,9 +303,9 @@ function RetrievalTool({
     <section className="space-y-1">
       <div
         className={clsx(
-          "relative flex w-full items-center gap-1 rounded-[0.9rem] border px-1.5 py-2 transition",
+          "relative flex w-full items-center gap-1 rounded-lg border px-1.5 py-2 transition",
           enabled
-            ? "border-[var(--line-strong)] bg-[var(--accent-faint)] hover:border-[var(--accent)]"
+            ? "border-[var(--accent)]/30 bg-[var(--accent-faint)] hover:border-[var(--accent)]/60"
             : "border-[var(--line)] bg-[var(--surface-subtle)] hover:border-[var(--line-strong)]",
         )}
       >
@@ -313,9 +328,9 @@ function RetrievalTool({
           <span
             aria-hidden
             className={clsx(
-              "inline-flex items-center rounded-full px-1.25 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em]",
+              "eyebrow inline-flex items-center rounded px-1.25 py-0.5 text-[9px]",
               enabled
-                ? "bg-[var(--accent-faint)] text-[var(--accent)]"
+                ? "bg-[var(--accent-soft)] text-[var(--accent)]"
                 : "bg-[var(--muted)]/15 text-[var(--muted)]",
             )}
           >
@@ -444,7 +459,7 @@ function SourceGroup({
     <div className="space-y-1">
       <div className="flex items-center gap-1.5 px-1">
         <Icon className="h-3 w-3 text-[var(--muted)]/70" />
-        <h2 className="text-[10px] font-medium tracking-[0.02em] text-[var(--muted)]/80">
+        <h2 className="eyebrow text-[9.5px] text-[var(--muted)]">
           {label}
         </h2>
       </div>
@@ -522,7 +537,6 @@ function SourceRow({
   popoverOpen: boolean;
   onPopoverToggle: () => void;
 }) {
-  const isCourse = source.group === "courses";
   const popover = getPopoverInfo(source);
   const rowRef = useRef<HTMLDivElement>(null);
   const [dialogPos, setDialogPos] = useState<
@@ -559,28 +573,25 @@ function SourceRow({
     <div ref={rowRef} className="relative">
       <div
         className={clsx(
-          "flex items-center gap-1 rounded-[0.75rem] border py-1.5 pl-2 pr-1 transition",
+          "flex items-center gap-1 rounded-lg border py-1.5 pl-2 pr-1 transition",
           selected
-            ? isCourse
-              ? "border-[var(--accent)] bg-[var(--accent)] text-white shadow-[0_4px_12px_rgba(11,136,238,0.18)]"
-              : "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--ink)]"
-            : "border-[var(--line)] bg-[var(--surface-soft)] text-[var(--ink)] hover:border-[var(--line-strong)] hover:bg-[var(--surface-hover)]",
+            ? "border-[var(--line-strong)] bg-[var(--paper-strong)] text-[var(--ink)] hover:border-[var(--accent)]/45"
+            : "border-transparent bg-transparent text-[var(--muted)] hover:border-[var(--line)] hover:bg-[var(--surface-soft)]",
         )}
       >
         <button
           type="button"
           onClick={() => onToggle(source.key)}
           aria-pressed={selected}
+          title={source.label}
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
           <span
             aria-hidden="true"
             className={clsx(
-              "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[9px] font-bold",
+              "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border text-[9px] font-bold transition",
               selected
-                ? isCourse
-                  ? "border-white/70 bg-white text-[var(--accent)]"
-                  : "border-[var(--accent)] bg-[var(--accent)] text-white"
+                ? "border-[var(--accent)] bg-[var(--accent)] text-white"
                 : "border-[var(--line-strong)] text-transparent",
             )}
           >
@@ -599,10 +610,8 @@ function SourceRow({
             className={clsx(
               "flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition",
               selected
-                ? isCourse
-                  ? "text-white/80 hover:bg-white/15 hover:text-white"
-                  : "text-[var(--accent)] hover:bg-[var(--accent-soft)]"
-                : "text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]",
+                ? "text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                : "text-[var(--muted)]/70 hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]",
             )}
           >
             <Info className="h-3.5 w-3.5" />
@@ -629,7 +638,10 @@ function SourceRow({
               }}
               className="rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--surface-strong)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.18)] backdrop-blur-md"
             >
-              <p className="text-[12px] leading-[1.45] text-[var(--ink)]">
+              <p className="text-[12.5px] font-semibold leading-[1.35] text-[var(--heading)]">
+                {source.label}
+              </p>
+              <p className="mt-1.5 text-[12px] leading-[1.45] text-[var(--ink)]">
                 {popover.description}
               </p>
               {popover.meta ? (
@@ -707,9 +719,9 @@ function ToggleToolRow({
     <div ref={rowRef} className="relative">
       <div
         className={clsx(
-          "flex items-center gap-1 rounded-[0.9rem] border pl-2 pr-1 py-2 transition",
+          "flex items-center gap-1 rounded-lg border pl-2 pr-1 py-2 transition",
           enabled
-            ? "border-[var(--line-strong)] bg-[var(--accent-faint)]"
+            ? "border-[var(--accent)]/30 bg-[var(--accent-faint)]"
             : "border-[var(--line)] bg-[var(--surface-subtle)]",
         )}
       >
@@ -732,9 +744,9 @@ function ToggleToolRow({
           <span
             aria-hidden
             className={clsx(
-              "inline-flex items-center rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em]",
+              "eyebrow inline-flex items-center rounded px-1.5 py-0.5 text-[9px]",
               enabled
-                ? "bg-[var(--accent-faint)] text-[var(--accent)]"
+                ? "bg-[var(--accent-soft)] text-[var(--accent)]"
                 : "bg-[var(--muted)]/15 text-[var(--muted)]",
             )}
           >

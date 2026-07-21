@@ -42,7 +42,7 @@ describe("ChatMessage activity rendering", () => {
     );
 
     const activityToggle = screen.getByRole("button", {
-      name: "Activity · 1 tool · 2 thoughts · 2 sources",
+      name: "Activity · 1 tool · 2 thoughts · 2 sources retrieved",
     });
     expect(activityToggle.getAttribute("aria-expanded")).toBe("false");
 
@@ -106,7 +106,7 @@ describe("ChatMessage activity rendering", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Activity · 1 tool · 2 thoughts · 1 source",
+        name: "Activity · 1 tool · 2 thoughts · 1 source retrieved",
       }),
     ).toBeTruthy();
     expect(screen.queryByText("Running")).toBeNull();

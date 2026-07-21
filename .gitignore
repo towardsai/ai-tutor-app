@@ -213,6 +213,7 @@ frontend/*.tsbuildinfo
 !frontend/package-lock.json
 !frontend/tsconfig.json
 !frontend/public/towardsai-logo.png
+!frontend/public/towardsai-wordmark.png
 !frontend/app/icon.png
 !frontend/app/apple-icon.png
 !assets/full-stack-ai-engineer-course.png

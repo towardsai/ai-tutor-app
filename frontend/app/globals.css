@@ -1,84 +1,92 @@
 @import "tailwindcss";
 @import "highlight.js/styles/atom-one-dark.css";
 
+@theme inline {
+  --font-sans: var(--font-instrument-sans), "Helvetica Neue", Arial, sans-serif;
+  --font-serif: var(--font-lora), Georgia, serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", Menlo, monospace;
+}
+
 :root {
-  --font-sans:
-    ui-sans-serif,
-    -apple-system,
-    BlinkMacSystemFont,
-    "SF Pro Text",
-    "SF Pro Display",
-    "Segoe UI",
-    system-ui,
-    sans-serif;
-  --font-display: var(--font-sans);
-  --paper: #f7fbfe;
+  /* Towards AI brand tokens (from towardsai.com / /academy) */
+  --font-sans: var(--font-instrument-sans), "Helvetica Neue", Arial, sans-serif;
+  --font-display: var(--font-lora), Georgia, serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  --paper: #f8f7f4;
   --paper-strong: #ffffff;
-  --ink: #12213d;
-  --muted: #5f7393;
-  --panel: rgba(247, 251, 254, 0.8);
-  --panel-strong: rgba(255, 255, 255, 0.92);
-  --line: rgba(11, 136, 238, 0.08);
-  --line-strong: rgba(11, 136, 238, 0.18);
-  --accent: #0b88ee;
-  --accent-soft: rgba(11, 136, 238, 0.14);
-  --accent-faint: rgba(193, 235, 255, 0.42);
-  --success: #122acc;
-  --shadow: 0 24px 80px rgba(18, 42, 204, 0.12);
-  --surface: rgba(255, 255, 255, 0.78);
-  --surface-strong: rgba(255, 255, 255, 0.92);
+  --ink: #191c1e;
+  --navy: #0b1538;
+  --heading: #0b1538;
+  --muted: #6b6e7b;
+  --panel: rgba(255, 255, 255, 0.82);
+  --panel-strong: rgba(255, 255, 255, 0.96);
+  --line: #eeece7;
+  --line-strong: #dcd9d2;
+  --accent: #003ec7;
+  --accent-strong: #0052ff;
+  --accent-soft: rgba(0, 62, 199, 0.1);
+  --accent-faint: rgba(0, 62, 199, 0.055);
+  --success: #003ec7;
+  --btn-primary-bg: #0b1538;
+  --btn-primary-ink: #ffffff;
+  --btn-primary-hover: #1a2a5e;
+  --bubble-user: rgba(0, 62, 199, 0.065);
+  --shadow: 0 20px 60px rgba(11, 21, 56, 0.07);
+  --surface: rgba(255, 255, 255, 0.75);
+  --surface-strong: rgba(255, 255, 255, 0.95);
   --surface-soft: rgba(255, 255, 255, 0.55);
   --surface-subtle: rgba(255, 255, 255, 0.35);
-  --surface-hover: rgba(255, 255, 255, 0.9);
-  --app-bg:
-    radial-gradient(circle at top left, rgba(193, 235, 255, 0.42), transparent 26%),
-    radial-gradient(circle at top right, rgba(11, 136, 238, 0.18), transparent 24%),
-    linear-gradient(180deg, #eef7ff 0%, #f7fbfe 46%, #ffffff 100%);
-  --grid-dot: rgba(15, 23, 32, 0.018);
-  --scroll-track: rgba(15, 23, 32, 0.18);
-  --grain-dot: rgba(15, 23, 32, 0.9);
+  --surface-hover: rgba(255, 255, 255, 0.92);
+  --app-bg: linear-gradient(180deg, #f2f3f7 0%, #f8f7f4 40%, #f8f7f4 100%);
+  --grid-dot: rgba(11, 21, 56, 0.035);
+  --scroll-track: rgba(11, 21, 56, 0.18);
+  --grain-dot: rgba(11, 21, 56, 0.9);
   --grain-blend: multiply;
-  --grain-opacity: 0.08;
-  --code-border: rgba(15, 23, 32, 0.08);
+  --grain-opacity: 0.04;
+  --code-border: rgba(11, 21, 56, 0.1);
   --code-bg: rgba(255, 255, 255, 0.72);
-  --pre-bg: rgba(15, 23, 32, 0.96);
+  --pre-bg: #0b1538;
   --pre-color: #f7f2ea;
-  --hr-color: rgba(15, 23, 32, 0.1);
-  --table-header-bg: rgba(15, 23, 32, 0.04);
+  --hr-color: rgba(11, 21, 56, 0.1);
+  --table-header-bg: rgba(11, 21, 56, 0.04);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #0e1626;
-    --paper-strong: #13203a;
-    --ink: #e8edf5;
-    --muted: #94a5c2;
-    --panel: rgba(17, 28, 50, 0.74);
-    --panel-strong: rgba(25, 40, 72, 0.9);
-    --line: rgba(120, 180, 255, 0.1);
-    --line-strong: rgba(120, 180, 255, 0.24);
-    --accent: #4fa6f5;
-    --accent-soft: rgba(79, 166, 245, 0.2);
-    --accent-faint: rgba(79, 166, 245, 0.16);
-    --success: #6a8cff;
+    --paper: #0a1122;
+    --paper-strong: #111b36;
+    --ink: #eceef6;
+    --navy: #0b1538;
+    --heading: #e8ecf8;
+    --muted: #9aa3bd;
+    --panel: rgba(15, 24, 47, 0.78);
+    --panel-strong: rgba(19, 30, 58, 0.94);
+    --line: rgba(160, 175, 220, 0.12);
+    --line-strong: rgba(160, 175, 220, 0.24);
+    --accent: #7da2ff;
+    --accent-strong: #96b4ff;
+    --accent-soft: rgba(125, 162, 255, 0.18);
+    --accent-faint: rgba(125, 162, 255, 0.1);
+    --success: #7da2ff;
+    --btn-primary-bg: #2b58d8;
+    --btn-primary-ink: #ffffff;
+    --btn-primary-hover: #3866e6;
+    --bubble-user: rgba(125, 162, 255, 0.13);
     --shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
-    --surface: rgba(30, 46, 78, 0.6);
-    --surface-strong: rgba(36, 54, 90, 0.88);
-    --surface-soft: rgba(30, 46, 78, 0.4);
-    --surface-subtle: rgba(30, 46, 78, 0.26);
-    --surface-hover: rgba(42, 62, 100, 0.72);
-    --app-bg:
-      radial-gradient(circle at top left, rgba(79, 166, 245, 0.18), transparent 28%),
-      radial-gradient(circle at top right, rgba(99, 102, 241, 0.22), transparent 26%),
-      linear-gradient(180deg, #070c18 0%, #0a1224 46%, #0d172e 100%);
-    --grid-dot: rgba(255, 255, 255, 0.028);
+    --surface: rgba(30, 42, 74, 0.55);
+    --surface-strong: rgba(34, 48, 84, 0.88);
+    --surface-soft: rgba(30, 42, 74, 0.4);
+    --surface-subtle: rgba(30, 42, 74, 0.26);
+    --surface-hover: rgba(40, 56, 96, 0.72);
+    --app-bg: linear-gradient(180deg, #070d1d 0%, #0a1122 46%, #0c1428 100%);
+    --grid-dot: rgba(214, 224, 255, 0.03);
     --scroll-track: rgba(255, 255, 255, 0.16);
     --grain-dot: rgba(255, 255, 255, 0.5);
     --grain-blend: screen;
-    --grain-opacity: 0.05;
+    --grain-opacity: 0.04;
     --code-border: rgba(255, 255, 255, 0.12);
     --code-bg: rgba(255, 255, 255, 0.06);
-    --pre-bg: rgba(0, 0, 0, 0.5);
+    --pre-bg: rgba(2, 6, 18, 0.7);
     --pre-color: #f7f2ea;
     --hr-color: rgba(255, 255, 255, 0.12);
     --table-header-bg: rgba(255, 255, 255, 0.05);
@@ -96,28 +104,20 @@ html {
 }
 
 body {
-  min-height: 100vh;
+  height: 100dvh;
   margin: 0;
   font-family: var(--font-sans), sans-serif;
   line-height: 1.5;
-  letter-spacing: -0.012em;
+  letter-spacing: -0.006em;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-feature-settings: "ss01" 1, "ss03" 1, "cv11" 1;
   color: var(--ink);
   background-image:
     linear-gradient(var(--grid-dot) 1px, transparent 1px),
     linear-gradient(90deg, var(--grid-dot) 1px, transparent 1px);
   background-size: 32px 32px;
-  overflow-x: hidden;
-}
-
-@media (min-width: 1024px) {
-  body {
-    height: 100vh;
-    overflow: hidden;
-  }
+  overflow: hidden;
 }
 
 a {
@@ -132,7 +132,30 @@ textarea {
 }
 
 ::selection {
-  background: rgba(11, 136, 238, 0.18);
+  background: rgba(0, 62, 199, 0.16);
+}
+
+/* Recolorable Towards AI wordmark (mask so it adapts to light/dark). */
+.ta-wordmark {
+  display: inline-block;
+  aspect-ratio: 760 / 72;
+  background-color: var(--heading);
+  mask-image: url("/towardsai-wordmark.png");
+  mask-repeat: no-repeat;
+  mask-size: contain;
+  mask-position: left center;
+  -webkit-mask-image: url("/towardsai-wordmark.png");
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  -webkit-mask-position: left center;
+}
+
+/* Small uppercase IBM Plex Mono labels, as on towardsai.com eyebrows. */
+.eyebrow {
+  font-family: var(--font-mono), monospace;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
 }
 
 .glass-panel {
@@ -148,9 +171,10 @@ textarea {
 }
 
 .display-font {
-  font-family: var(--font-display), sans-serif;
-  font-weight: 620;
-  letter-spacing: -0.045em;
+  font-family: var(--font-display), serif;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  color: var(--heading);
 }
 
 .grain-mask::before {
@@ -200,11 +224,11 @@ textarea {
 @keyframes pulse-border {
   0%,
   100% {
-    box-shadow: inset 0 0 0 1px rgba(11, 136, 238, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(0, 62, 199, 0.12);
   }
 
   50% {
-    box-shadow: inset 0 0 0 1px rgba(11, 136, 238, 0.34);
+    box-shadow: inset 0 0 0 1px rgba(0, 62, 199, 0.34);
   }
 }
 
@@ -215,19 +239,6 @@ textarea {
 
   100% {
     transform: translateX(160%);
-  }
-}
-
-@keyframes processing-orb {
-  0%,
-  100% {
-    transform: translate(0, -50%) scale(0.95);
-    opacity: 0.2;
-  }
-
-  50% {
-    transform: translate(calc(100% + 5.75rem), -50%) scale(1.08);
-    opacity: 0.42;
   }
 }
 
@@ -252,29 +263,9 @@ textarea {
   animation: pulse-border 1.8s ease-in-out infinite;
 }
 
-.processing-button__sheen {
-  background:
-    linear-gradient(
-      115deg,
-      transparent 18%,
-      rgba(255, 255, 255, 0.14) 38%,
-      rgba(255, 255, 255, 0.78) 50%,
-      rgba(255, 255, 255, 0.16) 62%,
-      transparent 82%
-    );
-  animation: processing-sheen 1.65s linear infinite;
-}
-
-.processing-button__orb {
-  background:
-    radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0) 72%);
-  filter: blur(2px);
-  animation: processing-orb 2.2s ease-in-out infinite;
-}
-
 .processing-button__pulse {
   background: currentColor;
-  box-shadow: 0 0 0 0 rgba(11, 136, 238, 0.18);
+  box-shadow: 0 0 0 0 rgba(0, 62, 199, 0.18);
   animation: processing-pulse 1.2s ease-in-out infinite;
 }
 
@@ -282,9 +273,9 @@ textarea {
   background: linear-gradient(
     115deg,
     transparent 18%,
-    rgba(11, 136, 238, 0.1) 40%,
-    rgba(11, 136, 238, 0.24) 50%,
-    rgba(11, 136, 238, 0.1) 60%,
+    rgba(0, 62, 199, 0.1) 40%,
+    rgba(0, 62, 199, 0.24) 50%,
+    rgba(0, 62, 199, 0.1) 60%,
     transparent 82%
   );
   animation: processing-sheen 1.9s linear infinite;
@@ -316,11 +307,11 @@ textarea {
 .markdown-block h3,
 .markdown-block h4 {
   margin: 1.1rem 0 0.55rem;
-  font-family: var(--font-display), sans-serif;
-  font-weight: 620;
-  letter-spacing: -0.035em;
-  line-height: 1.04;
-  color: var(--ink);
+  font-family: var(--font-display), serif;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--heading);
 }
 
 .markdown-block h1 {
@@ -374,7 +365,7 @@ textarea {
 }
 
 .markdown-block blockquote {
-  border-left: 3px solid rgba(11, 136, 238, 0.32);
+  border-left: 3px solid rgba(0, 62, 199, 0.32);
   padding-left: 0.9rem;
   color: var(--muted);
 }
@@ -382,7 +373,7 @@ textarea {
 .markdown-block a {
   color: var(--accent);
   text-decoration: underline;
-  text-decoration-color: rgba(11, 136, 238, 0.28);
+  text-decoration-color: rgba(0, 62, 199, 0.28);
   text-underline-offset: 0.14em;
 }
 

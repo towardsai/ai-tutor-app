@@ -3,7 +3,15 @@
 import clsx from "clsx";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { Check, ChevronDown, Lock, Send, Square, WandSparkles } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Lock,
+  Menu,
+  Send,
+  Square,
+  SquarePen,
+} from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -78,6 +86,7 @@ export function ChatShell() {
   const [toolRegistryReady, setToolRegistryReady] = useState(false);
   const [input, setInput] = useState("");
   const [threadId, setThreadId] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
@@ -430,19 +439,75 @@ export function ChatShell() {
   }
 
   return (
-    <main className="min-h-screen p-2 lg:h-screen lg:overflow-hidden">
-      <div className="flex min-h-[calc(100vh-1rem)] w-full flex-col gap-2 lg:h-[calc(100vh-1rem)] lg:min-h-0 lg:grid lg:grid-cols-[248px_minmax(0,1fr)]">
-        <SourceSidebar
-          onNewChat={handleNewChat}
-          onToggleSource={toggleSource}
-          onToggleTool={toggleTool}
-          selectedSourceKeys={selectedSourceKeys}
-          enabledToolKeys={enabledToolKeys}
-          sourceError={sourceError}
-          tools={tools}
-        />
+    <main className="h-dvh overflow-hidden p-2">
+      <div className="flex h-full w-full flex-col gap-2 lg:grid lg:grid-cols-[248px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]">
+        <header className="glass-panel flex shrink-0 items-center justify-between gap-2 rounded-[1rem] px-2.5 py-2 lg:hidden">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open sources and tools"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--heading)] transition hover:bg-[var(--surface-hover)]"
+          >
+            <Menu className="h-4.5 w-4.5" />
+          </button>
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span
+              role="img"
+              aria-label="Towards AI"
+              className="ta-wordmark h-[11px] w-[116px] shrink-0"
+            />
+            <span className="font-serif text-[15px] font-medium italic leading-none text-[var(--accent)]">
+              Tutor
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={handleNewChat}
+            aria-label="Start a new chat"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--heading)] transition hover:bg-[var(--surface-hover)]"
+          >
+            <SquarePen className="h-4 w-4" />
+          </button>
+        </header>
 
-        <section className="glass-panel flex min-h-0 flex-col overflow-hidden rounded-[1.5rem] p-2 sm:p-2.5 lg:max-h-[calc(100vh-1rem)] lg:min-h-[calc(100vh-1rem)]">
+        <div className="hidden lg:block lg:h-full lg:min-h-0">
+          <SourceSidebar
+            onNewChat={handleNewChat}
+            onToggleSource={toggleSource}
+            onToggleTool={toggleTool}
+            selectedSourceKeys={selectedSourceKeys}
+            enabledToolKeys={enabledToolKeys}
+            sourceError={sourceError}
+            tools={tools}
+          />
+        </div>
+
+        {sidebarOpen ? (
+          <div className="fixed inset-0 z-40 lg:hidden">
+            <div
+              aria-hidden
+              onClick={() => setSidebarOpen(false)}
+              className="absolute inset-0 bg-[rgba(11,21,56,0.45)] backdrop-blur-sm"
+            />
+            <div className="absolute inset-y-0 left-0 w-[300px] max-w-[85vw] p-2">
+              <SourceSidebar
+                onNewChat={() => {
+                  handleNewChat();
+                  setSidebarOpen(false);
+                }}
+                onToggleSource={toggleSource}
+                onToggleTool={toggleTool}
+                selectedSourceKeys={selectedSourceKeys}
+                enabledToolKeys={enabledToolKeys}
+                sourceError={sourceError}
+                tools={tools}
+                onClose={() => setSidebarOpen(false)}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        <section className="glass-panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-[1rem] p-2 sm:p-2.5 lg:h-full lg:flex-none">
           <div
             ref={threadViewportRef}
             className="scrollbar-thin min-h-0 flex-1 overflow-y-auto"
@@ -488,7 +553,7 @@ export function ChatShell() {
 
           <footer className="sticky bottom-0 z-10 mt-2">
             <div className={chatColumnClass}>
-              <div className="rounded-[1.1rem] border border-[var(--line)] bg-[var(--panel-strong)] px-2.5 py-2 shadow-[0_10px_30px_rgba(18,42,204,0.08)] backdrop-blur-xl">
+              <div className="rounded-[0.9rem] border border-[var(--line-strong)] bg-[var(--panel-strong)] px-2.5 py-2 shadow-[0_10px_30px_rgba(11,21,56,0.06)] backdrop-blur-xl">
                 <textarea
                   ref={composerInputRef}
                   rows={1}
@@ -610,10 +675,10 @@ function ModelPicker({
       {locked ? (
         <span
           role="tooltip"
-          className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 whitespace-nowrap rounded-[0.6rem] border border-[var(--line)] bg-[var(--panel-strong)] px-2.5 py-1.5 opacity-0 shadow-[0_8px_20px_rgba(18,42,204,0.12)] backdrop-blur-xl transition-opacity duration-150 group-hover:opacity-100"
+          className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 whitespace-nowrap rounded-[0.6rem] border border-[var(--line)] bg-[var(--panel-strong)] px-2.5 py-1.5 opacity-0 shadow-[0_8px_20px_rgba(11,21,56,0.1)] backdrop-blur-xl transition-opacity duration-150 group-hover:opacity-100"
         >
           <span className="text-[10.5px] font-medium tracking-[-0.005em] text-[var(--ink)]">
-            Start a new chat to change models
+            This conversation stays on one model. Start a new chat to switch.
           </span>
         </span>
       ) : null}
@@ -642,7 +707,7 @@ function ModelPicker({
         )}
       >
         <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
-        <span className="text-[10.5px] font-medium tracking-[-0.005em]">
+        <span className="font-mono text-[10px] font-medium tracking-[0.02em]">
           {label}
         </span>
         {locked ? (
@@ -662,7 +727,7 @@ function ModelPicker({
         <div
           role="listbox"
           aria-label="Select model"
-          className="absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-[0.9rem] border border-[var(--line)] bg-[var(--panel-strong)] p-1 shadow-[0_16px_40px_rgba(18,42,204,0.18)] backdrop-blur-xl"
+          className="absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-[0.9rem] border border-[var(--line)] bg-[var(--panel-strong)] p-1 shadow-[0_16px_40px_rgba(11,21,56,0.14)] backdrop-blur-xl"
         >
           {availableModels.map((model) => {
             const isActive = model.id === selectedModel;
@@ -739,13 +804,13 @@ function ComposerActionButton({
       title={isStreaming ? "Stop generating" : "Send message"}
       style={{ "--glass-x": "50%", "--glass-y": "50%" } as React.CSSProperties}
       className={clsx(
-        "relative inline-flex h-10 min-w-[8.75rem] items-center justify-center overflow-hidden rounded-full px-4 text-sm font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.28),inset_0_-1px_0_rgba(0,0,0,0.08)] transition disabled:cursor-not-allowed disabled:opacity-50",
+        "relative inline-flex h-10 min-w-[8.75rem] items-center justify-center overflow-hidden rounded-lg px-4 text-[12px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-45",
         isStreaming
-          ? "border border-[var(--line-strong)] bg-[rgba(11,136,238,0.12)] text-[var(--accent)] hover:border-[var(--accent)] hover:bg-[rgba(11,136,238,0.15)]"
-          : "bg-[var(--accent)] text-white hover:brightness-110",
+          ? "border border-[var(--line-strong)] bg-[var(--surface-soft)] text-[var(--muted)] hover:border-[var(--accent)]/50 hover:text-[var(--accent)]"
+          : "bg-[var(--btn-primary-bg)] text-[var(--btn-primary-ink)] uppercase tracking-[0.08em] hover:bg-[var(--btn-primary-hover)]",
       )}
     >
-      {!disabled ? (
+      {!disabled && !isStreaming ? (
         <span
           ref={highlightRef}
           aria-hidden="true"
@@ -761,26 +826,16 @@ function ComposerActionButton({
         />
       ) : null}
       {isStreaming ? (
-        <>
+        <span className="relative z-10 inline-flex items-center gap-2.5">
           <span
             aria-hidden="true"
-            className="processing-button__sheen absolute inset-0 rounded-full"
+            className="processing-button__pulse h-2 w-2 rounded-full text-[var(--accent)]"
           />
-          <span
-            aria-hidden="true"
-            className="processing-button__orb absolute left-2 top-1/2 h-6 w-6 -translate-y-1/2 rounded-full"
-          />
-          <span className="relative z-10 inline-flex items-center gap-2.5">
-            <span
-              aria-hidden="true"
-              className="processing-button__pulse h-2.5 w-2.5 rounded-full"
-            />
-            <span>{streamingLabel}</span>
-            <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white/92 text-[var(--accent)] shadow-[0_6px_16px_rgba(11,136,238,0.18)]">
-              <Square className="h-3 w-3 fill-current" />
-            </span>
+          <span>{streamingLabel}</span>
+          <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-[var(--accent-soft)] text-[var(--accent)]">
+            <Square className="h-3 w-3 fill-current" />
           </span>
-        </>
+        </span>
       ) : (
         <span className="relative z-10 inline-flex items-center gap-2">
           <Send className="h-4 w-4" />
@@ -1035,13 +1090,14 @@ function EmptyConversation({
 
   return (
     <div className="flex min-h-full flex-1 flex-col items-center justify-center px-4 py-10 text-center">
-      <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--accent-faint)] text-[var(--accent)]">
-        <WandSparkles className="h-5 w-5" />
-      </div>
-      <h2 className="display-font mt-4 text-[1.95rem] leading-[1] text-[var(--ink)] sm:text-[2.2rem]">
-        Ask your AI tutor
+      <span className="eyebrow text-[10.5px] text-[var(--accent)]">
+        Towards AI Academy
+      </span>
+      <h2 className="display-font mt-3 text-[2.1rem] leading-[1.1] sm:text-[2.5rem]">
+        Ask your{" "}
+        <em className="italic text-[var(--accent)]">AI tutor</em>
       </h2>
-      <p className="mt-2 max-w-md text-[13.5px] leading-[1.6] text-[var(--muted)]">
+      <p className="mt-3 max-w-md text-[13.5px] leading-[1.6] text-[var(--muted)]">
         Your companion for{" "}
         <a
           href="https://academy.towardsai.net/"
@@ -1060,9 +1116,9 @@ function EmptyConversation({
             key={suggestion.title}
             type="button"
             onClick={() => onSelect(suggestion.prompt)}
-            className="group flex flex-col items-start gap-1 rounded-[0.95rem] border border-[var(--line)] bg-[var(--surface)] px-3.5 py-3 text-left transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:bg-[var(--surface-strong)] hover:shadow-[0_8px_20px_rgba(11,136,238,0.08)]"
+            className="group flex flex-col items-start gap-1 rounded-lg border border-[var(--line-strong)] bg-[var(--paper-strong)] px-3.5 py-3 text-left transition hover:-translate-y-0.5 hover:border-[var(--accent)]/60 hover:shadow-[0_8px_20px_rgba(11,21,56,0.07)]"
           >
-            <span className="text-[12.5px] font-semibold tracking-[-0.01em] text-[var(--ink)]">
+            <span className="text-[12.5px] font-semibold tracking-[-0.01em] text-[var(--heading)]">
               {suggestion.title}
             </span>
             <span className="text-[12px] leading-[1.45] text-[var(--muted)]">

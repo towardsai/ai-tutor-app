@@ -129,10 +129,10 @@ export function ChatMessage({
     >
       <article
         className={clsx(
-          "rounded-[1.8rem] border px-4 py-3 text-left shadow-[0_20px_50px_rgba(18,42,204,0.08)] transition outline-none sm:px-5",
+          "rounded-[1.1rem] border px-4 py-3 text-left shadow-[0_16px_40px_rgba(11,21,56,0.05)] transition outline-none sm:px-5",
           isAssistant
             ? "w-full border-[var(--line)] bg-[var(--surface)]"
-            : "ml-auto border-[var(--accent)] bg-[linear-gradient(135deg,rgba(11,136,238,0.16),rgba(193,235,255,0.35))]",
+            : "ml-auto border-[var(--accent)]/25 bg-[var(--bubble-user)]",
         )}
       >
         {isEditing && !isAssistant ? (
@@ -252,7 +252,7 @@ function InlineEditor({
           type="button"
           onClick={onCancel}
           disabled={disabled}
-          className="rounded-full border border-[var(--accent)]/20 bg-[var(--surface-soft)] px-3 py-1.5 text-sm font-medium text-[var(--ink)] transition enabled:hover:border-[var(--accent)] enabled:hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-lg border border-[var(--line-strong)] bg-[var(--surface-soft)] px-3 py-1.5 text-sm font-medium text-[var(--ink)] transition enabled:hover:border-[var(--accent)] enabled:hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           Cancel
         </button>
@@ -260,7 +260,7 @@ function InlineEditor({
           type="button"
           onClick={onSave}
           disabled={disabled || !trimmed}
-          className="rounded-full bg-[var(--accent)] px-3 py-1.5 text-sm font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-lg bg-[var(--btn-primary-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--btn-primary-ink)] transition hover:bg-[var(--btn-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           Save
         </button>
@@ -287,7 +287,7 @@ function MessageActionButton({
       disabled={disabled}
       aria-label={label}
       title={label}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--line)] bg-[var(--surface)] text-[var(--muted)] shadow-[0_8px_24px_rgba(18,42,204,0.06)] transition enabled:hover:border-[var(--accent)] enabled:hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
+      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--line)] bg-[var(--surface)] text-[var(--muted)] shadow-[0_8px_24px_rgba(11,21,56,0.05)] transition enabled:hover:border-[var(--accent)] enabled:hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
     >
       {children}
     </button>
@@ -353,7 +353,7 @@ function ActivityPanel({
   });
 
   return (
-    <section className="relative overflow-hidden rounded-[1.35rem] border border-[var(--line)] bg-[var(--surface)]">
+    <section className="relative overflow-hidden rounded-[0.9rem] border border-[var(--line)] bg-[var(--surface)]">
       {isActive ? (
         <span
           aria-hidden="true"
@@ -429,7 +429,7 @@ function buildActivitySummary({
   }
   if (sourceCount > 0) {
     fragments.push(
-      `${sourceCount} source${sourceCount === 1 ? "" : "s"}`,
+      `${sourceCount} source${sourceCount === 1 ? "" : "s"} retrieved`,
     );
   }
   return fragments.join(" · ");
@@ -516,7 +516,7 @@ function ToolRow({ part }: { part: TutorMessagePart }) {
         aria-expanded={canExpand ? isOpen : undefined}
       >
         <ToolKindIcon type={part.type} className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
-        <span className="shrink-0 text-[11px] uppercase tracking-[0.06em] text-[var(--muted)]">
+        <span className="shrink-0 font-mono text-[10.5px] uppercase tracking-[0.06em] text-[var(--muted)]">
           {name}
         </span>
         {inputSummary ? (
@@ -757,10 +757,10 @@ function CitationRow({
 }) {
   return (
     <section className="mt-2 space-y-2 border-t border-[var(--line)] pt-3">
-      <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+      <div className="inline-flex items-center gap-1.5 text-[var(--muted)]">
         <LibraryBig className="h-3.5 w-3.5 text-[var(--accent)]" />
-        <span>Sources</span>
-        <span className="rounded-full bg-[var(--accent-faint)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
+        <span className="eyebrow text-[9.5px]">Cited sources</span>
+        <span className="eyebrow rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[9.5px] text-[var(--accent)]">
           {citations.length}
         </span>
       </div>
@@ -776,7 +776,7 @@ function CitationRow({
           const cardChildren = (
             <>
               {number !== undefined ? (
-                <span className="shrink-0 rounded-full bg-[var(--surface)] px-1.5 text-[10px] font-semibold text-[var(--accent)]">
+                <span className="shrink-0 rounded bg-[var(--accent-soft)] px-1.5 font-mono text-[10px] font-semibold text-[var(--accent)]">
                   {number}
                 </span>
               ) : null}
@@ -790,7 +790,7 @@ function CitationRow({
           const cardKey = `${citation.kind}-${citation.url}-${index}`;
           const cardTitle = `${meta.label}${citation.sublabel ? ` · ${citation.sublabel}` : ""}`;
           const cardClassName =
-            "group inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--line-strong)] bg-[var(--accent-faint)] px-2.5 py-1.5 text-xs font-medium text-[var(--accent)] transition hover:border-[var(--accent)] hover:bg-[var(--surface-strong)]";
+            "group inline-flex max-w-full items-center gap-1.5 rounded-lg border border-[var(--line-strong)] bg-[var(--paper-strong)] px-2.5 py-1.5 text-xs font-medium text-[var(--ink)] transition hover:border-[var(--accent)]/60 hover:text-[var(--accent)]";
           if (!navigable) {
             return (
               <span key={cardKey} title={cardTitle} className={cardClassName}>
