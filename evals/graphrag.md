@@ -26,7 +26,9 @@ The **only** variable is the retrieval backend behind `retrieve_tutor_context`:
   classical so the comparison is fair.
 
 Held constant: the **chat model is Gemini 3.5 Flash** (the agent that writes the
-answer, `run_battery` default), the system prompt, the battery, the token budget,
+answer; both arms pass `--model google-genai:gemini-3.5-flash` explicitly --
+`run_battery`'s no-flag default is the app default model, since moved to
+DeepSeek V4 Flash), the system prompt, the battery, the token budget,
 and source scoping. The GraphRAG retriever is a **context provider only** -- it
 never runs GraphRAG's own LLM answer-synthesis, so the agent's 3.5 Flash is the
 sole generation model in both arms.

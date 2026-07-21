@@ -16,7 +16,7 @@ Built by [Louis-François Bouchard](https://www.linkedin.com/in/whats-ai/) ([X](
 
 The live app is deployed on Hugging Face Spaces at: [AI Tutor Chatbot on Hugging Face](https://huggingface.co/spaces/towardsai-tutors/ai-tutor-chatbot) (prod).
 
-**Deployment flow:** every push to `main` (except docs/markdown-only and scraping-script-only changes) auto-deploys to the private dev Space ([ai-tutor](https://huggingface.co/spaces/towardsai-tutors/ai-tutor)) for verification; the prod Space is promoted manually via the "Deploy prod to Hugging Face" workflow in the Actions tab.
+**Deployment flow:** every push to `main` (except docs/markdown-only and scraping-script-only changes) auto-deploys to the private dev Space ([ai-tutor](https://huggingface.co/spaces/towardsai-tutors/ai-tutor)) for verification; the prod Space is promoted manually via the "Deploy prod to Hugging Face (ai-tutor-chatbot)" workflow in the Actions tab.
 
 ### Workshop, slides, and going deeper
 

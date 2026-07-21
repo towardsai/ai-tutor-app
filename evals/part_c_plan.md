@@ -60,9 +60,9 @@ Winners (2-3) + 1-2 combinations (e.g. `profile_memory` + `clear_retrieval_kb`) 
 
 How a variant is actually wired, so a fresh session can replicate it.
 
-**Middleware hook API.** Custom middlewares subclass `AgentMiddleware` and override `wrap_model_call(self, request, handler)` (+ async `awrap_model_call`): mutate the request via `request.override(messages=…, system_message=…, model_settings=…)`, then `return handler(request)`. Templates in `chat_service.py`: `SourcePreferenceMiddleware` (:803), `StudentProfileMiddleware` (:852). The built-in *state-rewriting* compaction (`SummarizationMiddleware`, `ContextEditingMiddleware`) is assembled in `build_agent_middleware` (:894) from `MemoryConfig` flags.
+**Middleware hook API.** Custom middlewares subclass `AgentMiddleware` and override `wrap_model_call(self, request, handler)` (+ async `awrap_model_call`): mutate the request via `request.override(messages=…, system_message=…, model_settings=…)`, then `return handler(request)`. Templates in `chat_service.py`: `SourcePreferenceMiddleware`, `StudentProfileMiddleware`. The built-in *state-rewriting* compaction (`SummarizationMiddleware`, `ContextEditingMiddleware`) is assembled in `build_agent_middleware` from `MemoryConfig` flags. (Line numbers drift; grep the symbol names.)
 
-**Telemetry-signal gotcha (now solved by the turn-signal registry).** `context_window_stats` (`app/telemetry.py`) runs over the **checkpointed** messages (called near `chat_service.py:1526`) and detects markers: `lc_source: summarization` and the `CLEARED_TOOL_OUTPUT_PLACEHOLDER`. A middleware that only reduces the *per-call* view via `wrap_model_call` leaves the checkpoint unchanged, so it would emit no signal. The general fix is in place: a per-turn signal registry in `app/telemetry.py` (`reset_turn_signals(message_id)` at turn start, `record_turn_signal(message_id, name, n)` from the middleware, `pop_turn_signals(message_id)` merged into the `context_stats` event). A new per-call-view mechanism just calls `record_turn_signal` with a name, adds that name to `COMPACTION_SIGNAL_NAMES` (app) **and** `COMPACTION_SIGNAL_KEYS` (`evals/common.py`, kept in sync by a unit test), and the gate + report pick it up. A module-level dict + lock (not a `ContextVar`) because LangChain may run sync `wrap_model_call` in a worker thread.
+**Telemetry-signal gotcha (now solved by the turn-signal registry).** `context_window_stats` (`app/telemetry.py`) runs over the **checkpointed** messages (called from `stream_chat` in `chat_service.py`) and detects markers: `lc_source: summarization` and the `CLEARED_TOOL_OUTPUT_PLACEHOLDER`. A middleware that only reduces the *per-call* view via `wrap_model_call` leaves the checkpoint unchanged, so it would emit no signal. The general fix is in place: a per-turn signal registry in `app/telemetry.py` (`reset_turn_signals(message_id)` at turn start, `record_turn_signal(message_id, name, n)` from the middleware, `pop_turn_signals(message_id)` merged into the `context_stats` event). A new per-call-view mechanism just calls `record_turn_signal` with a name, adds that name to `COMPACTION_SIGNAL_NAMES` (app) **and** `COMPACTION_SIGNAL_KEYS` (`evals/common.py`, kept in sync by a unit test), and the gate + report pick it up. A module-level dict + lock (not a `ContextVar`) because LangChain may run sync `wrap_model_call` in a worker thread.
 
 **Worked example 1 — `clear_retrieval_kb` (built, verified).** One `MemoryConfig` field `clear_excludes_retrieval` (default True = prod). `build_agent_middleware` sets `ClearToolUsesEdit(exclude_tools=("retrieve_tutor_context",) if clear_excludes_retrieval else ())`. Reuses the `cleared_tool_outputs` signal → zero telemetry/gate work. The F3 fix in ~5 lines. Run: `--preset clear_retrieval_kb`.
 
@@ -81,8 +81,8 @@ How a variant is actually wired, so a fresh session can replicate it.
 | Variant | Axis | Shape | Wiring | `context_stats` signal | Tests / finding |
 |---|---|---|---|---|---|
 | `sliding_window` | A | preset | keep last N messages middleware | `dropped_messages` | F9/F10 — recency-only memory |
-| `delta_summarization` | A | preset | running summary, new-only | reuse `summary_messages` + `summary_mode` | F2 cache confound |
-| `hierarchical_summarization` | A | preset | summarize chunks then summaries | `summary_levels` | long-session compaction |
+| `delta_summarization` | A | preset | running summary, new-only | reuse `summary_messages` (as built; no `summary_mode` signal) | F2 cache confound |
+| `hierarchical_summarization` | A | preset | summarize chunks then summaries | reuse `summary_messages` (as built; no `summary_levels` signal) | long-session compaction |
 | `context_reset` | A | preset | fresh state seeded w/ summary | reuse `summary_messages` (summary-prompt variant) | F2; prefix rewrite |
 | `prompt_compression` | A | preset | rewrite history fewer tokens | `compressed_messages`, `chars_saved` | F2 |
 | `selective_retention` | A | preset | summary prompt keeps constraints/decisions | reuse `summary_messages` | quality-preserving compaction |
@@ -93,7 +93,7 @@ How a variant is actually wired, so a fresh session can replicate it.
 | `observation_truncation` | B | preset | head/tail tool outputs incl. KB | `truncated_tool_outputs`, `chars_saved` | F1 — tokens are in tool outputs |
 | `clear_retrieval_kb` | B | preset | extend `ClearToolUsesEdit` to retrieval + KB | `cleared_tool_outputs` (now fires) | F3 — clearing excluded them |
 | `retrieval_budget_{100k,30k,10k}` | B | knob | `DEFAULT_CONTEXT_TOKEN_BUDGET` | (token counts already captured) + `retrieval_budget` | F1 — direct |
-| `kb_off` | B | toggle | `disable_kb` flag + drop KB prompt block | `kb_enabled` | does the KB improve answers? (89%/9:1 usage) |
+| `kb_off` | B | toggle | `disable_kb` flag + drop KB prompt block | none as built (request flag only; no `kb_enabled` signal) | does the KB improve answers? (89%/9:1 usage) |
 
 Stretch (post-workshop, evals.md): `temporal_graph_memory` (scorecard = `fact_update` probe), `subagent_isolation` (reframed as a tool-output-token play).
 
@@ -157,7 +157,7 @@ Same authoring model as v1 — real filler + authored planted facts + a binary `
 1. **Freeze + data discipline.** v2 is a new file; never touch v1. Gitignored; lives only in the private `ai-tutor-data` HF dataset under `eval/`.
 2. **Author Tier 1 first** (moderate contradiction sessions), reusing real corpus filler; model the shape on `data/eval/sessions_generated_*.jsonl` and the schema in `data/eval/README.md`. Add Tier 2 long-horizon sessions only if we decide Q1 is worth the spend/workshop story.
 3. **Calibrate by tokens and observed context state, not turn count.** For Q2, confirm prod summarization/compaction fired and A is no longer in the kept-recent window before the contradiction probe; if A is still visible to prod, the probe measures nothing. For Q1, smoke-run a few lengths (for example 30/45/60 turns) and confirm `full_history` cost actually diverges before running a screen.
-4. **Wire grading** — add `contradiction` / `longhorizon_recall` / `entity_isolation` rubric entries to `evals/judge.py` (`RUBRICS`) and the human rubric. *(Done — all three are in `RUBRICS`.)*
+4. **Wire grading** — add `contradiction` / `longhorizon_recall` / `entity_isolation` grading to `evals/judge.py` and the human rubric. *(Done — all three route through the shared `probe` rubric via per-type instruction text, not separate `RUBRICS` keys.)*
 5. **Test `full_history` + `prod` + `incontext` + active `profile_memory` first.** This answers the cheap questions and tells us what, if anything, to build: does `full_history` fail contradictions (Q2), does `profile_memory` recover them through the store, and does `incontext` match `full_history`'s recall at lower all-in cost once sessions are actually long (Q1)?
 6. **Build only what the data demands**, one at a time, single-axis vs prod (each new mechanism needs its own `context_stats` signal mirrored in `evals/common.py` or the probe gate will not see it fire):
    - `temporal_graph_memory` — **only if** `full_history` fails Q2's contradictions.

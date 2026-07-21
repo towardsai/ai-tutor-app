@@ -77,7 +77,7 @@ Array.from(document.querySelectorAll('.course-player__chapter-item__header'))
   .reduce((a, b) => a + +b, 0);
 ```
 
-Gotcha: the Chrome `javascript_exec` tool truncates any string result at
+Gotcha: the Chrome `javascript_tool` MCP tool truncates any string result at
 about 1024 characters. Stash the full list on `window.__pairs` and read it
 back in small slices (`window.__pairs.slice(0, 8).join('\n')`).
 
@@ -218,7 +218,7 @@ open(JSONL_PATH, 'w').writelines(out)
 
 ## Operational notes that tend to bite
 
-- Chrome `javascript_exec` output is truncated at ~1024 chars.
+- Chrome `javascript_tool` output is truncated at ~1024 chars.
 - `super.site` iframes are cross-origin — you can only read `iframe.src`,
   not their DOM.
 - Teachable sidebars lazy-render; always expand chapters before scraping.

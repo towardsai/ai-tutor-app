@@ -7,7 +7,7 @@ Make sure you have the required environment variables set:
 - `GEMINI_API_KEY` or `GOOGLE_API_KEY` for context generation with Gemini
 - `COHERE_API_KEY` for embeddings
 - `HF_TOKEN` for HuggingFace uploads and downloads - [access to the private HuggingFace dataset repo](https://huggingface.co/datasets/towardsai-tutors/ai-tutor-data/tree/main)
-- `GITHUB_TOKEN` for accessing files via the GitHub API
+- `GITHUB_TOKEN` for accessing files via the GitHub API (used by the docs workflow only; the course workflow never calls GitHub)
 
 Optional Gemini context-generation tuning:
 
@@ -15,6 +15,8 @@ Optional Gemini context-generation tuning:
 - `GEMINI_CONTEXT_TPM_SAFETY_MARGIN` - fraction of that quota to use before pausing (defaults to `0.8`)
 - `GEMINI_CONTEXT_CONCURRENCY` - max concurrent context requests (defaults to `50`)
 - `GEMINI_CONTEXT_RETRY_ATTEMPTS` - max tenacity attempts for transient Gemini API errors (defaults to `8`)
+- `GEMINI_CONTEXT_MODEL` - Gemini model used for context generation (defaults to `gemini-3.1-flash-lite`)
+- `GEMINI_CONTEXT_TPM_WINDOW_SECONDS` - sliding-window length in seconds for the TPM throttle (defaults to `60`)
 
 ## 1. Prepare the course data
 
@@ -50,7 +52,11 @@ Optional Gemini context-generation tuning:
 8. Open `data/scraping_scripts/source_registry.py`.
 
 9. Add the new course to the `SOURCE_CONFIGS` dictionary. Sources listed in
-   this registry are active in the knowledge base.
+   this registry are active in the knowledge base. Also add the key to
+   `COURSE_SOURCE_KEYS` in the same file: a course missing from that tuple is
+   classified as documentation (its pages land under `raw/docs/` and
+   `wiki/frameworks/` with the wrong picker group) and
+   `test_registry_classifies_every_source` fails CI.
 
    example:
 
@@ -89,8 +95,8 @@ uv run -m data.scraping_scripts.add_course_workflow --courses master_ai_for_work
 
 This script will guide you through the complete process, it will:
 
-   1. Extract the markdown content from each of the lessons and create a new JSONL file for the course
-   2. Download the JSONL files from the other courses
+   1. Download the JSONL files from the other courses
+   2. Extract the markdown content from each of the lessons and create a new JSONL file for the course
    3. Prompt you to manually add URLs to the course content, inside the newly created JSONL file (more details in step 3 below)
    4. Merge the course data into the main dataset
    5. Rebuild the KB artifacts (raw/generated/wiki; skip with `--skip-kb`)
@@ -341,7 +347,7 @@ download small).
 3. By default, only new content will have context added to save time and resources. Use `--process-all-context` only if you need to regenerate context for all documents. Use `--skip-data-upload` if you don't want to upload data files to the private HuggingFace repo (they're uploaded by default).
 
 4. When adding a new course, verify that it appears in the UI:
-   - Add the source to all four registry structures in `source_registry.py`: `SOURCE_KEY_TO_LABEL`, `SOURCE_DISPLAY_INFO` (what `/api/tools` renders), `UI_SOURCE_KEYS` (a source absent here never appears in the picker), and optionally `DEFAULT_SELECTED_SOURCE_KEYS`
+   - Add the source to the registry structures in `source_registry.py`: `COURSE_SOURCE_KEYS` (classification; a course absent here is treated as documentation and fails CI), `SOURCE_KEY_TO_LABEL`, `SOURCE_DISPLAY_INFO` (what `/api/tools` renders), `UI_SOURCE_KEYS` (a source absent here never appears in the picker), and optionally `DEFAULT_SELECTED_SOURCE_KEYS`
    - Check that the new source appears in the source picker in the UI
    - Make sure it's properly included in the default selected sources if desired
    - Restart the API server to see the changes

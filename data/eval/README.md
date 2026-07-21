@@ -1,6 +1,6 @@
 # Evaluation batteries (v1, frozen 2026-06-11)
 
-The datasets for evaluating the AI tutor (see `evals.md` at the repo root for the overall effort and results). **This README is the single reference for what every file, field, and term means.** Files added after the v1 freeze: `battery_sessions_v2.jsonl` (deprecated for new runs — see the v2 note in the probe-type glossary), `battery_sessions_v2_1.jsonl` (its repaired successor), and `compaction/` (the F29/F30 lesson-compaction batteries, documented in `evals/compaction.md` / `evals/slm_compaction.md`).
+The datasets for evaluating the AI tutor (see `evals.md` at the repo root for the overall effort and results). **This README is the single reference for what every file, field, and term means.** Files added after the v1 freeze: `battery_sessions_v2.jsonl` (deprecated for new runs — see the v2 note in the probe-type glossary), `battery_sessions_v2_1.jsonl` (its repaired successor), and `compaction/` (the F29/F30 lesson-compaction batteries, documented in `evals/compaction.md` / `evals/slm_compaction.md`; note the compaction scripts default to `data/compaction/`, not this folder — either regenerate there with `compaction_study build` or point `BATTERY=`/`QUESTIONS_FILE=` at these copies).
 
 Built from `data/academy_discussion_eval.jsonl` — real student posts from the academy discussion boards with real staff answers — plus authored content (sessions, personas).
 

@@ -20,7 +20,9 @@ Required local artifacts and environment:
 - `.env` has `LANGSMITH_PROJECT=ai-tutor-app`
 - `data/chroma-db-all_sources/` exists
 - `data/kb/wiki/index.md` exists
-- `curl`, `jq`, and the `langsmith` CLI are available through `uv run`
+- `curl` and `jq` are on `PATH`, and the standalone `langsmith` CLI binary is
+  installed (a separate Go binary, e.g. `~/.local/bin/langsmith`; `uv sync`
+  does not provide it — `uv run` merely inherits it via `PATH`)
 
 Quick check:
 
@@ -103,8 +105,11 @@ JSON
 ```
 
 On `enabledTools`: it is an explicit allowlist of the toggle tools for the turn.
-`[]` (as above) disables web search and URL reading, so this run exercises only
-the corpus retrieval + KB shell citation paths. Two things to know:
+For this payload's DeepSeek model the catalog exposes no toggle tools at all, so
+`[]` and omitting the field behave identically here; the notes below bite when
+the model is Gemini 3+ or Anthropic. `[]` (as above) disables web search and URL
+reading, so this run exercises only the corpus retrieval + KB shell citation
+paths. Two things to know:
 
 - **`url_context` defaults to off in the UI** (`active: False` in `_tool_catalog`,
   `app/api.py`), so a browser turn only sends it when the user opts in. Enabling

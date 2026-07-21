@@ -34,7 +34,7 @@ ChromaDB for vectors; Cohere for embeddings/rerank; chat model is provider-confi
 
 ## Architecture in brief
 
-The agent is built with `langchain.agents.create_agent()` (LangGraph), an `InMemorySaver` checkpointer keyed by `thread_id`, and middlewares assembled from the selected **memory preset** (`app/memory_presets.py`: context-editing, summarization, optional long-term student-profile memory) plus source preference. The normal frontend does not select a memory preset: the server's model-aware production policy uses `prod_v2` for DeepSeek/Gemini and the immutable legacy `prod` preset for other providers. Direct API clients and evals can override this with `memoryPreset`; the full precedence is request value → `AI_TUTOR_MEMORY_PRESET` environment override → model-aware production policy. `stream_chat()` is the single entry point the API calls; it yields typed `ChatEvent`s that `app/api.py` encodes into the AI SDK UI-message stream, ending each turn with a `context_stats` telemetry event (tokens incl. cache buckets, est. cost, TTFT, compaction-trigger counts — independent of LangSmith). It always exposes two custom tools, plus provider-native web tools when enabled:
+The agent is built with `langchain.agents.create_agent()` (LangGraph), an `InMemorySaver` checkpointer keyed by `thread_id`, and middlewares assembled from the selected **memory preset** (`app/memory_presets.py`: context-editing, summarization, optional long-term student-profile memory) plus source preference. The normal frontend does not select a memory preset: the server's model-aware production policy uses `prod_v2` for DeepSeek/Gemini and the immutable legacy `prod` preset for other providers. Direct API clients and evals can override this with `memoryPreset`; the full precedence is request value → `AI_TUTOR_MEMORY_PRESET` environment override → model-aware production policy. `stream_chat()` is the single entry point the API calls; it yields typed `ChatEvent`s that `app/api.py` encodes into the AI SDK UI-message stream, ending each turn with a `context_stats` telemetry event (tokens incl. cache buckets, est. cost, TTFT, compaction-trigger counts — independent of LangSmith). It exposes two custom tools (deselecting every source removes both for that turn, and the evals' `disable_kb` flag keeps retrieval only), plus provider-native web tools when enabled:
 
 - **`retrieve_tutor_context(query)`** — hybrid RAG over the corpus, scoped to the user's selected sources.
 - **`run_kb_command(...)`** — read-only KB file browsing (see below).
@@ -104,7 +104,7 @@ Chat runtime: `COHERE_API_KEY` (retrieval; always required), `DEEPSEEK_API_KEY` 
 Both HF Spaces run the same image (`Dockerfile`: FastAPI + Next.js static export, `ripgrep` installed for `run_kb_command`, port :7860), in a dev → prod flow:
 
 - **Dev — `ai-tutor`** (private): `.github/workflows/sync-to-hf.yml` force-pushes on every push to `main` (docs/markdown-only and scraping-script-only pushes are skipped via `paths-ignore`). Verify changes here first.
-- **Prod — `ai-tutor-chatbot`** (public): `.github/workflows/deploy-prod-to-hf.yml`, **manual trigger only** (Actions tab → "Deploy prod to Hugging Face" → Run workflow).
+- **Prod — `ai-tutor-chatbot`** (public): `.github/workflows/deploy-prod-to-hf.yml`, **manual trigger only** (Actions tab → "Deploy prod to Hugging Face (ai-tutor-chatbot)" → Run workflow).
 
 Both Spaces need the same runtime secrets (`COHERE_API_KEY`, model provider key, `HF_TOKEN`, optional `LANGSMITH_*`) configured in their HF settings.
 

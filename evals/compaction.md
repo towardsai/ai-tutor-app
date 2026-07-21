@@ -126,7 +126,7 @@ Gemini numbers above); it lives in `evals/slm_compaction.md` (since merged).
 ```bash
 uv run --env-file .env -m evals.compaction_study build --questions 15
 PRESETS="full_history prod aggressive sliding_window prompt_compression selective_retention context_reset incontext_history_retrieval delta_summarization hierarchical_summarization" \
-  bash evals/run_compaction_study.sh      # the script's default PRESETS omits the last two
+  bash evals/run_compaction_study.sh      # default PRESETS differs: it adds summarization_only and omits context_reset + the last two
 uv run --env-file .env -m evals.knowledge_compaction --questions 15 \
     --strategies rag graphrag --out data/compaction      # Family B
 uv run --env-file .env -m evals.compaction_study report --runs 'runs/compaction_*'
