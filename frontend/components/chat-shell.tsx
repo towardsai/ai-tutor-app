@@ -498,6 +498,7 @@ export function ChatShell() {
         {!sidebarCollapsed ? (
           <div className="hidden lg:block lg:h-full lg:min-h-0">
             <SourceSidebar
+              loading={tools.length === 0 && !sourceError}
               onNewChat={handleNewChat}
               onToggleSource={toggleSource}
               onToggleTool={toggleTool}
@@ -519,6 +520,7 @@ export function ChatShell() {
             />
             <div className="absolute inset-y-0 left-0 w-[300px] max-w-[85vw] p-2">
               <SourceSidebar
+                loading={tools.length === 0 && !sourceError}
                 onNewChat={() => {
                   handleNewChat();
                   setSidebarOpen(false);

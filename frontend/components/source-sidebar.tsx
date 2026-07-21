@@ -36,6 +36,7 @@ type SourceSidebarProps = {
   tools: TutorTool[];
   onClose?: () => void;
   onCollapse?: () => void;
+  loading?: boolean;
 };
 
 type ToggleToolMeta = {
@@ -73,6 +74,7 @@ export function SourceSidebar({
   tools,
   onClose,
   onCollapse,
+  loading = false,
 }: SourceSidebarProps) {
   const retrievalTool = tools.find(
     (tool): tool is Extract<TutorTool, { kind: "configurable" }> =>
@@ -170,12 +172,16 @@ export function SourceSidebar({
                 Tools
               </span>
             </div>
-            <span
-              className="eyebrow text-[10.5px] text-[var(--muted)]"
-              title={`${activeCount} of ${totalCount} tools on`}
-            >
-              {activeCount} of {totalCount} on
-            </span>
+            {loading ? (
+              <span className="sr-only">Loading tools and sources</span>
+            ) : (
+              <span
+                className="eyebrow text-[10.5px] text-[var(--muted)]"
+                title={`${activeCount} of ${totalCount} tools on`}
+              >
+                {activeCount} of {totalCount} on
+              </span>
+            )}
           </div>
           <p className="text-[11px] leading-[1.4] text-[var(--muted)]">
             Toggle tools, pick sources.
@@ -183,6 +189,7 @@ export function SourceSidebar({
         </div>
 
         <div className="scrollbar-thin min-h-0 flex-1 space-y-2 overflow-y-auto pr-0.5">
+          {loading ? <SidebarSkeleton /> : null}
           {retrievalTool ? (
             <RetrievalTool
               tool={retrievalTool}
@@ -232,6 +239,23 @@ export function SourceSidebar({
         </a>
       </div>
     </aside>
+  );
+}
+
+function SidebarSkeleton() {
+  return (
+    <div aria-hidden className="space-y-2">
+      <div className="h-[38px] animate-pulse rounded-lg border border-[var(--line)] bg-[var(--surface-subtle)]" />
+      <div className="ml-[11px] space-y-1.5 border-l border-[var(--line)] pl-3">
+        {Array.from({ length: 7 }).map((_, index) => (
+          <div
+            key={index}
+            className="h-[31px] animate-pulse rounded-lg border border-[var(--line)] bg-[var(--surface-soft)]"
+            style={{ animationDelay: `${index * 90}ms` }}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
