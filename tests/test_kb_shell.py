@@ -113,9 +113,13 @@ def test_run_kb_command_rejects_path_traversal(kb_dir: Path) -> None:
 
 def test_rg_pattern_is_separated_by_double_dash(kb_dir: Path) -> None:
     # A pattern beginning with `-`/`--` (e.g. ripgrep's `--pre`, which spawns an
-    # external preprocessor binary) must be forced into the positional pattern
-    # slot by a `--` separator so it can never be re-parsed by rg as a flag.
-    argv, _ = build_kb_command_argv("rg --pre=/bin/sh raw/docs/peft", root=kb_dir)
+    # external preprocessor binary) is rejected in option position with a
+    # corrective error; after an explicit `--` it is forced into the positional
+    # pattern slot by the emitted separator so rg can never re-parse it as a flag.
+    with pytest.raises(KbCommandError, match="Unsupported rg option"):
+        build_kb_command_argv("rg --pre=/bin/sh raw/docs/peft", root=kb_dir)
+
+    argv, _ = build_kb_command_argv("rg -- --pre=/bin/sh raw/docs/peft", root=kb_dir)
     assert "--" in argv
     sep = argv.index("--")
     assert argv[sep + 1 :] == ["--pre=/bin/sh", "raw/docs/peft"]
@@ -124,7 +128,10 @@ def test_rg_pattern_is_separated_by_double_dash(kb_dir: Path) -> None:
 
 
 def test_grep_pattern_is_separated_by_double_dash(kb_dir: Path) -> None:
-    argv, _ = build_kb_command_argv("grep --label=foo raw/docs/peft", root=kb_dir)
+    with pytest.raises(KbCommandError, match="Unsupported grep option"):
+        build_kb_command_argv("grep --label=foo raw/docs/peft", root=kb_dir)
+
+    argv, _ = build_kb_command_argv("grep -- --label=foo raw/docs/peft", root=kb_dir)
     assert "--" in argv
     sep = argv.index("--")
     assert argv[sep + 1 :] == ["--label=foo", "raw/docs/peft"]
@@ -139,6 +146,68 @@ def test_run_kb_command_rejects_unbounded_broad_raw_search(kb_dir: Path) -> None
 
     assert result.exit_code == 0
     assert "LoraConfig" in result.stdout
+
+
+def test_head_accepts_dash_count_shorthands(kb_dir: Path) -> None:
+    # `head -200 FILE` and `head -n200 FILE` are standard shorthands for
+    # `head -n 200 FILE`; all three must normalize to the same argv.
+    sample = kb_dir / "raw" / "sample.txt"
+    sample.write_text("line\n" * 10)
+
+    expected = ["head", "-n", "200", "raw/sample.txt"]
+    for command in (
+        "head -200 raw/sample.txt",
+        "head -n200 raw/sample.txt",
+        "head -n 200 raw/sample.txt",
+    ):
+        argv, _ = build_kb_command_argv(command, root=kb_dir)
+        assert argv == expected
+
+
+def test_head_rejects_unsupported_option_with_corrective_error(kb_dir: Path) -> None:
+    # The old behavior resolved `-c` as a path and reported "path does not
+    # exist: -c", which misled the agent; the error must name the supported form.
+    with pytest.raises(KbCommandError, match="Unsupported head option") as excinfo:
+        build_kb_command_argv("head -c 5 raw/sample.txt", root=kb_dir)
+    assert "head [-n N | -N] FILE" in str(excinfo.value)
+
+
+def test_cat_wc_ls_reject_unsupported_options(kb_dir: Path) -> None:
+    with pytest.raises(KbCommandError, match="Unsupported cat option") as excinfo:
+        build_kb_command_argv("cat -n wiki/index.md", root=kb_dir)
+    assert "only file paths" in str(excinfo.value)
+
+    with pytest.raises(KbCommandError, match="Unsupported wc option") as excinfo:
+        build_kb_command_argv("wc -L wiki/index.md", root=kb_dir)
+    assert "-l -w -c -m" in str(excinfo.value)
+
+    with pytest.raises(KbCommandError, match="Unsupported ls option") as excinfo:
+        build_kb_command_argv("ls -R raw", root=kb_dir)
+    assert "-1 -a -l -la -al" in str(excinfo.value)
+
+
+def test_rg_and_grep_reject_unknown_options_with_corrective_error(
+    kb_dir: Path,
+) -> None:
+    # Unknown dash tokens in option position must not be silently demoted to
+    # patterns; the error names the supported options and the `--` escape hatch.
+    with pytest.raises(KbCommandError, match="Unsupported rg option") as excinfo:
+        build_kb_command_argv("rg -A 3 LoraConfig raw/docs/peft", root=kb_dir)
+    message = str(excinfo.value)
+    assert "-m/--max-count" in message
+    assert "put `--` before it" in message
+
+    with pytest.raises(KbCommandError, match="Unsupported grep option") as excinfo:
+        build_kb_command_argv("grep -o LoraConfig raw/docs/peft", root=kb_dir)
+    message = str(excinfo.value)
+    assert "-m/--max-count" in message
+    assert "put `--` before it" in message
+
+
+def test_rg_double_dash_still_allows_dash_leading_patterns(kb_dir: Path) -> None:
+    argv, _ = build_kb_command_argv("rg -- -dashpattern raw/docs/peft", root=kb_dir)
+    sep = argv.index("--")
+    assert argv[sep + 1 :] == ["-dashpattern", "raw/docs/peft"]
 
 
 def test_grep_is_bounded_like_rg_and_does_not_follow_symlinks(kb_dir: Path) -> None:

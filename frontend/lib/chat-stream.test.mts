@@ -7,7 +7,7 @@ import {
   type UIMessageChunk,
 } from "ai";
 
-import { compactChatMessages } from "./chat-transport.ts";
+import { toTextOnlyMessages } from "./chat-transport.ts";
 
 function streamChunks(chunks: UIMessageChunk[]) {
   return new ReadableStream<UIMessageChunk>({
@@ -50,9 +50,18 @@ test("folds reasoning, tools, sources, and text in provider order", async () => 
       input: { query: "LoRA" },
     },
     {
+      // The server streams a preview plus size metadata, never the full
+      // tool payload (see TOOL_OUTPUT_PREVIEW_* in app/api.py).
       type: "tool-output-available",
       toolCallId: "call-1",
-      output: { text: "retrieved context", matches: [] },
+      output: {
+        text: "retrieved context",
+        matches: [],
+        originalChars: 17,
+        originalLines: 1,
+        previewTruncated: false,
+        wasCapped: false,
+      },
     },
     { type: "reasoning-start", id: "thought-2" },
     { type: "reasoning-delta", id: "thought-2", delta: "Second thought" },
@@ -104,6 +113,15 @@ test("folds reasoning, tools, sources, and text in provider order", async () => 
     (message.parts[3] as { text: string }).text,
     "Second thought",
   );
+  // The preview text and its size metadata survive stream folding verbatim.
+  assert.deepEqual((message.parts[2] as { output: unknown }).output, {
+    text: "retrieved context",
+    matches: [],
+    originalChars: 17,
+    originalLines: 1,
+    previewTruncated: false,
+    wasCapped: false,
+  });
   assert.equal(
     (message.parts[6] as { text: string }).text,
     "  LoRA is parameter-efficient.\n",
@@ -111,6 +129,9 @@ test("folds reasoning, tools, sources, and text in provider order", async () => 
 });
 
 test("folded tool state stays in the UI while follow-up history is text-only", async () => {
+  // The server now streams preview-sized tool outputs, so a payload this
+  // large should never arrive; keep it as a defensive stress case proving
+  // follow-up requests stay text-only regardless of what the stream carried.
   const largeOutput = "retrieved context ".repeat(20_000);
   const assistant = await foldChunks([
     { type: "start", messageId: "assistant-1" },
@@ -140,7 +161,7 @@ test("folded tool state stays in the UI while follow-up history is text-only", a
     largeOutput,
   );
 
-  const compacted = compactChatMessages([
+  const textOnly = toTextOnlyMessages([
     { id: "user-1", role: "user", parts: [{ type: "text", text: "Question" }] },
     assistant,
     {
@@ -150,13 +171,13 @@ test("folded tool state stays in the UI while follow-up history is text-only", a
     },
   ]);
 
-  assert.deepEqual(compacted[1].parts, [
+  assert.deepEqual(textOnly[1].parts, [
     { type: "text", text: "Exact answer  \n" },
   ]);
-  assert.ok(JSON.stringify(compacted).length < 1_000);
+  assert.ok(JSON.stringify(textOnly).length < 1_000);
   assert.equal(
     (toolPart as { output: { text: string } }).output.text,
     largeOutput,
-    "request compaction must not mutate folded UI state",
+    "stripping the request to text parts must not mutate folded UI state",
   );
 });

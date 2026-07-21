@@ -1051,8 +1051,8 @@ function EmptyConversation({
         >
           Towards AI Academy
         </a>{" "}
-        courses. Answers are grounded in the sources you select. Try one of
-        these to start:
+        courses. Answers are grounded in the knowledge base, prioritizing the
+        sources you select. Try one of these to start:
       </p>
       <div className="mt-6 grid w-full max-w-[640px] grid-cols-1 gap-2 sm:grid-cols-2">
         {suggestions.map((suggestion) => (

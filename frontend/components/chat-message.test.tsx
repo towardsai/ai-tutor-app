@@ -135,6 +135,8 @@ describe("ChatMessage activity rendering", () => {
     expect(toolItem.querySelector(".lucide-database")).toBeNull();
   });
 
+  // Outputs without size metadata (older streams, provider-native tools)
+  // still get the client-side line/char cut as a defensive fallback.
   it("bounds expanded tool output by both line and character limits", () => {
     const lineLimitedOutput = "one\ntwo\nthree\nfour\nfive\nsix";
     const characterLimitedOutput = `${"x".repeat(1005)}TAIL`;
@@ -183,6 +185,59 @@ describe("ChatMessage activity rendering", () => {
     const characterPreview = characterTruncation.closest("pre");
     expect(characterPreview?.firstChild?.textContent).toHaveLength(1000);
     expect(characterPreview?.textContent).not.toContain("TAIL");
+  });
+
+  it("uses server size metadata for summary labels and the truncation note", () => {
+    render(
+      <ChatMessage
+        showAssistantActions={false}
+        message={assistantMessage([
+          {
+            type: "tool-run_kb_command",
+            toolCallId: "kb-1",
+            state: "output-available",
+            input: { text: "cat raw/docs/big.md" },
+            // The server holds a 60-line/1007-char payload but streamed only
+            // this two-line preview.
+            output: {
+              text: "one\ntwo",
+              matches: [],
+              originalChars: 1007,
+              originalLines: 60,
+              previewTruncated: true,
+              wasCapped: true,
+            },
+          },
+          {
+            type: "tool-run_kb_command",
+            toolCallId: "kb-2",
+            state: "output-available",
+            input: { text: "wc -l raw/docs/small.md" },
+            output: {
+              text: "42 raw/docs/small.md",
+              matches: [],
+              originalChars: 20,
+              originalLines: 1,
+              previewTruncated: false,
+              wasCapped: false,
+            },
+          },
+        ])}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Activity · 2 tools" }));
+
+    // The summary reflects the payload the server holds, not the preview.
+    fireEvent.click(screen.getByRole("button", { name: /KB shell.*60 lines/ }));
+    const truncation = screen.getByText(/truncated \(1\.0k chars more\)/);
+    const preview = truncation.closest("pre");
+    expect(preview?.firstChild?.textContent).toBe("one\ntwo");
+
+    // An untruncated preview renders in full with no truncation note.
+    fireEvent.click(screen.getByRole("button", { name: /KB shell.*20 chars/ }));
+    expect(screen.getByText("42 raw/docs/small.md")).toBeTruthy();
+    expect(screen.getAllByText(/truncated/)).toHaveLength(1);
   });
 });
 

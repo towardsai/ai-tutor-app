@@ -334,6 +334,18 @@ def build_chat_request(payload: ApiChatRequest) -> ChatRequest:
     )
 
 
+# Tool outputs reach the browser as a short preview plus size metadata, never
+# the full payload. The UI only ever renders this preview (ToolOutputPreview in
+# frontend/components/chat-message.tsx), follow-up requests are text-only, and
+# evidence extraction/citation resolution run server-side before the event hits
+# this encoder -- so streaming the full capped output (up to ~40KB per call)
+# was wasted bandwidth and needless exposure of corpus content. The preview
+# algorithm mirrors the frontend's render-time cut exactly: first N lines,
+# hard-capped at N chars.
+TOOL_OUTPUT_PREVIEW_LINES = 5
+TOOL_OUTPUT_PREVIEW_CHARS = 1000
+
+
 class UIMessageStreamEncoder:
     def __init__(self) -> None:
         self.message_id = ""
@@ -558,13 +570,32 @@ class UIMessageStreamEncoder:
                 )
                 self.announced_tool_call_ids.add(call_id)
                 self.available_tool_call_ids.add(call_id)
+            output_text = str(event.data.get("output_text", ""))
+            preview = "\n".join(output_text.split("\n")[:TOOL_OUTPUT_PREVIEW_LINES])[
+                :TOOL_OUTPUT_PREVIEW_CHARS
+            ]
+            was_capped = bool(event.data.get("output_was_capped"))
+            # When the stable-tool-cap middleware already truncated the
+            # payload, its cap metadata carries the true pre-cap size;
+            # otherwise the payload the server holds is the original.
+            original_chars = event.data.get("output_original_chars")
+            if not (
+                was_capped
+                and isinstance(original_chars, int)
+                and not isinstance(original_chars, bool)
+            ):
+                original_chars = len(output_text)
             output = {
-                "text": str(event.data.get("output_text", "")),
+                "text": preview,
                 "matches": [
                     self.source_data(match)
                     for match in event.data.get("matches") or []
                     if isinstance(match, dict)
                 ],
+                "originalChars": original_chars,
+                "originalLines": len(output_text.split("\n")) if output_text else 0,
+                "previewTruncated": was_capped or len(preview) < len(output_text),
+                "wasCapped": was_capped,
             }
             if call_id in self.open_tool_call_ids:
                 self.open_tool_call_ids.remove(call_id)

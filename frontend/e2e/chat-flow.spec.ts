@@ -43,7 +43,7 @@ async function mockTools(page: Page) {
   );
 }
 
-test("streams activity and sends a compact follow-up on the same thread", async ({
+test("streams activity and sends a text-only follow-up on the same thread", async ({
   page,
 }) => {
   const requests: Array<Record<string, unknown>> = [];

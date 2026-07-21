@@ -265,7 +265,11 @@ def create_vector_stores() -> None:
 
 
 def build_kb_artifacts() -> None:
-    """Build generated markdown corpus, indexes, and refreshed wiki pages."""
+    """Build generated markdown corpus, indexes, and refreshed wiki pages.
+
+    Ends with lint_kb_wiki so a wiki page referencing a nonexistent
+    raw/wiki/generated path fails the build before upload.
+    """
     logger.info("Building KB artifacts")
     result = run_module("data.scraping_scripts.build_kb_artifacts")
     if result.returncode != 0:
@@ -275,6 +279,14 @@ def build_kb_artifacts() -> None:
     result = run_module("data.scraping_scripts.update_kb_wiki")
     if result.returncode != 0:
         logger.error("Error updating KB wiki - check output above")
+        sys.exit(1)
+
+    result = run_module("data.scraping_scripts.lint_kb_wiki")
+    if result.returncode != 0:
+        logger.error(
+            "KB wiki lint found broken file references - check output above. "
+            "Fix the wiki (or the artifacts it points at) before uploading."
+        )
         sys.exit(1)
     logger.info("Successfully built KB artifacts")
 

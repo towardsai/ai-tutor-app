@@ -164,6 +164,15 @@ def _build_rg(tokens: list[str], root: Path) -> list[str]:
             options.extend([token, value])
             idx += 2
             continue
+        if parsing_options and token.startswith("-"):
+            raise KbCommandError(
+                f"Unsupported rg option `{token}`. Supported options: "
+                "-n/--line-number -i/--ignore-case -S/--smart-case "
+                "-F/--fixed-strings -w/--word-regexp --hidden --no-ignore "
+                "-g/--glob -t/--type -T/--type-not -m/--max-count. "
+                "To search for a pattern that starts with `-`, put `--` "
+                "before it: rg [OPTIONS] -- PATTERN PATH"
+            )
         positionals.append(token)
         parsing_options = False
         idx += 1
@@ -211,6 +220,13 @@ def _build_grep(tokens: list[str], root: Path) -> list[str]:
             has_max_count = True
             idx += 2
             continue
+        if parsing_options and token.startswith("-"):
+            raise KbCommandError(
+                f"Unsupported grep option `{token}`. Supported options: "
+                "-i/--ignore-case -w/--word-regexp -F -E -m/--max-count. "
+                "To search for a pattern that starts with `-`, put `--` "
+                "before it: grep [OPTIONS] -- PATTERN PATH"
+            )
         positionals.append(token)
         parsing_options = False
         idx += 1
@@ -269,6 +285,10 @@ def _build_ls(tokens: list[str], root: Path) -> list[str]:
         if token in LS_FLAG_OPTIONS:
             argv.append(token)
             continue
+        if token.startswith("-"):
+            raise KbCommandError(
+                f"Unsupported ls option `{token}`. Supported flags: -1 -a -l -la -al"
+            )
         paths.append(_relative_path_arg(token, root))
     return [*argv, *(paths or ["."])]
 
@@ -292,8 +312,18 @@ def _build_head(tokens: list[str], root: Path) -> list[str]:
             raise KbCommandError("-n requires a value")
         argv.extend(["-n", _numeric_value(tokens[idx + 1], "-n")])
         idx += 2
+    elif idx < len(tokens) and (match := re.fullmatch(r"-n?(\d+)", tokens[idx])):
+        # Standard shorthands `head -N` / `head -nN`, normalized to `-n N`.
+        argv.extend(["-n", match.group(1)])
+        idx += 1
     while idx < len(tokens):
-        paths.append(_relative_path_arg(tokens[idx], root))
+        token = tokens[idx]
+        if token.startswith("-"):
+            raise KbCommandError(
+                f"Unsupported head option `{token}`. "
+                "Supported: head [-n N | -N] FILE ..."
+            )
+        paths.append(_relative_path_arg(token, root))
         idx += 1
     if not paths:
         raise KbCommandError("`head` requires at least one file path")
@@ -303,7 +333,15 @@ def _build_head(tokens: list[str], root: Path) -> list[str]:
 def _build_cat(tokens: list[str], root: Path) -> list[str]:
     if len(tokens) < 2:
         raise KbCommandError("`cat` requires at least one file path")
-    return ["cat", *[_relative_path_arg(token, root) for token in tokens[1:]]]
+    paths: list[str] = []
+    for token in tokens[1:]:
+        if token.startswith("-"):
+            raise KbCommandError(
+                f"Unsupported cat option `{token}`. "
+                "`cat` takes only file paths: cat FILE ..."
+            )
+        paths.append(_relative_path_arg(token, root))
+    return ["cat", *paths]
 
 
 def _build_wc(tokens: list[str], root: Path) -> list[str]:
@@ -313,6 +351,10 @@ def _build_wc(tokens: list[str], root: Path) -> list[str]:
         if token in WC_FLAG_OPTIONS:
             argv.append(token)
             continue
+        if token.startswith("-"):
+            raise KbCommandError(
+                f"Unsupported wc option `{token}`. Supported flags: -l -w -c -m"
+            )
         paths.append(_relative_path_arg(token, root))
     if not paths:
         raise KbCommandError("`wc` requires at least one file path")

@@ -20,7 +20,7 @@ function sseResponse(chunks: UIMessageChunk[]) {
   });
 }
 
-test("DefaultChatTransport sends compact history and preserves checkpoint identity", async () => {
+test("DefaultChatTransport sends text-only history and preserves checkpoint identity", async () => {
   const largeToolOutput = "retrieved context ".repeat(20_000);
   const originalAssistantText = "  Exact streamed answer  \n";
   const initialMessages = [

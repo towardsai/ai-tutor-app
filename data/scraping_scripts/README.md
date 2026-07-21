@@ -240,7 +240,7 @@ If you need to run specific steps individually:
 - **llms.txt to Markdown**: `llms_txt_to_markdown_docs.py`
 - **Capture library versions**: `capture_source_versions.py`
 - **Process Markdown**: `process_md_files.py`
-- **Build KB artifacts**: `build_kb_artifacts.py` / **Update KB wiki**: `update_kb_wiki.py`
+- **Build KB artifacts**: `build_kb_artifacts.py` / **Update KB wiki**: `update_kb_wiki.py` / **Lint KB wiki references**: `lint_kb_wiki.py`
 - **Build public docs-only bundle**: `build_public_docs_bundle.py`
 - **Add Context**: `add_context_to_nodes.py`
 - **Create Vector Stores**: `create_vector_stores.py`
@@ -360,5 +360,6 @@ download small).
 7. KB wiki artifact creation:
    - `build_kb_artifacts.py` converts `all_sources_data.jsonl` into generated markdown under `data/kb/raw/`
    - `update_kb_wiki.py` refreshes wiki navigation pages under `data/kb/wiki/`, preserving maintainer prose outside `<!-- AUTO-GENERATED -->` markers
+   - `lint_kb_wiki.py` then verifies every KB path and relative link the wiki pages reference (existence on disk plus `corpus_manifest.jsonl` membership for `raw/` files) and fails the workflow before upload on any broken reference; run it standalone with `uv run -m data.scraping_scripts.lint_kb_wiki [--kb-dir data/kb]`
    - The docs and course workflows run these steps automatically unless `--skip-kb` is passed
    - `upload_dbs_to_hf.py` uploads `data/kb/**` with the vector database so the runtime can download one KB bundle

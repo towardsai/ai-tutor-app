@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { UIMessage } from "ai";
 import {
-  compactChatMessages,
   prepareTutorChatRequest,
+  toTextOnlyMessages,
 } from "./chat-transport.ts";
 
-test("compacts large tool turns without changing raw assistant text", () => {
+test("keeps only text parts of large tool turns without changing raw assistant text", () => {
   const largeToolOutput = "retrieved context ".repeat(20_000);
   const messages = [
     {
@@ -39,9 +39,9 @@ test("compacts large tool turns without changing raw assistant text", () => {
     },
   ] as unknown as UIMessage[];
 
-  const compacted = compactChatMessages(messages);
+  const textOnly = toTextOnlyMessages(messages);
 
-  assert.deepEqual(compacted, [
+  assert.deepEqual(textOnly, [
     {
       id: "user-1",
       role: "user",
@@ -62,15 +62,15 @@ test("compacts large tool turns without changing raw assistant text", () => {
     },
   ]);
   assert.ok(JSON.stringify(messages).length > 200_000);
-  assert.ok(JSON.stringify(compacted).length < 1_000);
+  assert.ok(JSON.stringify(textOnly).length < 1_000);
   assert.equal(
     (messages[1].parts[2] as { output: { text: string } }).output.text,
     largeToolOutput,
-    "compaction must not mutate the UI transcript",
+    "stripping to text parts must not mutate the UI transcript",
   );
 });
 
-test("prepares submit and regenerate requests with compact messages", async () => {
+test("prepares submit and regenerate requests with text-only messages", async () => {
   const messages = [
     {
       id: "user-1",
@@ -101,6 +101,6 @@ test("prepares submit and regenerate requests with compact messages", async () =
     assert.equal(body.model, "deepseek:deepseek-v4-flash");
     assert.equal(body.trigger, trigger);
     assert.equal(body.messageId, messageId);
-    assert.deepEqual(body.messages, compactChatMessages(messages));
+    assert.deepEqual(body.messages, toTextOnlyMessages(messages));
   }
 });

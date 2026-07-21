@@ -407,9 +407,16 @@ RUN_KB_COMMAND_SCHEMA = {
         "command": {
             "type": "string",
             "description": (
-                "Single read-only command to run under data/kb. Supported commands: "
-                "rg, grep, find, ls, sed, head, cat, wc. Pipes, redirects, command "
-                "chaining, network commands, and writes are not allowed."
+                "Single read-only command run under data/kb (path-jailed; no "
+                "pipes, redirects, chaining, or options beyond these). Forms: "
+                "rg [-n|-i|-S|-F|-w|--hidden|--no-ignore] [-m N] [-g GLOB] "
+                "[-t|-T TYPE] [--] PATTERN [PATH ...] · "
+                "grep [-i|-w|-F|-E] [-m N] [--] PATTERN [PATH ...] · "
+                "find [PATH] [-maxdepth N] [-mindepth N] [-type f|d] "
+                "[-name GLOB] [-iname GLOB] · ls [-1|-a|-l|-la] [PATH ...] · "
+                "sed -n START,ENDp FILE · head [-n N | -N | -nN] FILE ... · "
+                "cat FILE ... · wc [-l|-w|-c|-m] FILE ... Broad rg/grep (no "
+                "PATH, or raw/ trees) requires -m/--max-count."
             ),
         },
         "timeout_seconds": {

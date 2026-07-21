@@ -25,12 +25,27 @@ discovery first wastes budget and pulls noisy hits into context.
 ## After Orientation
 
 - Allowed `run_kb_command` programs: `rg`, `grep`, `find`, `ls`, `sed`, `head`,
-  `cat`, `wc`. No pipes, no redirects, no command chaining.
+  `cat`, `wc`. See Command Forms below for the accepted shapes.
 - For exact class/function/method names, search `generated/symbols.tsv` before
   scanning raw files.
 - Avoid broad searches that return thousands of lines. Add `-m 20` or narrow
   the path before searching `raw/`.
 - Mention uncertainty when the knowledge base does not cover the answer.
+
+## Command Forms
+
+The sandbox accepts a narrow form of each program. Known-good shapes:
+
+- `head -n 150 raw/docs/langchain/langchain/agents.mdx`
+- `sed -n 1,120p wiki/topics/agents.md`
+- `find raw/docs/langchain -maxdepth 3 -type f -name "agents*"` — `find`
+  takes only a path plus `-maxdepth`, `-mindepth`, `-type f|d`, `-name`, `-iname`.
+- `rg -n -m 20 "create_agent" raw/docs/langchain/`
+
+No pipes, no redirects (`2>/dev/null` included), no command chaining, no
+`find -o` or `-exec`. One command per call. A rejected command's error names
+the supported form: trust that message and retry once with the corrected
+form — rejection means unsupported syntax, not a missing file.
 
 ## Answering
 

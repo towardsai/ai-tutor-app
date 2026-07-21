@@ -611,6 +611,147 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(matches[0]["sourceKey"], "peft")
         self.assertEqual(matches[0]["score"], 0.9)
         self.assertEqual(matches[0]["path"], "raw/docs/peft/lora.md")
+        # A short output passes through as its own preview, with size
+        # metadata describing the payload the server holds.
+        self.assertEqual(output_part["output"]["text"], "payload")
+        self.assertEqual(output_part["output"]["originalChars"], len("payload"))
+        self.assertEqual(output_part["output"]["originalLines"], 1)
+        self.assertFalse(output_part["output"]["previewTruncated"])
+        self.assertFalse(output_part["output"]["wasCapped"])
+
+    def test_tool_completion_streams_preview_not_full_output(self) -> None:
+        """The browser must receive a 5-line/1000-char preview plus size
+        metadata, never the full tool payload (the UI only ever renders the
+        preview, and follow-up requests are text-only)."""
+        from app.api import TOOL_OUTPUT_PREVIEW_CHARS, TOOL_OUTPUT_PREVIEW_LINES
+
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+        encoder.encode(
+            ChatEvent(
+                "tool_call_started",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_1",
+                    "tool_name": "run_kb_command",
+                    "args": {"command": "cat raw/docs/big.md"},
+                    "args_text": "cat raw/docs/big.md",
+                },
+            )
+        )
+        lines = [f"line-{index} " + "x" * 300 for index in range(10)]
+        output_text = "\n".join(lines)
+
+        parts = encoder.encode(
+            ChatEvent(
+                "tool_call_completed",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_1",
+                    "tool_name": "run_kb_command",
+                    "output_text": output_text,
+                },
+            )
+        )
+
+        output = next(p for p in parts if p["type"] == "tool-output-available")[
+            "output"
+        ]
+        expected_preview = "\n".join(lines[:TOOL_OUTPUT_PREVIEW_LINES])[
+            :TOOL_OUTPUT_PREVIEW_CHARS
+        ]
+        self.assertEqual(output["text"], expected_preview)
+        self.assertLessEqual(len(output["text"]), TOOL_OUTPUT_PREVIEW_CHARS)
+        self.assertLessEqual(len(output["text"].split("\n")), TOOL_OUTPUT_PREVIEW_LINES)
+        self.assertEqual(output["originalChars"], len(output_text))
+        self.assertEqual(output["originalLines"], 10)
+        self.assertTrue(output["previewTruncated"])
+        self.assertFalse(output["wasCapped"])
+        # The dropped tail must not appear anywhere in the emitted parts.
+        self.assertNotIn(lines[-1], json.dumps(parts))
+
+        # When the line cap binds before the char cap, the preview is exactly
+        # the first five lines.
+        line_capped = UIMessageStreamEncoder()
+        line_capped.encode(ChatEvent("message_started", {"message_id": "m2"}))
+        short_lines = [f"row-{index}" for index in range(8)]
+        parts = line_capped.encode(
+            ChatEvent(
+                "tool_call_completed",
+                {
+                    "message_id": "m2",
+                    "call_id": "call_2",
+                    "tool_name": "run_kb_command",
+                    "output_text": "\n".join(short_lines),
+                },
+            )
+        )
+        output = next(p for p in parts if p["type"] == "tool-output-available")[
+            "output"
+        ]
+        self.assertEqual(
+            output["text"], "\n".join(short_lines[:TOOL_OUTPUT_PREVIEW_LINES])
+        )
+        self.assertEqual(output["originalLines"], 8)
+        self.assertTrue(output["previewTruncated"])
+
+    def test_tool_completion_short_output_passes_through(self) -> None:
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+
+        parts = encoder.encode(
+            ChatEvent(
+                "tool_call_completed",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_1",
+                    "tool_name": "run_kb_command",
+                    "output_text": "ok\ndone",
+                },
+            )
+        )
+
+        output = next(p for p in parts if p["type"] == "tool-output-available")[
+            "output"
+        ]
+        self.assertEqual(output["text"], "ok\ndone")
+        self.assertEqual(output["originalChars"], len("ok\ndone"))
+        self.assertEqual(output["originalLines"], 2)
+        self.assertFalse(output["previewTruncated"])
+        self.assertFalse(output["wasCapped"])
+
+    def test_tool_completion_capped_output_reports_precap_size(self) -> None:
+        """An output the stable-tool-cap middleware already truncated must
+        report the true pre-cap size and read as truncated even when the
+        retained payload fits inside the preview."""
+        encoder = UIMessageStreamEncoder()
+        encoder.encode(ChatEvent("message_started", {"message_id": "m1"}))
+
+        parts = encoder.encode(
+            ChatEvent(
+                "tool_call_completed",
+                {
+                    "message_id": "m1",
+                    "call_id": "call_1",
+                    "tool_name": "run_kb_command",
+                    "output_text": "retained head of a capped payload",
+                    "output_was_capped": True,
+                    "output_original_bytes": 81_000,
+                    "output_original_chars": 80_000,
+                    "output_retained_bytes": 40_960,
+                    "output_sha256": "ab" * 32,
+                },
+            )
+        )
+
+        output = next(p for p in parts if p["type"] == "tool-output-available")[
+            "output"
+        ]
+        self.assertEqual(output["text"], "retained head of a capped payload")
+        self.assertEqual(output["originalChars"], 80_000)
+        self.assertEqual(output["originalLines"], 1)
+        self.assertTrue(output["previewTruncated"])
+        self.assertTrue(output["wasCapped"])
 
     def test_completed_tool_args_refresh_while_the_tool_is_running(self) -> None:
         encoder = UIMessageStreamEncoder()

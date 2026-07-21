@@ -500,7 +500,8 @@ def build_kb_artifacts() -> None:
     update_kb_wiki auto-promotes to seed_defaults when wiki/ is empty, so the
     same invocation works for both fresh and incremental rebuilds. On
     incremental runs, maintainer-authored prose outside `<!-- AUTO-GENERATED -->`
-    markers is preserved.
+    markers is preserved. Ends with lint_kb_wiki so a wiki page referencing a
+    nonexistent raw/wiki/generated path fails the build before upload.
     """
     logger.info("Building KB artifacts")
     result = run_module("data.scraping_scripts.build_kb_artifacts")
@@ -511,6 +512,14 @@ def build_kb_artifacts() -> None:
     result = run_module("data.scraping_scripts.update_kb_wiki")
     if result.returncode != 0:
         logger.error("Error updating KB wiki - check output above")
+        sys.exit(1)
+
+    result = run_module("data.scraping_scripts.lint_kb_wiki")
+    if result.returncode != 0:
+        logger.error(
+            "KB wiki lint found broken file references - check output above. "
+            "Fix the wiki (or the artifacts it points at) before uploading."
+        )
         sys.exit(1)
     logger.info("Successfully built KB artifacts")
 

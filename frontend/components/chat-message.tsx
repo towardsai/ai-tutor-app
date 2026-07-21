@@ -450,24 +450,50 @@ function ReasoningLine({ text }: { text: string }) {
   );
 }
 
+// The server streams a preview-sized `text` plus size metadata describing the
+// full payload it holds (see TOOL_OUTPUT_PREVIEW_* in app/api.py). The
+// metadata fields are optional so payloads from older streams still render.
+type ToolOutputPayload = {
+  text?: string;
+  matches?: unknown[];
+  originalChars?: number;
+  originalLines?: number;
+  previewTruncated?: boolean;
+  wasCapped?: boolean;
+};
+
 function ToolRow({ part }: { part: TutorMessagePart }) {
   const [isOpen, setIsOpen] = useState(false);
   const name = prettifyToolName(part.type);
   const inputSummary = toolInputSummary(part.input);
   const outputObject =
     part.output && typeof part.output === "object"
-      ? (part.output as { text?: string; matches?: unknown[] })
+      ? (part.output as ToolOutputPayload)
       : undefined;
   const outputText = (outputObject?.text ?? "").trim();
   const matchCount = Array.isArray(outputObject?.matches)
     ? outputObject.matches.length
     : 0;
+  const originalChars =
+    typeof outputObject?.originalChars === "number"
+      ? outputObject.originalChars
+      : undefined;
+  const originalLines =
+    typeof outputObject?.originalLines === "number"
+      ? outputObject.originalLines
+      : undefined;
+  const previewTruncated =
+    typeof outputObject?.previewTruncated === "boolean"
+      ? outputObject.previewTruncated
+      : undefined;
   const resultSummary = formatToolResultSummary({
     toolType: part.type,
     outputText,
     matchCount,
     state: part.state,
     errorText: part.errorText,
+    originalLines,
+    originalChars,
   });
   const stateBadge = formatToolStateBadge(part.state, part.errorText);
   const canExpand = Boolean(outputText) || Boolean(part.errorText);
@@ -531,7 +557,11 @@ function ToolRow({ part }: { part: TutorMessagePart }) {
               {part.errorText}
             </pre>
           ) : (
-            <ToolOutputPreview text={outputText} />
+            <ToolOutputPreview
+              text={outputText}
+              originalChars={originalChars}
+              previewTruncated={previewTruncated}
+            />
           )}
         </div>
       ) : null}
@@ -542,19 +572,35 @@ function ToolRow({ part }: { part: TutorMessagePart }) {
 const TOOL_OUTPUT_PREVIEW_LINES = 5;
 const TOOL_OUTPUT_PREVIEW_CHARS = 1000;
 
-function ToolOutputPreview({ text }: { text: string }) {
+function ToolOutputPreview({
+  text,
+  originalChars,
+  previewTruncated,
+}: {
+  text: string;
+  originalChars?: number;
+  previewTruncated?: boolean;
+}) {
+  // The server already streams a preview-sized payload; this cut is a
+  // harmless defensive fallback for outputs without size metadata.
   let preview = text.split("\n", TOOL_OUTPUT_PREVIEW_LINES + 1)
     .slice(0, TOOL_OUTPUT_PREVIEW_LINES)
     .join("\n");
   if (preview.length > TOOL_OUTPUT_PREVIEW_CHARS) {
     preview = preview.slice(0, TOOL_OUTPUT_PREVIEW_CHARS);
   }
-  const hiddenChars = text.length - preview.length;
+  // With metadata, the hidden amount is measured against the full payload
+  // the server holds; without it, against the text that arrived.
+  const hiddenChars =
+    typeof originalChars === "number"
+      ? Math.max(originalChars - preview.length, 0)
+      : text.length - preview.length;
+  const isTruncated = previewTruncated ?? hiddenChars > 0;
 
   return (
     <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-[1.55] text-[var(--ink)]/80">
       {preview}
-      {hiddenChars > 0 ? (
+      {isTruncated && hiddenChars > 0 ? (
         <span className="text-[var(--muted)]">
           {`\n... truncated (${formatHiddenChars(hiddenChars)} more)`}
         </span>
@@ -606,12 +652,16 @@ function formatToolResultSummary({
   matchCount,
   state,
   errorText,
+  originalLines,
+  originalChars,
 }: {
   toolType: string;
   outputText: string;
   matchCount: number;
   state?: string;
   errorText?: string;
+  originalLines?: number;
+  originalChars?: number;
 }) {
   if (errorText) {
     return "";
@@ -623,8 +673,10 @@ function formatToolResultSummary({
     return `${matchCount} ${noun}${matchCount === 1 ? "" : "s"}`;
   }
   if (outputText) {
-    const lineCount = outputText.split("\n").length;
-    const charCount = outputText.length;
+    // Size labels describe the payload the server holds, not the preview it
+    // streamed; fall back to the received text when metadata is absent.
+    const lineCount = originalLines ?? outputText.split("\n").length;
+    const charCount = originalChars ?? outputText.length;
     if (lineCount > 3) {
       return `${lineCount} lines`;
     }

@@ -366,8 +366,8 @@ function RetrievalTool({
               <p className="text-[12px] leading-[1.45] text-[var(--ink)]">
                 Grounds answers in the sources you select using hybrid retrieval:
                 semantic and keyword (BM25) search, then reranking. The tutor can
-                also browse the knowledge base like a filesystem to read full
-                documents before answering.
+                also browse the full knowledge base like a filesystem to read
+                whole documents, checking your selected sources first.
               </p>
             </div>,
             document.body,
