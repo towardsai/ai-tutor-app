@@ -190,6 +190,8 @@ test("keeps controls and source metadata inside a narrow viewport", async ({ pag
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBe(true);
 
+  // Small screens keep sources in an overlay drawer, not in the page flow.
+  await page.getByRole("button", { name: "Open sources and tools" }).click();
   await page
     .getByRole("button", { name: "About Example documentation" })
     .click();
