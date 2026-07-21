@@ -70,24 +70,6 @@ function pickStreamingWordForKey(key: string) {
   return STREAMING_WORDS[Math.abs(hash) % STREAMING_WORDS.length];
 }
 
-const SIDEBAR_COLLAPSED_KEY = "ai-tutor:sidebar-collapsed";
-
-function readSidebarCollapsed(): boolean {
-  try {
-    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function storeSidebarCollapsed(collapsed: boolean) {
-  try {
-    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
-  } catch {
-    // Private-mode storage failures just lose persistence, nothing else.
-  }
-}
-
 export function ChatShell() {
   const [transport] = useState(
     () =>
@@ -106,6 +88,10 @@ export function ChatShell() {
   const [input, setInput] = useState("");
   const [threadId, setThreadId] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Session-only on purpose: the sidebar always starts open on page load.
+  // Persisting this across visits caused a visible open-then-snap-closed
+  // flash, because the prerendered page is expanded until a mount effect
+  // read the stored preference.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -142,16 +128,6 @@ export function ChatShell() {
   });
 
   const initialFetchDoneRef = useRef(false);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate persisted UI preference after mount (SSR-safe)
-    setSidebarCollapsed(readSidebarCollapsed());
-  }, []);
-
-  function updateSidebarCollapsed(next: boolean) {
-    setSidebarCollapsed(next);
-    storeSidebarCollapsed(next);
-  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -487,7 +463,7 @@ export function ChatShell() {
             type="button"
             onClick={() => {
               if (window.matchMedia("(min-width: 1024px)").matches) {
-                updateSidebarCollapsed(false);
+                setSidebarCollapsed(false);
               } else {
                 setSidebarOpen(true);
               }
@@ -529,7 +505,7 @@ export function ChatShell() {
               enabledToolKeys={enabledToolKeys}
               sourceError={sourceError}
               tools={tools}
-              onCollapse={() => updateSidebarCollapsed(true)}
+              onCollapse={() => setSidebarCollapsed(true)}
             />
           </div>
         ) : null}
