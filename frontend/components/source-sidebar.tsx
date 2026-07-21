@@ -10,6 +10,7 @@ import {
   Info,
   Library,
   Link as LinkIcon,
+  PanelLeftClose,
   SquarePen,
   Wrench,
   X,
@@ -34,6 +35,7 @@ type SourceSidebarProps = {
   sourceError: string | null;
   tools: TutorTool[];
   onClose?: () => void;
+  onCollapse?: () => void;
 };
 
 type ToggleToolMeta = {
@@ -70,6 +72,7 @@ export function SourceSidebar({
   sourceError,
   tools,
   onClose,
+  onCollapse,
 }: SourceSidebarProps) {
   const retrievalTool = tools.find(
     (tool): tool is Extract<TutorTool, { kind: "configurable" }> =>
@@ -123,6 +126,17 @@ export function SourceSidebar({
               Tutor
             </span>
           </h1>
+          {onCollapse ? (
+            <button
+              type="button"
+              onClick={onCollapse}
+              aria-label="Hide sources and tools"
+              title="Hide sources and tools"
+              className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--ink)] lg:flex"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          ) : null}
           {onClose ? (
             <button
               type="button"

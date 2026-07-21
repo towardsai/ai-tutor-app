@@ -8,6 +8,7 @@ import {
   ChevronDown,
   Lock,
   Menu,
+  PanelLeftOpen,
   Send,
   Square,
   SquarePen,
@@ -69,6 +70,24 @@ function pickStreamingWordForKey(key: string) {
   return STREAMING_WORDS[Math.abs(hash) % STREAMING_WORDS.length];
 }
 
+const SIDEBAR_COLLAPSED_KEY = "ai-tutor:sidebar-collapsed";
+
+function readSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function storeSidebarCollapsed(collapsed: boolean) {
+  try {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch {
+    // Private-mode storage failures just lose persistence, nothing else.
+  }
+}
+
 export function ChatShell() {
   const [transport] = useState(
     () =>
@@ -87,6 +106,7 @@ export function ChatShell() {
   const [input, setInput] = useState("");
   const [threadId, setThreadId] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
@@ -122,6 +142,16 @@ export function ChatShell() {
   });
 
   const initialFetchDoneRef = useRef(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate persisted UI preference after mount (SSR-safe)
+    setSidebarCollapsed(readSidebarCollapsed());
+  }, []);
+
+  function updateSidebarCollapsed(next: boolean) {
+    setSidebarCollapsed(next);
+    storeSidebarCollapsed(next);
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -440,15 +470,34 @@ export function ChatShell() {
 
   return (
     <main className="h-dvh overflow-hidden p-2">
-      <div className="flex h-full w-full flex-col gap-2 lg:grid lg:grid-cols-[248px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]">
-        <header className="glass-panel flex shrink-0 items-center justify-between gap-2 rounded-[1rem] px-2.5 py-2 lg:hidden">
+      <div
+        className={clsx(
+          "flex h-full w-full flex-col gap-2",
+          !sidebarCollapsed &&
+            "lg:grid lg:grid-cols-[248px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]",
+        )}
+      >
+        <header
+          className={clsx(
+            "glass-panel flex shrink-0 items-center justify-between gap-2 rounded-[1rem] px-2.5 py-2",
+            !sidebarCollapsed && "lg:hidden",
+          )}
+        >
           <button
             type="button"
-            onClick={() => setSidebarOpen(true)}
+            onClick={() => {
+              if (window.matchMedia("(min-width: 1024px)").matches) {
+                updateSidebarCollapsed(false);
+              } else {
+                setSidebarOpen(true);
+              }
+            }}
             aria-label="Open sources and tools"
+            title="Open sources and tools"
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--heading)] transition hover:bg-[var(--surface-hover)]"
           >
-            <Menu className="h-4.5 w-4.5" />
+            <Menu className="h-4.5 w-4.5 lg:hidden" />
+            <PanelLeftOpen className="hidden h-4.5 w-4.5 lg:block" />
           </button>
           <span className="flex min-w-0 items-baseline gap-1.5">
             <span
@@ -470,17 +519,20 @@ export function ChatShell() {
           </button>
         </header>
 
-        <div className="hidden lg:block lg:h-full lg:min-h-0">
-          <SourceSidebar
-            onNewChat={handleNewChat}
-            onToggleSource={toggleSource}
-            onToggleTool={toggleTool}
-            selectedSourceKeys={selectedSourceKeys}
-            enabledToolKeys={enabledToolKeys}
-            sourceError={sourceError}
-            tools={tools}
-          />
-        </div>
+        {!sidebarCollapsed ? (
+          <div className="hidden lg:block lg:h-full lg:min-h-0">
+            <SourceSidebar
+              onNewChat={handleNewChat}
+              onToggleSource={toggleSource}
+              onToggleTool={toggleTool}
+              selectedSourceKeys={selectedSourceKeys}
+              enabledToolKeys={enabledToolKeys}
+              sourceError={sourceError}
+              tools={tools}
+              onCollapse={() => updateSidebarCollapsed(true)}
+            />
+          </div>
+        ) : null}
 
         {sidebarOpen ? (
           <div className="fixed inset-0 z-40 lg:hidden">
@@ -507,7 +559,12 @@ export function ChatShell() {
           </div>
         ) : null}
 
-        <section className="glass-panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-[1rem] p-2 sm:p-2.5 lg:h-full lg:flex-none">
+        <section
+          className={clsx(
+            "glass-panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-[1rem] p-2 sm:p-2.5",
+            !sidebarCollapsed && "lg:h-full lg:flex-none",
+          )}
+        >
           <div
             ref={threadViewportRef}
             className="scrollbar-thin min-h-0 flex-1 overflow-y-auto"
