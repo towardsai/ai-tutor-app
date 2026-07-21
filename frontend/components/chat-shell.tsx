@@ -573,7 +573,7 @@ export function ChatShell() {
                     }
                   }}
                   placeholder="Ask about RAG, agents, or Python, paste an error to debug your project, or get a course concept explained…"
-                  className="max-h-44 min-h-10 w-full resize-none overflow-y-auto bg-transparent px-0.5 py-2 text-[15px] leading-[1.6] tracking-[-0.012em] text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
+                  className="max-h-44 min-h-10 w-full resize-none overflow-y-auto bg-transparent px-0.5 py-2 text-[15.5px] leading-[1.6] tracking-[-0.012em] text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
                 />
 
                 <div className="mt-1.5 flex items-center justify-between gap-2">
@@ -677,7 +677,7 @@ function ModelPicker({
           role="tooltip"
           className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 whitespace-nowrap rounded-[0.6rem] border border-[var(--line)] bg-[var(--panel-strong)] px-2.5 py-1.5 opacity-0 shadow-[0_8px_20px_rgba(11,21,56,0.1)] backdrop-blur-xl transition-opacity duration-150 group-hover:opacity-100"
         >
-          <span className="text-[10.5px] font-medium tracking-[-0.005em] text-[var(--ink)]">
+          <span className="text-[11px] font-medium tracking-[-0.005em] text-[var(--ink)]">
             This conversation stays on one model. Start a new chat to switch.
           </span>
         </span>
@@ -707,7 +707,7 @@ function ModelPicker({
         )}
       >
         <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
-        <span className="font-mono text-[10px] font-medium tracking-[0.02em]">
+        <span className="font-mono text-[10.5px] font-medium tracking-[0.02em]">
           {label}
         </span>
         {locked ? (
@@ -1090,14 +1090,14 @@ function EmptyConversation({
 
   return (
     <div className="flex min-h-full flex-1 flex-col items-center justify-center px-4 py-10 text-center">
-      <span className="eyebrow text-[10.5px] text-[var(--accent)]">
+      <span className="eyebrow text-[11px] text-[var(--accent)]">
         Towards AI Academy
       </span>
       <h2 className="display-font mt-3 text-[2.1rem] leading-[1.1] sm:text-[2.5rem]">
         Ask your{" "}
         <em className="italic text-[var(--accent)]">AI tutor</em>
       </h2>
-      <p className="mt-3 max-w-md text-[13.5px] leading-[1.6] text-[var(--muted)]">
+      <p className="mt-3 max-w-md text-[14px] leading-[1.6] text-[var(--muted)]">
         Your companion for{" "}
         <a
           href="https://academy.towardsai.net/"
@@ -1118,10 +1118,10 @@ function EmptyConversation({
             onClick={() => onSelect(suggestion.prompt)}
             className="group flex flex-col items-start gap-1 rounded-lg border border-[var(--line-strong)] bg-[var(--paper-strong)] px-3.5 py-3 text-left transition hover:-translate-y-0.5 hover:border-[var(--accent)]/60 hover:shadow-[0_8px_20px_rgba(11,21,56,0.07)]"
           >
-            <span className="text-[12.5px] font-semibold tracking-[-0.01em] text-[var(--heading)]">
+            <span className="text-[13.5px] font-semibold tracking-[-0.01em] text-[var(--heading)]">
               {suggestion.title}
             </span>
-            <span className="text-[12px] leading-[1.45] text-[var(--muted)]">
+            <span className="text-[12.5px] leading-[1.45] text-[var(--muted)]">
               {suggestion.prompt}
             </span>
           </button>

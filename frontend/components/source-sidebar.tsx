@@ -142,7 +142,7 @@ export function SourceSidebar({
             className="group flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--heading)] px-2.5 py-2 text-center transition hover:bg-[var(--heading)]"
           >
             <SquarePen className="h-3.5 w-3.5 shrink-0 text-[var(--heading)] transition group-hover:text-[var(--paper-strong)]" />
-            <span className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--heading)] transition group-hover:text-[var(--paper-strong)]">
+            <span className="min-w-0 truncate text-[12px] font-semibold uppercase tracking-[0.08em] text-[var(--heading)] transition group-hover:text-[var(--paper-strong)]">
               New chat
             </span>
           </button>
@@ -152,12 +152,12 @@ export function SourceSidebar({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <Wrench className="h-3 w-3 text-[var(--accent)]" />
-              <span className="eyebrow text-[10px] text-[var(--accent)]">
+              <span className="eyebrow text-[11px] text-[var(--accent)]">
                 Tools
               </span>
             </div>
             <span
-              className="eyebrow text-[9.5px] text-[var(--muted)]"
+              className="eyebrow text-[10.5px] text-[var(--muted)]"
               title={`${activeCount} of ${totalCount} tools on`}
             >
               {activeCount} of {totalCount} on
@@ -328,7 +328,7 @@ function RetrievalTool({
           <span
             aria-hidden
             className={clsx(
-              "eyebrow inline-flex items-center rounded px-1.25 py-0.5 text-[9px]",
+              "eyebrow inline-flex items-center rounded px-1.25 py-0.5 text-[10px]",
               enabled
                 ? "bg-[var(--accent-soft)] text-[var(--accent)]"
                 : "bg-[var(--muted)]/15 text-[var(--muted)]",
@@ -459,7 +459,7 @@ function SourceGroup({
     <div className="space-y-1">
       <div className="flex items-center gap-1.5 px-1">
         <Icon className="h-3 w-3 text-[var(--muted)]/70" />
-        <h2 className="eyebrow text-[9.5px] text-[var(--muted)]">
+        <h2 className="eyebrow text-[10.5px] text-[var(--muted)]">
           {label}
         </h2>
       </div>
@@ -744,7 +744,7 @@ function ToggleToolRow({
           <span
             aria-hidden
             className={clsx(
-              "eyebrow inline-flex items-center rounded px-1.5 py-0.5 text-[9px]",
+              "eyebrow inline-flex items-center rounded px-1.5 py-0.5 text-[10px]",
               enabled
                 ? "bg-[var(--accent-soft)] text-[var(--accent)]"
                 : "bg-[var(--muted)]/15 text-[var(--muted)]",

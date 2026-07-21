@@ -245,7 +245,7 @@ function InlineEditor({
             onCancel?.();
           }
         }}
-        className="max-h-60 min-h-20 w-full resize-none overflow-y-auto rounded-[1.15rem] border border-[var(--accent)]/20 bg-[var(--surface-subtle)] px-3 py-3 text-[15px] leading-7 text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
+        className="max-h-60 min-h-20 w-full resize-none overflow-y-auto rounded-[1.15rem] border border-[var(--accent)]/20 bg-[var(--surface-subtle)] px-3 py-3 text-[15.5px] leading-7 text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
       />
       <div className="flex items-center justify-end gap-2">
         <button
@@ -698,11 +698,11 @@ function TextBlock({
   citationResolutions?: Map<string, string>;
 }) {
   return (
-    <div className="space-y-3 text-[15px] leading-[1.72] tracking-[-0.012em] text-[var(--ink)]">
+    <div className="space-y-3 text-[15.5px] leading-[1.72] tracking-[-0.012em] text-[var(--ink)]">
       {parts.map((part, index) => (
         <MarkdownBlock
           key={`text-${index}`}
-          className="text-[15px] leading-[1.72] tracking-[-0.012em] text-[var(--ink)]"
+          className="text-[15.5px] leading-[1.72] tracking-[-0.012em] text-[var(--ink)]"
           citationNumbers={citationNumbers}
           citationResolutions={citationResolutions}
         >
@@ -759,8 +759,8 @@ function CitationRow({
     <section className="mt-2 space-y-2 border-t border-[var(--line)] pt-3">
       <div className="inline-flex items-center gap-1.5 text-[var(--muted)]">
         <LibraryBig className="h-3.5 w-3.5 text-[var(--accent)]" />
-        <span className="eyebrow text-[9.5px]">Cited sources</span>
-        <span className="eyebrow rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[9.5px] text-[var(--accent)]">
+        <span className="eyebrow text-[10.5px]">Cited sources</span>
+        <span className="eyebrow rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10.5px] text-[var(--accent)]">
           {citations.length}
         </span>
       </div>
