@@ -208,16 +208,22 @@ class ApiTestCase(unittest.TestCase):
             ],
             "sourceKeys": ["langchain", "transformers"],
             "enabledTools": ["web_search", "not_a_real_tool"],
-            # A selectable model that offers web_search; gemini-2.5-flash is
-            # fallback-only and now 422s here (see test_config.py).
+            # The toggle passthrough below needs a model that offers web_search,
+            # and no selectable model does today (DeepSeek has no web toggles;
+            # gemini-2.5-flash is fallback-only). Re-admit Claude Haiku for this
+            # request only.
             "model": "anthropic:claude-haiku-4-5",
             "threadId": "thread_0",
         }
+        selectable_with_web_search = (
+            {"id": "anthropic:claude-haiku-4-5", "label": "Claude Haiku 4.5"},
+        )
 
-        with patch("app.api.stream_chat", fake_stream_chat):
-            with TestClient(app) as client:
-                with client.stream("POST", "/api/chat", json=payload) as response:
-                    body = "".join(response.iter_text())
+        with patch("app.api.AVAILABLE_MODELS", selectable_with_web_search):
+            with patch("app.api.stream_chat", fake_stream_chat):
+                with TestClient(app) as client:
+                    with client.stream("POST", "/api/chat", json=payload) as response:
+                        body = "".join(response.iter_text())
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -1100,14 +1106,28 @@ class ApiTestCase(unittest.TestCase):
             )
         self.assertEqual(raised.exception.status_code, 422)
 
-        with self.assertRaises(HTTPException) as incompatible:
+        # Claude Haiku was removed from AVAILABLE_MODELS, so the model check
+        # rejects it before the preset check gets a say.
+        with self.assertRaises(HTTPException) as unselectable:
             build_chat_request(
-                ApiChatRequest(
-                    query="What is RAG?",
-                    model="anthropic:claude-haiku-4-5",
-                    memoryPreset="prod_v2",
-                )
+                ApiChatRequest(query="What is RAG?", model="anthropic:claude-haiku-4-5")
             )
+        self.assertEqual(unselectable.exception.status_code, 422)
+        self.assertEqual(unselectable.exception.detail, "Unknown model")
+
+        # The preset-provider incompatibility 422 needs a selectable model
+        # outside the long-context allowlist; none exists today, so re-admit
+        # Haiku for this request only.
+        haiku = ({"id": "anthropic:claude-haiku-4-5", "label": "Claude Haiku 4.5"},)
+        with patch("app.api.AVAILABLE_MODELS", haiku):
+            with self.assertRaises(HTTPException) as incompatible:
+                build_chat_request(
+                    ApiChatRequest(
+                        query="What is RAG?",
+                        model="anthropic:claude-haiku-4-5",
+                        memoryPreset="prod_v2",
+                    )
+                )
         self.assertEqual(incompatible.exception.status_code, 422)
         self.assertIn("does not support provider", incompatible.exception.detail)
 

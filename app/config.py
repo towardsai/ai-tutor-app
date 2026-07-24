@@ -99,7 +99,6 @@ AVAILABLE_MODELS: tuple[dict[str, str], ...] = (
         "id": DEEPSEEK_DIRECT_MODEL_NAME,
         "label": "DeepSeek V4 Flash",
     },
-    {"id": "anthropic:claude-haiku-4-5", "label": "Claude Haiku 4.5"},
 )
 
 

@@ -30,10 +30,7 @@ def test_gemini_fallback_model_is_deliberately_not_selectable() -> None:
     selectable = [model["id"] for model in config.AVAILABLE_MODELS]
 
     assert config.GEMINI_FALLBACK_MODEL_NAME not in selectable
-    assert selectable == [
-        "deepseek:deepseek-v4-flash",
-        "anthropic:claude-haiku-4-5",
-    ]
+    assert selectable == ["deepseek:deepseek-v4-flash"]
 
 
 def _patched_bundle(tmp_path: Path) -> ExitStack:
