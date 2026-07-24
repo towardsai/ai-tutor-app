@@ -7,6 +7,7 @@ from unittest.mock import patch
 from app.agent_tracing import (
     DEFAULT_LANGSMITH_PROJECT,
     configure_langsmith_environment,
+    langsmith_deployment_identity,
     langsmith_tracing_enabled,
     parse_env_bool,
 )
@@ -39,6 +40,38 @@ class AgentTracingTestCase(unittest.TestCase):
 
             self.assertFalse(langsmith_tracing_enabled())
             self.assertNotIn("LANGSMITH_PROJECT", os.environ)
+
+    def test_deployment_identity_defaults_to_local(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(langsmith_deployment_identity(), ("local", "local"))
+
+    def test_deployment_identity_detects_hugging_face_space(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"SPACE_HOST": "towardsai-tutors-ai-tutor-chatbot.hf.space"},
+            clear=True,
+        ):
+            self.assertEqual(
+                langsmith_deployment_identity(),
+                (
+                    "huggingface-space",
+                    "towardsai-tutors-ai-tutor-chatbot.hf.space",
+                ),
+            )
+
+    def test_explicit_deployment_environment_wins(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_TUTOR_DEPLOYMENT_ENV": "hf-prod",
+                "SPACE_HOST": "towardsai-tutors-ai-tutor-chatbot.hf.space",
+            },
+            clear=True,
+        ):
+            self.assertEqual(
+                langsmith_deployment_identity(),
+                ("hf-prod", "towardsai-tutors-ai-tutor-chatbot.hf.space"),
+            )
 
     def test_project_is_preserved(self) -> None:
         with patch.dict(

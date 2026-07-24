@@ -413,17 +413,34 @@ class ChatServiceTestCase(unittest.TestCase):
             enabled_tools=("web_search",),
         )
 
-        config = agent_run_config(request, "thread_123", "message_456")
+        with patch.dict(
+            os.environ,
+            {
+                "AI_TUTOR_DEPLOYMENT_ENV": "hf-prod",
+                "SPACE_HOST": "towardsai-tutors-ai-tutor-chatbot.hf.space",
+            },
+        ):
+            config = agent_run_config(request, "thread_123", "message_456")
 
         self.assertEqual(config["configurable"], {"thread_id": "thread_123"})
         self.assertEqual(config["run_name"], "ai-tutor-agent-turn")
         self.assertIn("provider:google-genai", config["tags"])
+        self.assertIn("environment:hf-prod", config["tags"])
+        self.assertIn(
+            "deployment:towardsai-tutors-ai-tutor-chatbot.hf.space",
+            config["tags"],
+        )
         self.assertIn("tool:retrieve_tutor_context", config["tags"])
         self.assertIn("tool:run_kb_command", config["tags"])
         self.assertIn("tool:google_search", config["tags"])
         self.assertEqual(config["metadata"]["thread_id"], "thread_123")
         self.assertEqual(config["metadata"]["conversation_id"], "thread_123")
         self.assertEqual(config["metadata"]["message_id"], "message_456")
+        self.assertEqual(config["metadata"]["environment"], "hf-prod")
+        self.assertEqual(
+            config["metadata"]["deployment_host"],
+            "towardsai-tutors-ai-tutor-chatbot.hf.space",
+        )
         self.assertEqual(
             config["metadata"]["available_tools"],
             [

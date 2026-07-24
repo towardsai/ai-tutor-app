@@ -40,6 +40,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
+from .agent_tracing import langsmith_deployment_identity
 from .chat_types import ChatEvent, ChatRequest, ChatTurn, SourceMatch
 from .deepseek_chat import TutorChatDeepSeek
 from .memory_presets import (
@@ -2651,6 +2652,7 @@ def agent_run_config(
     memory_preset: str = "",
 ) -> dict[str, Any]:
     provider, actual_model = model_provider_and_name(request.model_name)
+    deployment_environment, deployment_host = langsmith_deployment_identity()
     tools = effective_tool_names(
         request.model_name,
         request.enabled_tools,
@@ -2672,10 +2674,14 @@ def agent_run_config(
                 f"provider:{provider}",
                 f"model:{actual_model}",
                 f"memory:{preset}",
+                f"environment:{deployment_environment}",
+                f"deployment:{deployment_host}",
                 *(f"tool:{tool_name}" for tool_name in tools),
             ],
             "metadata": {
                 "app": "ai-tutor-app",
+                "environment": deployment_environment,
+                "deployment_host": deployment_host,
                 "thread_id": active_thread_id,
                 "conversation_id": active_thread_id,
                 "message_id": message_id,
