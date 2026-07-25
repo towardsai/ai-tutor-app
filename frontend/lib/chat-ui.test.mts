@@ -58,6 +58,15 @@ test("citation numbers follow rendered-link order and ignore non-rendered links"
         "[Relative](raw/docs/example.md)",
       ].join("\n"),
     },
+    // Cards arrive with URL variants (fragment, trailing slash, raw unicode);
+    // normalization must still line them up with the answer-text links.
+    {
+      type: "data-source",
+      data: source({ url: "https://docs.example.test/Spring_(framework)#anchor" }),
+    },
+    { type: "data-source", data: source({ url: "https://docs.example.test/café" }) },
+    { type: "data-source", data: source({ url: "https://other.example.test/a(b)" }) },
+    { type: "data-source", data: source({ url: "https://third.example.test/path/" }) },
   ]);
 
   const numbers = buildCitationNumbers(message);
@@ -70,6 +79,35 @@ test("citation numbers follow rendered-link order and ignore non-rendered links"
   ]);
   assert.equal(citationNumberFor(numbers, "https://docs.example.test/café/"), 2);
   assert.equal(citationNumberFor(numbers, "https://ignored.example.test/inline"), undefined);
+});
+
+test("links without a resolved source card get no citation number", () => {
+  // Regression: the model cited one corpus page (resolved into a card) and
+  // also linked a Discord invite from memory. The invite must stay a plain
+  // hyperlink, not become chip "2" with no matching card.
+  const message = assistantMessage([
+    {
+      type: "text",
+      text: [
+        "See the [setup instructions](https://academy.example.test/lessons/setup#uv).",
+        "Ask in the [community Discord](https://discord.example.test/invite).",
+      ].join("\n"),
+    },
+    {
+      type: "data-source",
+      data: source({ url: "https://academy.example.test/lessons/setup" }),
+    },
+  ]);
+
+  const numbers = buildCitationNumbers(message);
+
+  assert.deepEqual([...numbers.entries()], [
+    ["https://academy.example.test/lessons/setup", 1],
+  ]);
+  assert.equal(
+    citationNumberFor(numbers, "https://discord.example.test/invite"),
+    undefined,
+  );
 });
 
 test("KB references resolve to one navigable citation number", () => {

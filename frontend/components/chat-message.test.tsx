@@ -252,6 +252,7 @@ describe("ChatMessage citations", () => {
             text: [
               "[Trusted](https://example.com/docs#section)",
               "[Again](https://example.com/docs/)",
+              "[Uncited](https://chat.example.com/invite)",
               "[Unsafe](javascript:alert(1))",
               "[Missing KB file](raw/docs/missing.md)",
             ].join(" "),
@@ -283,6 +284,12 @@ describe("ChatMessage citations", () => {
     expect(sourceCard.getAttribute("href")).toBe("https://example.com/docs");
     expect(sourceCard.textContent).toContain("1");
     expect(sourceCard.textContent).toContain("Docs title");
+
+    // A link with no resolved source card keeps its text and stays a plain
+    // hyperlink instead of becoming a numbered chip with no matching card.
+    const uncited = screen.getByText("Uncited").closest("a");
+    expect(uncited?.getAttribute("href")).toBe("https://chat.example.com/invite");
+    expect(uncited?.classList.contains("citation-chip")).toBe(false);
 
     expect(screen.getByText("Unsafe").closest("a")).toBeNull();
     expect(screen.getByText("Missing KB file").closest("a")).toBeNull();

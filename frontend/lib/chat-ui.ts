@@ -343,15 +343,30 @@ export function resolveCitationHref(
 }
 
 // Number the citation links in a message's answer text by order of first
-// appearance, deduped by normalized URL. KB references are keyed under their
-// resolved https URL so the inline chip and the source card share a number;
-// references that resolve to nothing navigable get no number (the renderer
-// shows them as plain text instead of a broken chip). The same map drives the
-// inline citation chips and the numbers on the sources row.
+// appearance, deduped by normalized URL. Only links backed by a server-resolved
+// source card (a data-source part) get a number, so every inline chip has a
+// matching card on the sources row; a link the server could not resolve (e.g.
+// a Discord invite the model added from memory) stays an ordinary hyperlink
+// instead of becoming a numbered chip with no card. KB references are keyed
+// under their resolved https URL so the inline chip and the source card share
+// a number. The same map drives the inline citation chips and the numbers on
+// the sources row.
 export function buildCitationNumbers(
   message: TutorMessage,
   resolutions?: Map<string, string>,
 ): Map<string, number> {
+  const cardUrls = new Set<string>();
+  for (const part of message.parts) {
+    if (!("type" in part) || part.type !== "data-source") {
+      continue;
+    }
+    const data = (part as TutorMessagePart).data as SourcePartData | undefined;
+    const url = data?.url?.trim();
+    if (url && isHttpUrl(url)) {
+      cardUrls.add(normalizeCitationUrl(url));
+    }
+  }
+
   const numbers = new Map<string, number>();
   for (const part of message.parts) {
     if (!("type" in part) || part.type !== "text") {
@@ -364,7 +379,7 @@ export function buildCitationNumbers(
         continue;
       }
       const key = normalizeCitationUrl(resolved);
-      if (key && !numbers.has(key)) {
+      if (key && cardUrls.has(key) && !numbers.has(key)) {
         numbers.set(key, numbers.size + 1);
       }
     }
