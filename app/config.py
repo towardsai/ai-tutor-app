@@ -152,11 +152,10 @@ def _snapshot_bundle(repo_id: str, *, token: str | bool | None) -> None:
 
     Mutes httpx's per-file flood during the cold-start download only. The
     GraphRAG experiment index (~150 MB) lives in the private repo for
-    reproducibility but prod does not use it; skip it on cold start. Pull it
-    explicitly to run that eval. ``README.md`` is the public repo's dataset
-    card, not runtime data. (The private bundle has neither a kb archive nor
-    a README, and the public one has no graphrag/ tree, so unmatched patterns
-    are no-ops.)
+    reproducibility but prod does not use it; skip it on cold start. The
+    contextual-nodes pickle is another rebuild-only artifact. Pull either
+    explicitly for data/eval work. ``README.md`` is the public repo's dataset
+    card, not runtime data. Both runtime bundles ship ``kb.tar.gz``.
     """
     from huggingface_hub import snapshot_download
 
@@ -169,7 +168,12 @@ def _snapshot_bundle(repo_id: str, *, token: str | bool | None) -> None:
             local_dir="data",
             repo_type="dataset",
             token=token,
-            ignore_patterns=["graphrag/**", "README.md"],
+            ignore_patterns=[
+                "graphrag/**",
+                "all_sources_contextual_nodes.pkl",
+                ".gitattributes",
+                "README.md",
+            ],
         )
     finally:
         httpx_logger.setLevel(previous_level)
@@ -179,10 +183,9 @@ def _snapshot_bundle(repo_id: str, *, token: str | bool | None) -> None:
 def _extract_kb_archive(base_dir: str = "data") -> None:
     """Extract ``kb.tar.gz`` into ``data/kb`` and delete the archive.
 
-    The public bundle ships the KB as one archive instead of ~3,000 files so
-    an anonymous cold start is not throttled by HF's per-request rate limits
-    (see build_public_docs_bundle.archive_kb). A no-op when no archive was
-    downloaded (the private bundle ships the unpacked tree).
+    Both private and public runtime bundles ship the KB as one archive instead
+    of ~3,000 files, avoiding per-file Hub overhead during cold starts. A no-op
+    for legacy bundles that still contain the unpacked tree.
     """
     import tarfile
 

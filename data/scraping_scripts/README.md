@@ -212,8 +212,10 @@ place on startup either way).
 
 - **Built** by `data.scraping_scripts.build_kb_artifacts` (from
   `data/all_sources_data.jsonl`) and `data.scraping_scripts.update_kb_wiki`.
-- **Uploaded** to `towardsai-tutors/ai-tutor-vector-db` by
-  `data.scraping_scripts.upload_dbs_to_hf` (already includes `kb/**`).
+- **Archived and uploaded** to `towardsai-tutors/ai-tutor-vector-db` by
+  `data.scraping_scripts.upload_dbs_to_hf` as `kb.tar.gz`. The local unpacked
+  tree is preserved; legacy remote `kb/**` files are pruned only after the
+  archive upload is verified.
 - **Downloaded** by `app.config.ensure_local_vector_db` on the first
   chatbot start (or any start where the local KB is missing).
 
@@ -323,8 +325,12 @@ After the audit, the KB tree is packed into a single **`kb.tar.gz`** and the
 unpacked tree is dropped from staging: the public repo ships ~6 files instead
 of ~3,000, which keeps a token-free cold start clear of HF's anonymous
 per-request rate limits (~15 min unpacked vs a few min archived). The runtime
-extracts the archive after download (`app.config._extract_kb_archive`); the
-private bundle still ships the unpacked KB tree and is unaffected.
+extracts the archive after download (`app.config._extract_kb_archive`).
+
+The private production publisher now uses the same archive layout: it creates
+`data/kb.tar.gz` transiently, uploads and verifies it, then prunes the legacy
+remote `kb/**` tree. It never removes or rewrites the canonical local
+`data/kb/` directory.
 
 The staged tree lives in `data/public_docs_bundle/` (gitignored). Uploading
 needs an `HF_TOKEN` with write access to the `towardsai-tutors` org; the script
@@ -368,4 +374,6 @@ download small).
    - `update_kb_wiki.py` refreshes wiki navigation pages under `data/kb/wiki/`, preserving maintainer prose outside `<!-- AUTO-GENERATED -->` markers
    - `lint_kb_wiki.py` then verifies every KB path and relative link the wiki pages reference (existence on disk plus `corpus_manifest.jsonl` membership for `raw/` files) and fails the workflow before upload on any broken reference; run it standalone with `uv run -m data.scraping_scripts.lint_kb_wiki [--kb-dir data/kb]`
    - The docs and course workflows run these steps automatically unless `--skip-kb` is passed
-   - `upload_dbs_to_hf.py` uploads `data/kb/**` with the vector database so the runtime can download one KB bundle
+   - `upload_dbs_to_hf.py` packs `data/kb/` into `kb.tar.gz`, uploads it with
+     the vector database, verifies the remote archive, and only then prunes
+     the old unpacked remote KB files

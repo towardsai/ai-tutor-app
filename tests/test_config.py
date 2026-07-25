@@ -187,6 +187,28 @@ def test_download_bundle_falls_back_to_public_on_no_access() -> None:
     ]
 
 
+def test_snapshot_bundle_skips_rebuild_only_artifacts() -> None:
+    with (
+        patch("huggingface_hub.snapshot_download") as snapshot_download,
+        patch("app.config._extract_kb_archive") as extract,
+    ):
+        config._snapshot_bundle("org/bundle", token="tok")
+
+    snapshot_download.assert_called_once_with(
+        repo_id="org/bundle",
+        local_dir="data",
+        repo_type="dataset",
+        token="tok",
+        ignore_patterns=[
+            "graphrag/**",
+            "all_sources_contextual_nodes.pkl",
+            ".gitattributes",
+            "README.md",
+        ],
+    )
+    extract.assert_called_once_with()
+
+
 def test_extract_kb_archive_unpacks_and_removes_archive(tmp_path: Path) -> None:
     import tarfile
 
