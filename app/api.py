@@ -6,7 +6,7 @@ import logging
 import math
 import os
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
@@ -92,16 +92,29 @@ def find_abuse_marker(query: str, history: tuple[ChatTurn, ...]) -> str | None:
     return None
 
 
+MAX_TRACKED_RATE_LIMIT_CLIENTS = 4096
+
+
 class SlidingWindowRateLimiter:
     """In-process sliding-window counter keyed by client address.
 
     One uvicorn worker serves the Space, so process-local state is the whole
     truth; a multi-worker deployment would count per worker, which only
     loosens the cap.
+
+    The key table is hard-bounded. When a new address arrives at capacity, the
+    least recently seen address is evicted in O(1). Address churn therefore
+    cannot grow the table (or turn every request into a full-table scan); the
+    trade-off is that an active rotator can reset a quiet client's budget, which
+    is acceptable for an abuse guard that was already keyed on a spoofable
+    header. Expired per-key windows are pruned on access.
     """
 
-    def __init__(self) -> None:
-        self._hits: dict[str, deque[float]] = {}
+    def __init__(
+        self, max_tracked_clients: int = MAX_TRACKED_RATE_LIMIT_CLIENTS
+    ) -> None:
+        self._hits: OrderedDict[str, deque[float]] = OrderedDict()
+        self._max_tracked_clients = max(1, max_tracked_clients)
         self._lock = Lock()
 
     def retry_after(
@@ -112,22 +125,21 @@ class SlidingWindowRateLimiter:
         now = time.monotonic()
         cutoff = now - window_seconds
         with self._lock:
-            hits = self._hits.setdefault(key, deque())
+            hits = self._hits.get(key)
+            if hits is None:
+                if len(self._hits) >= self._max_tracked_clients:
+                    self._hits.popitem(last=False)
+                hits = deque()
+                self._hits[key] = hits
+            else:
+                # Refresh LRU position so the cap evicts the least recently
+                # active client, not whichever key happens to be oldest.
+                self._hits.move_to_end(key)
             while hits and hits[0] <= cutoff:
                 hits.popleft()
             if len(hits) >= max_requests:
                 return hits[0] + window_seconds - now
             hits.append(now)
-            if len(self._hits) > 4096:
-                # Bound memory against address churn: drop keys whose whole
-                # window has already expired.
-                stale = [
-                    other
-                    for other, times in self._hits.items()
-                    if other != key and (not times or times[-1] <= cutoff)
-                ]
-                for other in stale:
-                    del self._hits[other]
             return None
 
 
